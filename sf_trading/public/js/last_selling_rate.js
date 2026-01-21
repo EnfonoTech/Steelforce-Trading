@@ -1,0 +1,349 @@
+// Last Selling Rate feature for sf_trading
+// Shows a button to view last selling rate of items
+
+frappe.provide("sf_trading");
+
+// Debug: Log that script is loaded
+console.log("sf_trading: last_selling_rate.js loaded");
+
+sf_trading.add_last_selling_rate_button = function(frm) {
+	// Check if items grid exists
+	if (!frm.fields_dict.items) {
+		console.log("sf_trading: items field not found");
+		return;
+	}
+	
+	if (!frm.fields_dict.items.grid) {
+		console.log("sf_trading: items grid not found");
+		return;
+	}
+
+	const grid = frm.fields_dict.items.grid;
+	
+	// Try multiple ways to find the toolbar
+	let $toolbar = grid.wrapper.find(".grid-buttons");
+	
+	// If not found, try finding it in the grid footer
+	if (!$toolbar.length) {
+		$toolbar = grid.wrapper.find(".grid-footer .grid-buttons");
+	}
+	
+	// If still not found, try finding the footer first
+	if (!$toolbar.length) {
+		const $footer = grid.wrapper.find(".grid-footer");
+		if ($footer.length) {
+			$toolbar = $footer.find(".grid-buttons");
+		}
+	}
+	
+	// Alternative: try to find it by looking for "Add Row" button
+	if (!$toolbar.length) {
+		const $addRowBtn = grid.wrapper.find("button:contains('Add Row')");
+		if ($addRowBtn.length) {
+			$toolbar = $addRowBtn.closest(".grid-buttons");
+		}
+	}
+	
+	if (!$toolbar.length) {
+		console.log("sf_trading: Could not find grid-buttons toolbar", grid.wrapper);
+		return;
+	}
+	
+	// Check if button already exists
+	if ($toolbar.find("button:contains('Last Selling Rate')").length > 0) {
+		return;
+	}
+
+	// Find a good position for the button (after Price Assist, Add Multiple, or Add Row)
+	let $target = $toolbar.find("button:contains('Price Assist')").last();
+	
+	if ($target.length === 0) {
+		$target = $toolbar.find("button:contains('Add Multiple')").last();
+	}
+	
+	if ($target.length === 0) {
+		$target = $toolbar.find("button:contains('Add Row')").last();
+	}
+	
+	if ($target.length === 0) {
+		$target = $toolbar.children().first();
+	}
+
+	// Create the button
+	let last_selling_rate_btn = $(`<button type="button" class="btn btn-secondary btn-xs" style="margin-left: 10px;">
+		${__('Last Selling Rate')}
+	</button>`);
+
+	last_selling_rate_btn.on('click', function () {
+		sf_trading.open_last_selling_rate_dialog(frm);
+	});
+
+	// Insert after target button, or append if no target
+	if ($target.length > 0 && $target.parent().is($toolbar)) {
+		last_selling_rate_btn.insertAfter($target);
+		console.log("sf_trading: Button added after target");
+	} else {
+		$toolbar.append(last_selling_rate_btn);
+		console.log("sf_trading: Button appended to toolbar");
+	}
+};
+
+sf_trading.open_last_selling_rate_dialog = function(frm, default_item_code) {
+	// Get company from form
+	let company = frm.doc.company || frappe.defaults.get_default("company");
+	
+	// Create dialog
+	let d = new frappe.ui.Dialog({
+		title: __('Last Selling Rate'),
+		fields: [
+			{ 
+				fieldname: 'item_code', 
+				label: __('Item Code'), 
+				fieldtype: 'Link', 
+				options: 'Item', 
+				default: default_item_code,
+				get_query: function() {
+					return {
+						filters: {
+							"is_sales_item": 1
+						}
+					};
+				}
+			},
+			{ fieldname: 'results', fieldtype: 'HTML' }
+		],
+		size: 'extra-large',
+		primary_action_label: __('Close'),
+		primary_action: function () {
+			d.hide();
+		}
+	});
+
+	d.show();
+
+	setTimeout(() => {
+		// Bind onchange for the Link field
+		if (d.fields_dict.item_code) {
+			d.fields_dict.item_code.df.onchange = function () {
+				const item_code = d.get_value('item_code');
+				if (item_code) {
+					sf_trading.fetch_last_selling_rate(item_code, company, d);
+				}
+			};
+			d.fields_dict.item_code.refresh();
+		}
+
+		// Auto-fetch if dialog opened with default item
+		if (default_item_code) {
+			sf_trading.fetch_last_selling_rate(default_item_code, company, d);
+		}
+	}, 200);
+};
+
+sf_trading.fetch_last_selling_rate = function(item_code, company, dialog) {
+	dialog.fields_dict.results.$wrapper.html('<div class="text-muted">' + __('Loading…') + '</div>');
+
+	frappe.call({
+		method: 'sf_trading.api.last_selling_rate.get_item_selling_history',
+		args: { item_code: item_code, company: company, limit: 20 },
+		callback: function (r) {
+			const rows = r.message || [];
+			if (!rows.length) {
+				dialog.fields_dict.results.$wrapper.html('<div class="text-muted">' + __('No selling history found.') + '</div>');
+				return;
+			}
+
+			dialog.fields_dict.results.$wrapper.html(sf_trading.render_selling_history_table(rows));
+
+			// Enable invoice links
+			dialog.fields_dict.results.$wrapper.find('[data-doctype][data-name]').on('click', function () {
+				frappe.set_route('Form', this.getAttribute('data-doctype'), this.getAttribute('data-name'));
+			});
+
+			// Setup table filters
+			setTimeout(() => {
+				sf_trading.setupTableFilters(dialog);
+			}, 100);
+		},
+		error: function (err) {
+			dialog.fields_dict.results.$wrapper.html('<div class="text-danger">' + __('Error fetching data: {0}', [err.message || err]) + '</div>');
+		}
+	});
+};
+
+sf_trading.render_selling_history_table = function(rows) {
+	var out = [
+		'<div class="mt-3">',
+		'<table class="table table-bordered table-sm" id="selling-history-table">',
+		'<thead>',
+		'<tr>',
+		'<th>' + __('Date') + '</th>',
+		'<th>' + __('Sales Invoice') + '</th>',
+		'<th>' + __('Customer') + '</th>',
+		'<th>' + __('Item Code') + '</th>',
+		'<th>' + __('Item Name') + '</th>',
+		'<th class="text-right">' + __('Qty') + '</th>',
+		'<th class="text-right">' + __('UOM') + '</th>',
+		'<th class="text-right">' + __('Selling Rate') + '</th>',
+		'<th class="text-right">' + __('Amount') + '</th>',
+		'</tr>',
+		'<tr class="filter-row">',
+		'<th><input type="text" class="form-control input-sm" placeholder="' + __('Filter Date') + '"></th>',
+		'<th><input type="text" class="form-control input-sm" placeholder="' + __('Filter Invoice') + '"></th>',
+		'<th><input type="text" class="form-control input-sm" placeholder="' + __('Filter Customer') + '"></th>',
+		'<th><input type="text" class="form-control input-sm" placeholder="' + __('Filter Item Code') + '"></th>',
+		'<th><input type="text" class="form-control input-sm" placeholder="' + __('Filter Item Name') + '"></th>',
+		'<th><input type="text" class="form-control input-sm" placeholder="' + __('Filter Qty') + '"></th>',
+		'<th><input type="text" class="form-control input-sm" placeholder="' + __('Filter UOM') + '"></th>',
+		'<th><input type="text" class="form-control input-sm" placeholder="' + __('Filter Rate') + '"></th>',
+		'<th><input type="text" class="form-control input-sm" placeholder="' + __('Filter Amount') + '"></th>',
+		'</tr>',
+		'</thead>',
+		'<tbody>'
+	].join('');
+
+	rows.forEach(function (r) {
+		var posting_date = frappe.utils.escape_html(frappe.datetime.str_to_user(r.posting_date || ''));
+		var sales_invoice = frappe.utils.escape_html(r.sales_invoice || '');
+		// Always use customer_name (display name), fallback to customer ID only if name is not available
+		var customer = frappe.utils.escape_html(r.customer_name || r.customer || '');
+		var item_code = frappe.utils.escape_html(r.item_code || '');
+		var item_name = frappe.utils.escape_html(r.item_name || '');
+		var qty = format_number(r.qty || 0, null, {precision: 2});
+		var uom = frappe.utils.escape_html(r.uom || '');
+		var selling_rate = format_currency(r.selling_rate || 0, r.currency || '');
+		var amount = format_currency(r.selling_amount || 0, r.currency || '');
+		
+		out += [
+			'<tr>',
+			`<td>${posting_date}</td>`,
+			`<td><a href="#" data-doctype="Sales Invoice" data-name="${sales_invoice}" class="text-primary">${sales_invoice}</a></td>`,
+			`<td>${customer}</td>`,
+			`<td>${item_code}</td>`,
+			`<td>${item_name}</td>`,
+			`<td class="text-right">${qty}</td>`,
+			`<td class="text-right">${uom}</td>`,
+			`<td class="text-right"><strong>${selling_rate}</strong></td>`,
+			`<td class="text-right">${amount}</td>`,
+			'</tr>'
+		].join('');
+	});
+
+	out += '</tbody></table></div>';
+	return out;
+};
+
+sf_trading.setupTableFilters = function(dialog) {
+	const table = dialog.fields_dict.results.$wrapper.find('#selling-history-table')[0];
+	if (!table) return;
+
+	const filterInputs = table.querySelectorAll('.filter-row input');
+	const tbody = table.querySelector('tbody');
+	if (!tbody || !filterInputs.length) return;
+
+	// Remove old handlers
+	filterInputs.forEach(input => {
+		if (input._filterHandler) {
+			input.removeEventListener('input', input._filterHandler);
+			delete input._filterHandler;
+		}
+	});
+
+	// Attach new handlers
+	filterInputs.forEach((input, index) => {
+		input._filterHandler = function () {
+			sf_trading.applyAllFilters(dialog);
+		};
+		input.addEventListener('input', input._filterHandler);
+	});
+};
+
+sf_trading.applyAllFilters = function(dialog) {
+	const table = dialog.fields_dict.results.$wrapper.find('#selling-history-table')[0];
+	if (!table) return;
+
+	const rows = table.querySelectorAll('tbody tr');
+	const filterInputs = table.querySelectorAll('.filter-row input');
+
+	rows.forEach(row => {
+		let shouldShow = true;
+
+		filterInputs.forEach((input, j) => {
+			const val = input.value.toLowerCase().trim();
+			if (!val) return;
+
+			const cell = row.cells[j];
+			if (cell) {
+				const cellText = (cell.textContent || '').toLowerCase();
+				if (cellText.indexOf(val) === -1) {
+					shouldShow = false;
+				}
+			}
+		});
+
+		row.style.display = shouldShow ? '' : 'none';
+	});
+};
+
+// Hook into common doctypes with item tables
+let selling_rate_doctypes = [
+	"Sales Order", "Sales Invoice", "Quotation", "Delivery Note"
+];
+
+selling_rate_doctypes.forEach(function(doctype) {
+	frappe.ui.form.on(doctype, {
+		refresh: function(frm) {
+			// Try multiple times with increasing delays to ensure grid is ready
+			let attempts = 0;
+			let maxAttempts = 8;
+			
+			let tryAddButton = function() {
+				attempts++;
+				if (frm.fields_dict.items && frm.fields_dict.items.grid) {
+					sf_trading.add_last_selling_rate_button(frm);
+					// If button was added successfully, stop trying
+					const grid = frm.fields_dict.items.grid;
+					const $toolbar = grid.wrapper.find(".grid-buttons");
+					if ($toolbar.find("button:contains('Last Selling Rate')").length > 0) {
+						console.log("sf_trading: Button added successfully on attempt", attempts);
+						return;
+					}
+				}
+				
+				if (attempts < maxAttempts) {
+					setTimeout(tryAddButton, 400);
+				} else {
+					console.log("sf_trading: Failed to add button after", maxAttempts, "attempts");
+				}
+			};
+			
+			// Start trying after initial delay
+			setTimeout(tryAddButton, 800);
+		},
+		
+		items_add: function(frm, cdt, cdn) {
+			setTimeout(function () {
+				sf_trading.add_last_selling_rate_button(frm);
+			}, 800);
+		}
+	});
+});
+
+// Also hook into item_code onchange to show quick last selling rate (optional)
+// Note: This section is optional and can be removed if not needed
+let selling_rate_item_doctypes = [
+	"Sales Order Item", "Sales Invoice Item", "Quotation Item", "Delivery Note Item"
+];
+
+selling_rate_item_doctypes.forEach(function(child_doctype) {
+	frappe.ui.form.on(child_doctype, {
+		item_code: function(frm, cdt, cdn) {
+			let item_row = locals[cdt][cdn];
+			
+			// Show quick info in console or as a tooltip (optional)
+			if (item_row.item_code && frm.doc.company) {
+				// You can add quick display here if needed
+			}
+		}
+	});
+});
