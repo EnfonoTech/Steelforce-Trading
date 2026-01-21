@@ -28,7 +28,8 @@ app_license = "mit"
 # app_include_css = "/assets/sf_trading/css/sf_trading.css"
 app_include_js = [
 	"/assets/sf_trading/js/warehouse_stock_popup.js",
-	"/assets/sf_trading/js/last_selling_rate.js"
+	"/assets/sf_trading/js/last_selling_rate.js",
+	"/assets/sf_trading/js/create_customer.js"
 ]
 
 # include js, css files in header of web template
@@ -245,3 +246,19 @@ app_include_js = [
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
 
+# Fixtures
+# --------
+fixtures = [
+	{
+		"doctype": "Custom Field",
+		"filters": [
+			[
+				"name",
+				"in",
+				(
+					"Customer-custom_commercial_registration_number",
+				)
+			]
+		]
+	}
+]
