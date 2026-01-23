@@ -1,46 +1,36 @@
-// Warehouse Stock Popup for sf_trading
-// Shows a popup with warehouse stock when adding an item to item table
+// Warehouse Stock Display for sf_trading
+// Shows warehouse stock at bottom of item table and button to request items
 
 frappe.provide("sf_trading");
 
-sf_trading.show_warehouse_stock_popup = function(frm, item_row, force_show) {
+// Store stock display element per form
+sf_trading.stock_displays = {};
+
+sf_trading.show_warehouse_stock = function(frm, item_row) {
 	// Check if item_code is set
-	if (!item_row.item_code) {
+	if (!item_row || !item_row.item_code) {
+		sf_trading.hide_stock_display(frm);
 		return;
 	}
 	
 	// Check if warehouse field exists
 	if (!frappe.meta.has_field(item_row.doctype, "warehouse")) {
-		return;
-	}
-	
-	// Get fresh reference to check current warehouse value
-	// This is important because ERPNext may have set it asynchronously
-	let current_row = locals[item_row.doctype][item_row.name];
-	if (!current_row) {
-		return;
-	}
-	
-	// Only show popup if warehouse is not already set (unless forced)
-	if (current_row.warehouse && !force_show) {
+		sf_trading.hide_stock_display(frm);
 		return;
 	}
 	
 	// Get company from form
 	let company = frm.doc.company;
 	if (!company) {
+		sf_trading.hide_stock_display(frm);
 		return;
 	}
 	
-	// Prevent multiple popups from showing for the same item
-	if (current_row._sf_trading_popup_shown) {
-		return;
-	}
+	// Get current warehouse if set
+	let current_row = locals[item_row.doctype][item_row.name];
+	let warehouse = current_row ? (current_row.warehouse || "") : "";
 	
-	// Mark that popup is being shown
-	current_row._sf_trading_popup_shown = true;
-	
-	// Fetch warehouse stock data (removed loading alert to reduce lag)
+	// Fetch warehouse stock data
 	frappe.call({
 		method: "sf_trading.api.warehouse_stock.get_item_warehouse_stock",
 		args: {
@@ -48,270 +38,365 @@ sf_trading.show_warehouse_stock_popup = function(frm, item_row, force_show) {
 			company: company
 		},
 		callback: function(r) {
-			// Clear flag on callback
-			let callback_row = locals[item_row.doctype][item_row.name];
-			if (callback_row) {
-				delete callback_row._sf_trading_popup_shown;
-			}
-			
 			if (r.message && r.message.length > 0) {
-				// Show dialog with warehouse stock
-				sf_trading.show_warehouse_dialog(frm, item_row, r.message);
+				sf_trading.render_stock_display(frm, item_row.item_code, r.message, warehouse, item_row.name);
 			} else {
-				// Only show alert if no warehouses found
-				frappe.show_alert({
-					message: __("No warehouses found"),
-					indicator: "orange"
-				});
+				sf_trading.hide_stock_display(frm);
 			}
 		},
 		error: function(r) {
-			// Clear flag on error
-			let error_row = locals[item_row.doctype][item_row.name];
-			if (error_row) {
-				delete error_row._sf_trading_popup_shown;
-			}
-			
-			frappe.show_alert({
-				message: __("Error loading warehouse stock"),
-				indicator: "red"
-			});
+			sf_trading.hide_stock_display(frm);
 		}
 	});
 };
 
-sf_trading.show_warehouse_dialog = function(frm, item_row, stock_data) {
-	// Check if warehouse field exists in the item doctype
-	if (!frappe.meta.has_field(item_row.doctype, "warehouse")) {
-		// Warehouse field doesn't exist, skip popup
+sf_trading.render_stock_display = function(frm, item_code, stock_data, target_warehouse, item_row_name) {
+	// Get items grid
+	if (!frm.fields_dict.items || !frm.fields_dict.items.grid) {
 		return;
 	}
 	
-	// Get current warehouse if set
-	let current_row = locals[item_row.doctype][item_row.name];
-	let current_warehouse = current_row ? (current_row.warehouse || "") : "";
+	const grid = frm.fields_dict.items.grid;
+	const grid_wrapper = grid.wrapper;
 	
-	// Create dialog
-	let dialog = new frappe.ui.Dialog({
-		title: __("Select Warehouse - {0}", [item_row.item_code]),
-		size: "large",
-		fields: [
-			{
-				fieldtype: "HTML",
-				fieldname: "stock_table",
-				options: sf_trading.get_warehouse_stock_html(stock_data, current_warehouse)
-			}
-		],
-		primary_action_label: current_warehouse ? __("Keep Current") : __("Cancel"),
-		primary_action: function() {
-			dialog.hide();
-		}
+	// Remove existing stock display if any
+	sf_trading.hide_stock_display(frm);
+	
+	// Find the grid footer or create container after grid
+	let $container = grid_wrapper.find(".sf-trading-stock-display");
+	if (!$container.length) {
+		// Create container after grid body - increased size
+		$container = $('<div class="sf-trading-stock-display" style="margin-top: 15px; padding: 15px; background-color: #f9f9f9; border: 1px solid #d1d8dd; border-radius: 4px;"></div>');
+		grid_wrapper.append($container);
+	}
+	
+	// Filter: Only show warehouses with stock > 0 (or target warehouse even if 0)
+	let filtered_stock_data = stock_data.filter(function(item) {
+		return item.stock_qty > 0 || item.warehouse === target_warehouse;
 	});
 	
-	// Add click handlers to warehouse rows
-	dialog.$wrapper.find(".warehouse-row").on("click", function() {
-		let warehouse = $(this).data("warehouse");
-		let stock_qty = $(this).data("stock-qty");
-		
-		// Get fresh reference to item row
-		let current_row = locals[item_row.doctype][item_row.name];
-		if (current_row) {
-			// Set warehouse on the item row
-			frappe.model.set_value(item_row.doctype, item_row.name, "warehouse", warehouse);
-			
-			// Clear the popup flag so it can show again if needed
-			delete current_row._sf_trading_popup_shown;
-			
-			// Refresh the field
-			frm.refresh_field("items");
-			
-			// Show confirmation
-			frappe.show_alert({
-				message: __("Warehouse {0} selected (Stock: {1})", [warehouse, format_number(stock_qty, null, {precision: 2})]),
-				indicator: "green"
+	// Get target warehouse name
+	let target_warehouse_name = "";
+	if (target_warehouse) {
+		let target_wh = filtered_stock_data.find(function(item) {
+			return item.warehouse === target_warehouse;
+		});
+		if (!target_wh) {
+			// Target warehouse might have 0 stock, get it from original data
+			target_wh = stock_data.find(function(item) {
+				return item.warehouse === target_warehouse;
 			});
 		}
-		
-		dialog.hide();
+		target_warehouse_name = target_wh ? (target_wh.warehouse_name || target_warehouse) : target_warehouse;
+	}
+	
+	// Sort: target warehouse first, then others
+	let sorted_stock_data = filtered_stock_data.slice().sort(function(a, b) {
+		if (a.warehouse === target_warehouse) return -1;
+		if (b.warehouse === target_warehouse) return 1;
+		return 0;
 	});
 	
-	// Clear flag when dialog is closed without selection
-	dialog.onhide = function() {
-		let current_row = locals[item_row.doctype][item_row.name];
-		if (current_row && !current_row.warehouse) {
-			// Only clear flag if warehouse is still not set
-			delete current_row._sf_trading_popup_shown;
-		}
-	};
-	
-	dialog.show();
-};
-
-sf_trading.get_warehouse_stock_html = function(stock_data, current_warehouse) {
-	current_warehouse = current_warehouse || "";
-	
 	let html = `
-		<div class="warehouse-stock-list" style="max-height: 400px; overflow-y: auto;">
-			<table class="table table-bordered table-hover" style="margin-bottom: 0;">
+		<div style="margin-bottom: 12px;">
+			<strong style="font-size: 14px;">${__("Stock Availability - {0}", [item_code])}</strong>
+			${target_warehouse ? `<span style="font-size: 12px; color: #666; margin-left: 12px;">→ ${target_warehouse_name}</span>` : ''}
+		</div>
+		<div style="max-height: 300px; overflow-y: auto;">
+			<table class="table table-bordered" style="margin-bottom: 0; background-color: white; font-size: 13px;">
 				<thead>
 					<tr style="background-color: #f5f5f5;">
-						<th style="padding: 8px; width: 60%;">${__("Warehouse")}</th>
-						<th style="padding: 8px; text-align: right; width: 40%;">${__("Stock Qty")}</th>
+						<th style="padding: 8px 10px; width: 50%; font-size: 13px;">${__("Warehouse")}</th>
+						<th style="padding: 8px 10px; text-align: right; width: 30%; font-size: 13px;">${__("Stock Qty")}</th>
+						<th style="padding: 8px 10px; text-align: center; width: 20%; font-size: 13px;">${__("Action")}</th>
 					</tr>
 				</thead>
 				<tbody>
 	`;
 	
-	stock_data.forEach(function(item) {
-		let stock_color = item.stock_qty > 0 ? "green" : "gray";
-		let stock_indicator = item.stock_qty > 0 ? "●" : "○";
-		let is_current = item.warehouse === current_warehouse;
-		let row_style = is_current 
-			? "cursor: pointer; transition: background-color 0.2s; background-color: #e3f2fd; border-left: 3px solid #2196f3;"
-			: "cursor: pointer; transition: background-color 0.2s;";
-		let hover_bg = is_current ? "#bbdefb" : "#f0f0f0";
-		let default_bg = is_current ? "#e3f2fd" : "white";
-		
+	if (sorted_stock_data.length === 0) {
 		html += `
-			<tr class="warehouse-row" 
-				data-warehouse="${item.warehouse}" 
-				data-stock-qty="${item.stock_qty}"
-				style="${row_style}"
-				onmouseover="this.style.backgroundColor='${hover_bg}'"
-				onmouseout="this.style.backgroundColor='${default_bg}'">
-				<td style="padding: 10px;">
-					<span style="color: ${stock_color}; margin-right: 8px;">${stock_indicator}</span>
-					<strong>${item.warehouse_name || item.warehouse}</strong>
-					${is_current ? '<span style="color: #2196f3; margin-left: 8px; font-size: 11px;">(Current)</span>' : ''}
-				</td>
-				<td style="padding: 10px; text-align: right;">
-					<span style="color: ${stock_color}; font-weight: bold;">
-						${format_number(item.stock_qty, null, {precision: 2})}
-					</span>
+			<tr>
+				<td colspan="3" style="padding: 15px; text-align: center; color: #999; font-size: 13px;">
+					${__("No warehouses with stock available")}
 				</td>
 			</tr>
 		`;
-	});
+	} else {
+		sorted_stock_data.forEach(function(item) {
+			let stock_color = item.stock_qty > 0 ? "#28a745" : "#6c757d";
+			let stock_indicator = item.stock_qty > 0 ? "●" : "○";
+			let is_target = item.warehouse === target_warehouse;
+			let row_bg = is_target ? "#e3f2fd" : "white";
+			
+			html += `
+				<tr style="background-color: ${row_bg};">
+					<td style="padding: 8px 10px;">
+						<span style="color: ${stock_color}; margin-right: 6px; font-size: 12px;">${stock_indicator}</span>
+						<span style="font-size: 13px;">${item.warehouse_name || item.warehouse}</span>
+						${is_target ? '<span style="color: #2196f3; margin-left: 6px; font-size: 12px;">(Target)</span>' : ''}
+					</td>
+					<td style="padding: 8px 10px; text-align: right;">
+						<span style="color: ${stock_color}; font-weight: bold; font-size: 13px;">
+							${format_number(item.stock_qty, null, {precision: 2})}
+						</span>
+					</td>
+					<td style="padding: 8px 10px; text-align: center;">
+						${is_target ? '<span style="color: #999; font-size: 12px;">-</span>' : `
+						<button class="btn btn-xs btn-primary request-item-btn" 
+							data-item-code="${item_code.replace(/"/g, '&quot;')}" 
+							data-from-warehouse="${item.warehouse.replace(/"/g, '&quot;')}"
+							data-from-warehouse-name="${(item.warehouse_name || item.warehouse).replace(/"/g, '&quot;')}"
+							data-to-warehouse="${target_warehouse.replace(/"/g, '&quot;')}"
+							data-to-warehouse-name="${target_warehouse_name.replace(/"/g, '&quot;')}"
+							data-item-row-name="${item_row_name.replace(/"/g, '&quot;')}"
+							style="padding: 4px 12px; font-size: 12px;">
+							${__("Request Items")}
+						</button>
+						`}
+					</td>
+				</tr>
+			`;
+		});
+	}
 	
 	html += `
 				</tbody>
 			</table>
 		</div>
-		<div style="margin-top: 15px; padding: 10px; background-color: #f9f9f9; border-radius: 4px;">
-			<small style="color: #666;">
-				${current_warehouse 
-					? __("Current warehouse is highlighted. Click on any warehouse row to change it.")
-					: __("Click on a warehouse row to select it")}
-			</small>
-		</div>
 	`;
 	
-	return html;
+	$container.html(html);
+	$container.show();
+	
+	// Store reference
+	sf_trading.stock_displays[frm.doctype + "_" + frm.docname] = $container;
+	
+	// Add click handlers for request buttons
+	$container.find(".request-item-btn").on("click", function() {
+		let $btn = $(this);
+		let item_code = $btn.data("item-code");
+		let from_warehouse = $btn.data("from-warehouse");
+		let from_warehouse_name = $btn.data("from-warehouse-name");
+		let to_warehouse = $btn.data("to-warehouse");
+		let to_warehouse_name = $btn.data("to-warehouse-name");
+		
+		sf_trading.create_material_request(frm, item_code, from_warehouse, from_warehouse_name, to_warehouse, to_warehouse_name);
+	});
 };
 
-// Debounce helper to prevent multiple rapid calls
-sf_trading.debounce = function(func, wait) {
-	let timeout;
-	return function() {
-		let context = this;
-		let args = arguments;
-		clearTimeout(timeout);
-		timeout = setTimeout(function() {
-			func.apply(context, args);
-		}, wait);
-	};
+sf_trading.hide_stock_display = function(frm) {
+	let key = frm.doctype + "_" + frm.docname;
+	let $display = sf_trading.stock_displays[key];
+	if ($display && $display.length) {
+		$display.hide();
+	}
 };
 
-// Store pending popup timeouts to cancel them if needed
-sf_trading.pending_popups = {};
+sf_trading.create_material_request = function(frm, item_code, from_warehouse, from_warehouse_name, to_warehouse, to_warehouse_name) {
+	// Create Material Request dialog
+	let dialog = new frappe.ui.Dialog({
+		title: __("Create Material Transfer Request"),
+		fields: [
+			{
+				fieldtype: "Data",
+				fieldname: "item_code",
+				label: __("Item Code"),
+				default: item_code,
+				read_only: 1
+			},
+			{
+				fieldtype: "Data",
+				fieldname: "from_warehouse",
+				label: __("From Warehouse"),
+				default: from_warehouse_name || from_warehouse,
+				read_only: 1
+			},
+			{
+				fieldtype: "Data",
+				fieldname: "to_warehouse",
+				label: __("To Warehouse"),
+				default: to_warehouse_name || to_warehouse,
+				read_only: 1
+			},
+			{
+				fieldtype: "Float",
+				fieldname: "qty",
+				label: __("Quantity"),
+				default: 1,
+				reqd: 1
+			},
+			{
+				fieldtype: "Date",
+				fieldname: "schedule_date",
+				label: __("Required Date"),
+				default: frappe.datetime.add_days(frappe.datetime.get_today(), 7),
+				reqd: 1
+			}
+		],
+		primary_action_label: __("Create"),
+		primary_action: function() {
+			let values = dialog.get_values();
+			if (!values) {
+				return;
+			}
+			
+			// Create Material Request (always Material Transfer)
+			frappe.call({
+				method: "sf_trading.api.material_request.create_material_request",
+				args: {
+					item_code: values.item_code,
+					from_warehouse: from_warehouse,
+					to_warehouse: to_warehouse,
+					qty: values.qty,
+					schedule_date: values.schedule_date,
+					material_request_type: "Material Transfer",
+					company: frm.doc.company
+				},
+				callback: function(r) {
+					if (r.message) {
+						frappe.show_alert({
+							message: __("Material Request {0} created", [r.message]),
+							indicator: "green"
+						});
+						frappe.set_route("Form", "Material Request", r.message);
+					}
+					dialog.hide();
+				},
+				error: function(r) {
+					frappe.show_alert({
+						message: __("Error creating Material Request"),
+						indicator: "red"
+					});
+				}
+			});
+		}
+	});
+	
+	dialog.show();
+};
 
-// Hook into item_code onchange for common child doctypes with warehouse fields
-// This will work for Sales Order Item, Sales Invoice Item, Purchase Order Item, etc.
+// Hook into item_code and warehouse onchange - Only for Sales Invoice for now
+// Can be extended to other doctypes in future by adding them to this array
 let item_doctypes = [
-	"Sales Order Item", "Sales Invoice Item", "Purchase Order Item", 
-	"Purchase Invoice Item", "Quotation Item", "Delivery Note Item", 
-	"Purchase Receipt Item", "Material Request Item", "Stock Entry Detail",
-	"Work Order Item"
+	"Sales Invoice Item"
 ];
+
+// Track currently selected row
+sf_trading.current_selected_row = null;
 
 item_doctypes.forEach(function(child_doctype) {
 	frappe.ui.form.on(child_doctype, {
 		item_code: function(frm, cdt, cdn) {
 			let item_row = locals[cdt][cdn];
 			
-			// Only show popup if:
-			// 1. item_code is set
-			// 2. warehouse field exists
-			// 3. company is set
+			// Track selected row
+			sf_trading.current_selected_row = item_row;
+			
 			if (item_row.item_code && 
 				frappe.meta.has_field(item_row.doctype, "warehouse") &&
 				frm.doc.company) {
 				
-				// Cancel any pending popup for this row
-				let row_key = item_row.name || cdn;
-				if (sf_trading.pending_popups[row_key]) {
-					clearTimeout(sf_trading.pending_popups[row_key]);
-					delete sf_trading.pending_popups[row_key];
-				}
-				
-				// Mark that item_code was just set - this helps us detect auto-set warehouses
-				item_row._sf_trading_item_just_added = true;
-				item_row._sf_trading_item_added_time = Date.now();
-				
-				// Single check after ERPNext finishes processing (reduced delay)
-				let showPopupOnce = function() {
-					let current_row = locals[cdt][cdn];
-					
-					if (!current_row || !current_row.item_code) {
-						return; // Row was deleted or item_code cleared
-					}
-					
-					// Clear the flag
-					delete current_row._sf_trading_item_just_added;
-					delete current_row._sf_trading_item_added_time;
-					delete sf_trading.pending_popups[row_key];
-					
-					// Show popup (will handle both empty and auto-set warehouse cases)
-					sf_trading.show_warehouse_stock_popup(frm, current_row, current_row.warehouse ? true : false);
-				};
-				
-				// Single timeout - reduced from multiple checks
-				sf_trading.pending_popups[row_key] = setTimeout(showPopupOnce, 1200);
+				// Show stock immediately when item_code changes
+				clearTimeout(item_row._sf_trading_stock_timeout);
+				item_row._sf_trading_stock_timeout = setTimeout(function() {
+					sf_trading.show_warehouse_stock(frm, item_row);
+				}, 300);
+			} else {
+				sf_trading.hide_stock_display(frm);
+			}
+		},
+		
+		item_code_focus: function(frm, cdt, cdn) {
+			// When item_code field is focused/clicked, show stock for that row
+			let item_row = locals[cdt][cdn];
+			if (item_row && item_row.item_code && 
+				frappe.meta.has_field(item_row.doctype, "warehouse") &&
+				frm.doc.company) {
+				sf_trading.current_selected_row = item_row;
+				clearTimeout(item_row._sf_trading_stock_timeout);
+				item_row._sf_trading_stock_timeout = setTimeout(function() {
+					sf_trading.show_warehouse_stock(frm, item_row);
+				}, 100);
 			}
 		},
 		
 		warehouse: function(frm, cdt, cdn) {
 			let item_row = locals[cdt][cdn];
 			
-			// If warehouse was auto-set right after item_code was added (within 2 seconds), show popup
-			if (item_row._sf_trading_item_just_added && 
-				item_row.warehouse && 
-				item_row.item_code &&
-				frm.doc.company &&
+			// Track selected row
+			sf_trading.current_selected_row = item_row;
+			
+			if (item_row.item_code && 
 				frappe.meta.has_field(item_row.doctype, "warehouse") &&
-				item_row._sf_trading_item_added_time &&
-				(Date.now() - item_row._sf_trading_item_added_time) < 2000) {
+				frm.doc.company) {
 				
-				// Cancel the pending popup from item_code handler
-				let row_key = item_row.name || cdn;
-				if (sf_trading.pending_popups[row_key]) {
-					clearTimeout(sf_trading.pending_popups[row_key]);
-					delete sf_trading.pending_popups[row_key];
-				}
-				
-				// Clear the flag
-				delete item_row._sf_trading_item_just_added;
-				delete item_row._sf_trading_item_added_time;
-				
-				// Show popup immediately (reduced delay)
-				setTimeout(function() {
-					let current_row = locals[cdt][cdn];
-					if (current_row && current_row.warehouse && current_row.item_code) {
-						// Show popup with current warehouse, but allow changing it
-						sf_trading.show_warehouse_stock_popup(frm, current_row, true);
-					}
+				// Update stock display when warehouse changes
+				clearTimeout(item_row._sf_trading_stock_timeout);
+				item_row._sf_trading_stock_timeout = setTimeout(function() {
+					sf_trading.show_warehouse_stock(frm, item_row);
 				}, 300);
+			}
+		},
+		
+		// Detect when row is selected/clicked
+		form_render: function(frm, cdt, cdn) {
+			let item_row = locals[cdt][cdn];
+			if (item_row && item_row.item_code) {
+				sf_trading.current_selected_row = item_row;
+				if (frm.doc.company && frappe.meta.has_field(item_row.doctype, "warehouse")) {
+					clearTimeout(item_row._sf_trading_stock_timeout);
+					item_row._sf_trading_stock_timeout = setTimeout(function() {
+						sf_trading.show_warehouse_stock(frm, item_row);
+					}, 200);
+				}
 			}
 		}
 	});
 });
+
+// Listen to item_code field clicks/focus for all doctypes
+function setup_item_code_field_listeners(frm) {
+	if (!frm.fields_dict.items || !frm.fields_dict.items.grid) {
+		return;
+	}
+	
+	const grid = frm.fields_dict.items.grid;
+	
+	// Listen for clicks on item_code field in grid rows
+	grid.wrapper.on("click focus", "[data-fieldname='item_code'] input, [data-fieldname='item_code'] .link-field", function() {
+		let $field = $(this);
+		let $row = $field.closest(".grid-row");
+		let idx = $row.attr("data-idx");
+		
+		if (idx && frm.doc.items) {
+			let item_row = frm.doc.items.find(function(item) {
+				return item.idx == idx;
+			});
+			
+			if (item_row && item_row.item_code) {
+				sf_trading.current_selected_row = item_row;
+				if (frm.doc.company && frappe.meta.has_field(item_row.doctype, "warehouse")) {
+					clearTimeout(item_row._sf_trading_stock_timeout);
+					item_row._sf_trading_stock_timeout = setTimeout(function() {
+						sf_trading.show_warehouse_stock(frm, item_row);
+					}, 100);
+				}
+			}
+		}
+	});
+}
+
+// Only enable for Sales Invoice for now
+// Can be extended to other doctypes in future by adding them here
+frappe.ui.form.on("Sales Invoice", {
+	refresh: function(frm) {
+		setup_item_code_field_listeners(frm);
+		
+		// Check if any item is selected, if not hide display
+		if (!frm.doc.items || frm.doc.items.length === 0) {
+			sf_trading.hide_stock_display(frm);
+		}
+	}
+});
+
