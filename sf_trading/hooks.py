@@ -260,5 +260,18 @@ fixtures = [
 				)
 			]
 		]
-	}
+	},
+		{
+			"doctype": "Report",
+			"filters": [
+				[
+					"name",
+					"in",
+					(
+						"DCR Report",
+						"DCR Detailed",
+					)
+				]
+			]
+		}
 ]
