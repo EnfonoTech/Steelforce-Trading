@@ -4,7 +4,7 @@ from erpnext.stock.utils import get_stock_balance
 
 
 @frappe.whitelist()
-def get_item_warehouse_stock(item_code, company=None):
+def get_item_warehouse_stock(item_code, company=None, limit=None, target_warehouse=None):
 	"""
 	Get stock balance for an item across all warehouses in a company.
 	Optimized to use Bin table for faster bulk queries.
@@ -12,6 +12,8 @@ def get_item_warehouse_stock(item_code, company=None):
 	Args:
 		item_code: Item code to get stock for
 		company: Company name (optional, will use default if not provided)
+		limit: Limit number of results (optional, for pagination)
+		target_warehouse: Target warehouse to prioritize (optional)
 	
 	Returns:
 		List of dictionaries with warehouse name and stock balance
@@ -66,7 +68,21 @@ def get_item_warehouse_stock(item_code, company=None):
 			"stock_qty": stock_qty
 		})
 	
-	# Sort by stock quantity descending
-	stock_data.sort(key=lambda x: x["stock_qty"], reverse=True)
+	# Filter: Only show warehouses with stock > 0 (or target warehouse even if 0)
+	if target_warehouse:
+		filtered_stock_data = [item for item in stock_data if item["stock_qty"] > 0 or item["warehouse"] == target_warehouse]
+	else:
+		filtered_stock_data = [item for item in stock_data if item["stock_qty"] > 0]
 	
-	return stock_data
+	# Sort: target warehouse first, then by stock quantity descending
+	if target_warehouse:
+		filtered_stock_data.sort(key=lambda x: (-1 if x["warehouse"] == target_warehouse else 0, -x["stock_qty"]))
+	else:
+		filtered_stock_data.sort(key=lambda x: x["stock_qty"], reverse=True)
+	
+	# Apply limit if specified
+	if limit:
+		limit = int(limit)
+		return filtered_stock_data[:limit]
+	
+	return filtered_stock_data

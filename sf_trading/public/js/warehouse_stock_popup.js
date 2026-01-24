@@ -6,7 +6,7 @@ frappe.provide("sf_trading");
 // Store stock display element per form
 sf_trading.stock_displays = {};
 
-sf_trading.show_warehouse_stock = function(frm, item_row) {
+sf_trading.show_warehouse_stock = function(frm, item_row, load_all = false) {
 	// Check if item_code is set
 	if (!item_row || !item_row.item_code) {
 		sf_trading.hide_stock_display(frm);
@@ -30,16 +30,24 @@ sf_trading.show_warehouse_stock = function(frm, item_row) {
 	let current_row = locals[item_row.doctype][item_row.name];
 	let warehouse = current_row ? (current_row.warehouse || "") : "";
 	
+	// Prepare API args - limit to 5 if not loading all
+	let api_args = {
+		item_code: item_row.item_code,
+		company: company,
+		target_warehouse: warehouse || null
+	};
+	
+	if (!load_all) {
+		api_args.limit = 5;
+	}
+	
 	// Fetch warehouse stock data
 	frappe.call({
 		method: "sf_trading.api.warehouse_stock.get_item_warehouse_stock",
-		args: {
-			item_code: item_row.item_code,
-			company: company
-		},
+		args: api_args,
 		callback: function(r) {
 			if (r.message && r.message.length > 0) {
-				sf_trading.render_stock_display(frm, item_row.item_code, r.message, warehouse, item_row.name);
+				sf_trading.render_stock_display(frm, item_row.item_code, r.message, warehouse, item_row.name, load_all);
 			} else {
 				sf_trading.hide_stock_display(frm);
 			}
@@ -50,7 +58,7 @@ sf_trading.show_warehouse_stock = function(frm, item_row) {
 	});
 };
 
-sf_trading.render_stock_display = function(frm, item_code, stock_data, target_warehouse, item_row_name) {
+sf_trading.render_stock_display = function(frm, item_code, stock_data, target_warehouse, item_row_name, is_all_loaded = false) {
 	// Get items grid
 	if (!frm.fields_dict.items || !frm.fields_dict.items.grid) {
 		return;
@@ -65,83 +73,88 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 	// Find the grid footer or create container after grid
 	let $container = grid_wrapper.find(".sf-trading-stock-display");
 	if (!$container.length) {
-		// Create container after grid body - increased size
-		$container = $('<div class="sf-trading-stock-display" style="margin-top: 15px; padding: 15px; background-color: #f9f9f9; border: 1px solid #d1d8dd; border-radius: 4px;"></div>');
+		// Create container after grid body - reduced padding
+		$container = $('<div class="sf-trading-stock-display" style="margin-top: 8px; padding: 8px; background-color: #f9f9f9; border: 1px solid #d1d8dd; border-radius: 4px;"></div>');
 		grid_wrapper.append($container);
 	}
 	
-	// Filter: Only show warehouses with stock > 0 (or target warehouse even if 0)
-	let filtered_stock_data = stock_data.filter(function(item) {
-		return item.stock_qty > 0 || item.warehouse === target_warehouse;
-	});
-	
+	// Data is already filtered and sorted by backend
 	// Get target warehouse name
 	let target_warehouse_name = "";
 	if (target_warehouse) {
-		let target_wh = filtered_stock_data.find(function(item) {
+		let target_wh = stock_data.find(function(item) {
 			return item.warehouse === target_warehouse;
 		});
-		if (!target_wh) {
-			// Target warehouse might have 0 stock, get it from original data
-			target_wh = stock_data.find(function(item) {
-				return item.warehouse === target_warehouse;
-			});
-		}
 		target_warehouse_name = target_wh ? (target_wh.warehouse_name || target_warehouse) : target_warehouse;
 	}
 	
-	// Sort: target warehouse first, then others
-	let sorted_stock_data = filtered_stock_data.slice().sort(function(a, b) {
-		if (a.warehouse === target_warehouse) return -1;
-		if (b.warehouse === target_warehouse) return 1;
-		return 0;
-	});
+	// If all data is loaded, show all; otherwise only show loaded data (max 5)
+	let sorted_stock_data = stock_data;
+	let visible_data, hidden_data, has_more;
+	
+	if (is_all_loaded) {
+		// All data loaded - show all items directly
+		visible_data = sorted_stock_data;
+		hidden_data = [];
+		has_more = false;
+	} else {
+		// Only 5 loaded - show all of them (no hidden rows)
+		visible_data = sorted_stock_data;
+		hidden_data = [];
+		// If we got exactly 5 items, there might be more to load
+		has_more = sorted_stock_data.length >= 5;
+	}
+	
+	// Generate unique ID for this display
+	let display_id = "sf_stock_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
 	
 	let html = `
-		<div style="margin-bottom: 12px;">
+		<div style="margin-bottom: 6px;">
 			<strong style="font-size: 14px;">${__("Stock Availability - {0}", [item_code])}</strong>
-			${target_warehouse ? `<span style="font-size: 12px; color: #666; margin-left: 12px;">→ ${target_warehouse_name}</span>` : ''}
+			${target_warehouse ? `<span style="font-size: 12px; color: #666; margin-left: 8px;">→ ${target_warehouse_name}</span>` : ''}
 		</div>
 		<div style="max-height: 300px; overflow-y: auto;">
-			<table class="table table-bordered" style="margin-bottom: 0; background-color: white; font-size: 13px;">
+			<table class="table table-bordered" style="margin: 0; background-color: white; font-size: 13px;">
 				<thead>
 					<tr style="background-color: #f5f5f5;">
-						<th style="padding: 8px 10px; width: 50%; font-size: 13px;">${__("Warehouse")}</th>
-						<th style="padding: 8px 10px; text-align: right; width: 30%; font-size: 13px;">${__("Stock Qty")}</th>
-						<th style="padding: 8px 10px; text-align: center; width: 20%; font-size: 13px;">${__("Action")}</th>
+						<th style="padding: 6px 8px; width: 50%; font-size: 13px;">${__("Warehouse")}</th>
+						<th style="padding: 6px 8px; text-align: right; width: 30%; font-size: 13px;">${__("Stock Qty")}</th>
+						<th style="padding: 6px 8px; text-align: center; width: 20%; font-size: 13px;">${__("Action")}</th>
 					</tr>
 				</thead>
-				<tbody>
+				<tbody id="${display_id}_tbody">
 	`;
 	
 	if (sorted_stock_data.length === 0) {
 		html += `
 			<tr>
-				<td colspan="3" style="padding: 15px; text-align: center; color: #999; font-size: 13px;">
+				<td colspan="3" style="padding: 10px; text-align: center; color: #999; font-size: 13px;">
 					${__("No warehouses with stock available")}
 				</td>
 			</tr>
 		`;
 	} else {
-		sorted_stock_data.forEach(function(item) {
+		// Render visible rows (first 5)
+		visible_data.forEach(function(item, index) {
 			let stock_color = item.stock_qty > 0 ? "#28a745" : "#6c757d";
 			let stock_indicator = item.stock_qty > 0 ? "●" : "○";
 			let is_target = item.warehouse === target_warehouse;
 			let row_bg = is_target ? "#e3f2fd" : "white";
+			let row_class = `${display_id}_row`;
 			
 			html += `
-				<tr style="background-color: ${row_bg};">
-					<td style="padding: 8px 10px;">
-						<span style="color: ${stock_color}; margin-right: 6px; font-size: 12px;">${stock_indicator}</span>
+				<tr class="${row_class}" style="background-color: ${row_bg};">
+					<td style="padding: 6px 8px;">
+						<span style="color: ${stock_color}; margin-right: 5px; font-size: 12px;">${stock_indicator}</span>
 						<span style="font-size: 13px;">${item.warehouse_name || item.warehouse}</span>
-						${is_target ? '<span style="color: #2196f3; margin-left: 6px; font-size: 12px;">(Target)</span>' : ''}
+						${is_target ? '<span style="color: #2196f3; margin-left: 5px; font-size: 12px;">(Target)</span>' : ''}
 					</td>
-					<td style="padding: 8px 10px; text-align: right;">
+					<td style="padding: 6px 8px; text-align: right;">
 						<span style="color: ${stock_color}; font-weight: bold; font-size: 13px;">
 							${format_number(item.stock_qty, null, {precision: 2})}
 						</span>
 					</td>
-					<td style="padding: 8px 10px; text-align: center;">
+					<td style="padding: 6px 8px; text-align: center;">
 						${is_target ? '<span style="color: #999; font-size: 12px;">-</span>' : `
 						<button class="btn btn-xs btn-primary request-item-btn" 
 							data-item-code="${item_code.replace(/"/g, '&quot;')}" 
@@ -150,7 +163,7 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 							data-to-warehouse="${target_warehouse.replace(/"/g, '&quot;')}"
 							data-to-warehouse-name="${target_warehouse_name.replace(/"/g, '&quot;')}"
 							data-item-row-name="${item_row_name.replace(/"/g, '&quot;')}"
-							style="padding: 4px 12px; font-size: 12px;">
+							style="padding: 3px 10px; font-size: 12px;">
 							${__("Request Items")}
 						</button>
 						`}
@@ -158,6 +171,46 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 				</tr>
 			`;
 		});
+		
+		// Render hidden rows (rest, initially hidden) - only if all data is loaded
+		if (has_more && is_all_loaded && hidden_data.length > 0) {
+			hidden_data.forEach(function(item, index) {
+				let stock_color = item.stock_qty > 0 ? "#28a745" : "#6c757d";
+				let stock_indicator = item.stock_qty > 0 ? "●" : "○";
+				let is_target = item.warehouse === target_warehouse;
+				let row_bg = is_target ? "#e3f2fd" : "white";
+				let row_class = `${display_id}_row ${display_id}_hidden_row`;
+				
+				html += `
+					<tr class="${row_class}" style="display: none; background-color: ${row_bg};">
+						<td style="padding: 6px 8px;">
+							<span style="color: ${stock_color}; margin-right: 5px; font-size: 12px;">${stock_indicator}</span>
+							<span style="font-size: 13px;">${item.warehouse_name || item.warehouse}</span>
+							${is_target ? '<span style="color: #2196f3; margin-left: 5px; font-size: 12px;">(Target)</span>' : ''}
+						</td>
+						<td style="padding: 6px 8px; text-align: right;">
+							<span style="color: ${stock_color}; font-weight: bold; font-size: 13px;">
+								${format_number(item.stock_qty, null, {precision: 2})}
+							</span>
+						</td>
+						<td style="padding: 6px 8px; text-align: center;">
+							${is_target ? '<span style="color: #999; font-size: 12px;">-</span>' : `
+							<button class="btn btn-xs btn-primary request-item-btn" 
+								data-item-code="${item_code.replace(/"/g, '&quot;')}" 
+								data-from-warehouse="${item.warehouse.replace(/"/g, '&quot;')}"
+								data-from-warehouse-name="${(item.warehouse_name || item.warehouse).replace(/"/g, '&quot;')}"
+								data-to-warehouse="${target_warehouse.replace(/"/g, '&quot;')}"
+								data-to-warehouse-name="${target_warehouse_name.replace(/"/g, '&quot;')}"
+								data-item-row-name="${item_row_name.replace(/"/g, '&quot;')}"
+								style="padding: 3px 10px; font-size: 12px;">
+								${__("Request Items")}
+							</button>
+							`}
+						</td>
+					</tr>
+				`;
+			});
+		}
 	}
 	
 	html += `
@@ -166,11 +219,42 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 		</div>
 	`;
 	
+	// Add "Show All" button if there might be more warehouses (not all loaded yet)
+	if (has_more && !is_all_loaded) {
+		html += `
+			<div style="margin-top: 6px; text-align: center;">
+				<button class="btn btn-xs btn-link ${display_id}_toggle_btn" 
+					style="padding: 2px 6px; font-size: 12px; color: #007bff; text-decoration: none;">
+					${__("Show All")}
+				</button>
+			</div>
+		`;
+	}
+	
 	$container.html(html);
 	$container.show();
 	
 	// Store reference
 	sf_trading.stock_displays[frm.doctype + "_" + frm.docname] = $container;
+	
+	// Add toggle button handler for "Show All" - fetch all warehouses when clicked
+	if (has_more && !is_all_loaded) {
+		let $toggle_btn = $container.find(`.${display_id}_toggle_btn`);
+		
+		$toggle_btn.on("click", function() {
+			// Fetch all warehouses when "Show All" is clicked
+			// Get the item row using the stored item_row_name and doctype
+			let item_doctype = "Sales Invoice Item"; // Default, can be extended for other doctypes
+			let item_row = locals[item_doctype] && locals[item_doctype][item_row_name];
+			if (item_row && item_row.item_code) {
+				// Show loading state
+				$toggle_btn.prop("disabled", true).html(__("Loading..."));
+				
+				// Fetch all warehouses (load_all = true)
+				sf_trading.show_warehouse_stock(frm, item_row, true);
+			}
+		});
+	}
 	
 	// Add click handlers for request buttons
 	$container.find(".request-item-btn").on("click", function() {
