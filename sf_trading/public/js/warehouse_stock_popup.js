@@ -93,10 +93,10 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 	let visible_data, hidden_data, has_more;
 	
 	if (is_all_loaded) {
-		// All data loaded - show all items directly
-		visible_data = sorted_stock_data;
-		hidden_data = [];
-		has_more = false;
+		// All data loaded - split into visible (first 5) and hidden (rest) for collapse functionality
+		visible_data = sorted_stock_data.slice(0, 5);
+		hidden_data = sorted_stock_data.slice(5);
+		has_more = hidden_data.length > 0;
 	} else {
 		// Only 5 loaded - show all of them (no hidden rows)
 		visible_data = sorted_stock_data;
@@ -108,10 +108,38 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 	// Generate unique ID for this display
 	let display_id = "sf_stock_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
 	
+	// Determine button text and visibility
+	let show_toggle_button = false;
+	let button_text = "";
+	let button_action = ""; // "load_all" or "toggle_view"
+	let initial_collapsed = false; // Start collapsed (show only 5) when all loaded
+	
+	if (has_more && !is_all_loaded) {
+		// Not all loaded - show "Show All" button to fetch more
+		show_toggle_button = true;
+		button_text = __("Show All");
+		button_action = "load_all";
+	} else if (is_all_loaded && sorted_stock_data.length > 5) {
+		// All loaded and more than 5 - show toggle to collapse/expand
+		show_toggle_button = true;
+		button_text = __("Show Less"); // Will toggle to "Show All" when collapsed
+		button_action = "toggle_view";
+		initial_collapsed = false; // Start expanded (show all)
+	}
+	
 	let html = `
-		<div style="margin-bottom: 6px;">
-			<strong style="font-size: 14px;">${__("Stock Availability - {0}", [item_code])}</strong>
-			${target_warehouse ? `<span style="font-size: 12px; color: #666; margin-left: 8px;">→ ${target_warehouse_name}</span>` : ''}
+		<div style="margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
+			<div>
+				<strong style="font-size: 14px;">${__("Stock Availability - {0}", [item_code])}</strong>
+				${target_warehouse ? `<span style="font-size: 12px; color: #666; margin-left: 8px;">→ ${target_warehouse_name}</span>` : ''}
+			</div>
+			${show_toggle_button ? `
+			<button class="btn btn-xs btn-link ${display_id}_toggle_btn" 
+				data-action="${button_action}"
+				style="padding: 2px 6px; font-size: 12px; color: #007bff; text-decoration: none; margin-left: auto;">
+				${button_text}
+			</button>
+			` : ''}
 		</div>
 		<div style="max-height: 300px; overflow-y: auto;">
 			<table class="table table-bordered" style="margin: 0; background-color: white; font-size: 13px;">
@@ -182,7 +210,7 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 				let row_class = `${display_id}_row ${display_id}_hidden_row`;
 				
 				html += `
-					<tr class="${row_class}" style="display: none; background-color: ${row_bg};">
+					<tr class="${row_class}" style="display: table-row; background-color: ${row_bg};">
 						<td style="padding: 6px 8px;">
 							<span style="color: ${stock_color}; margin-right: 5px; font-size: 12px;">${stock_indicator}</span>
 							<span style="font-size: 13px;">${item.warehouse_name || item.warehouse}</span>
@@ -219,39 +247,46 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 		</div>
 	`;
 	
-	// Add "Show All" button if there might be more warehouses (not all loaded yet)
-	if (has_more && !is_all_loaded) {
-		html += `
-			<div style="margin-top: 6px; text-align: center;">
-				<button class="btn btn-xs btn-link ${display_id}_toggle_btn" 
-					style="padding: 2px 6px; font-size: 12px; color: #007bff; text-decoration: none;">
-					${__("Show All")}
-				</button>
-			</div>
-		`;
-	}
-	
 	$container.html(html);
 	$container.show();
 	
 	// Store reference
 	sf_trading.stock_displays[frm.doctype + "_" + frm.docname] = $container;
 	
-	// Add toggle button handler for "Show All" - fetch all warehouses when clicked
-	if (has_more && !is_all_loaded) {
-		let $toggle_btn = $container.find(`.${display_id}_toggle_btn`);
+	// Add toggle button handler
+	let $toggle_btn = $container.find(`.${display_id}_toggle_btn`);
+	if ($toggle_btn.length) {
+		let button_action = $toggle_btn.data("action");
+		// Store expanded state - start expanded (show all) when all data is loaded
+		let is_expanded = (button_action === "toggle_view");
 		
 		$toggle_btn.on("click", function() {
-			// Fetch all warehouses when "Show All" is clicked
-			// Get the item row using the stored item_row_name and doctype
-			let item_doctype = "Sales Invoice Item"; // Default, can be extended for other doctypes
-			let item_row = locals[item_doctype] && locals[item_doctype][item_row_name];
-			if (item_row && item_row.item_code) {
-				// Show loading state
-				$toggle_btn.prop("disabled", true).html(__("Loading..."));
+			if (button_action === "load_all") {
+				// Fetch all warehouses when "Show All" is clicked
+				let item_doctype = "Sales Invoice Item"; // Default, can be extended for other doctypes
+				let item_row = locals[item_doctype] && locals[item_doctype][item_row_name];
+				if (item_row && item_row.item_code) {
+					// Show loading state
+					$toggle_btn.prop("disabled", true).html(__("Loading..."));
+					
+					// Fetch all warehouses (load_all = true)
+					sf_trading.show_warehouse_stock(frm, item_row, true);
+				}
+			} else if (button_action === "toggle_view") {
+				// Toggle between showing 5 and showing all
+				let $hidden_rows = $container.find(`.${display_id}_hidden_row`);
 				
-				// Fetch all warehouses (load_all = true)
-				sf_trading.show_warehouse_stock(frm, item_row, true);
+				if (is_expanded) {
+					// Collapse: hide rows beyond first 5
+					$hidden_rows.hide();
+					$toggle_btn.html(__("Show All"));
+					is_expanded = false;
+				} else {
+					// Expand: show all rows
+					$hidden_rows.show();
+					$toggle_btn.html(__("Show Less"));
+					is_expanded = true;
+				}
 			}
 		});
 	}
