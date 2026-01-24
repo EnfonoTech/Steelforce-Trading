@@ -127,23 +127,29 @@ def get_data(filters):
 	
 	# Get Cash Sales (Sales Invoices with Cash payment mode)
 	cash_sales_data = get_cash_sales(from_date, to_date, company, cost_center)
-	cash_sales = cash_sales_data.get("net_total", 0)
+	cash_sales_net = cash_sales_data.get("net_total", 0)
 	vat_collected_cash = cash_sales_data.get("vat_amount", 0)
+	# Include VAT in cash sales
+	cash_sales = cash_sales_net + vat_collected_cash
 	total_discount_adj += cash_sales_data.get("discount", 0)
 	
 	# Get Credit Sales (Sales Invoices without immediate payment or with credit terms)
 	credit_sales_data = get_credit_sales(from_date, to_date, company, cost_center)
-	credit_sales = credit_sales_data.get("net_total", 0)
+	credit_sales_net = credit_sales_data.get("net_total", 0)
 	vat_applied_credit = credit_sales_data.get("vat_amount", 0)
+	# Include VAT in credit sales
+	credit_sales = credit_sales_net + vat_applied_credit
 	
 	# Get Sales Return - Cash
 	sales_return_data = get_sales_returns_cash(from_date, to_date, company, cost_center)
-	sales_return_cash = sales_return_data.get("net_total", 0)
+	sales_return_cash_net = sales_return_data.get("net_total", 0)
 	vat_refund_sales_return = sales_return_data.get("vat_amount", 0)
+	# Include VAT in sales return
+	sales_return_cash = sales_return_cash_net + vat_refund_sales_return
 	
-	# Get Credit Purchase
+	# Get Credit Purchase (including VAT)
 	credit_purchase_data = get_credit_purchases(from_date, to_date, company, cost_center)
-	credit_purchase = credit_purchase_data.get("net_total", 0)
+	credit_purchase = credit_purchase_data.get("total_with_vat", 0)
 	
 	# Get Cash Received from Credit Sales (Payment Entries for Sales Invoices)
 	cash_received_credit_sales = get_cash_received_credit_sales(from_date, to_date, company, cost_center)
@@ -153,11 +159,11 @@ def get_data(filters):
 	payments_petty_cash = petty_cash_data.get("payments", 0)
 	receipts_petty_cash = petty_cash_data.get("receipts", 0)
 	
-	# Calculate Gross Margin for Cash Sales
-	gross_margin_cash = cash_sales - cash_sales_data.get("cost", 0)
+	# Calculate Gross Margin for Cash Sales (use net amount, VAT is not part of margin)
+	gross_margin_cash = cash_sales_net - cash_sales_data.get("cost", 0)
 	
-	# Calculate Gross Margin for Credit Sales
-	gross_margin_credit = credit_sales - credit_sales_data.get("cost", 0)
+	# Calculate Gross Margin for Credit Sales (use net amount, VAT is not part of margin)
+	gross_margin_credit = credit_sales_net - credit_sales_data.get("cost", 0)
 	
 	# Build report data with clickable links
 	# Opening Cash Balance - no link
@@ -223,10 +229,12 @@ def get_data(filters):
 	data.append([get_list_view_link("Sales Invoice", "CREDIT SALES", credit_sales_filters), credit_sales, 0, 0, gross_margin_credit])
 	
 	# VAT Collected on Cash Sales - link to Sales Invoice list (same as cash sales)
-	data.append([get_list_view_link("Sales Invoice", "VAT Collected on Cash Sales", cash_sales_filters), -vat_collected_cash, 0, 0, 0])
+	# VAT collected is income, so it should be positive
+	data.append([get_list_view_link("Sales Invoice", "VAT Collected on Cash Sales", cash_sales_filters), vat_collected_cash, 0, 0, 0])
 	
 	# VAT Applied on Credit Sales - link to Sales Invoice list (same as credit sales)
-	data.append([get_list_view_link("Sales Invoice", "VAT Applied on Credit Sales", credit_sales_filters), -vat_applied_credit, 0, 0, 0])
+	# VAT applied is income, so it should be positive
+	data.append([get_list_view_link("Sales Invoice", "VAT Applied on Credit Sales", credit_sales_filters), vat_applied_credit, 0, 0, 0])
 	
 	# Sales Return - Cash - link to Sales Invoice list filtered by returns
 	returns_filters = {
@@ -240,8 +248,9 @@ def get_data(filters):
 		returns_filters["cost_center"] = cost_center
 	data.append([get_list_view_link("Sales Invoice", "Sales Return - Cash", returns_filters), 0, sales_return_cash, 0, 0])
 	
-	# VAT Refund on Sales Return-Cash Invoices - same as returns
-	data.append([get_list_view_link("Sales Invoice", "VAT Refund on Sales Return-Cash Invoices", returns_filters), 0, vat_refund_sales_return, 0, 0])
+	# VAT Refund on Sales Return - link to Sales Invoice list (same as returns)
+	# VAT refund is expense, so it should be in expense column
+	data.append([get_list_view_link("Sales Invoice", "VAT Refund on Sales Return", returns_filters), 0, vat_refund_sales_return, 0, 0])
 	
 	# Credit Purchase - link to Purchase Invoice list
 	purchase_filters = {
@@ -278,18 +287,17 @@ def get_data(filters):
 		payment_pay_filters["cost_center"] = cost_center
 	data.append([get_list_view_link("Payment Entry", "Payments-Petty Cash (Total Payments)", payment_pay_filters), 0, payments_petty_cash, 0, 0])
 	
-	# Receipts-Petty Cash - link to Payment Entry list filtered by Receive type
-	data.append([get_list_view_link("Payment Entry", "Receipts-Petty Cash (Total Receipts)", payment_receive_filters), receipts_petty_cash, 0, 0, 0])
+	# Total Receipts = Cash Sales + Cash Received from Credit Sales
+	total_receipts = cash_sales + cash_received_credit_sales
+	data.append(["Total Receipts", total_receipts, 0, 0, 0])
 	
-	# Calculate Cash Balance (removed unposted payments)
+	# Calculate Cash Balance
+	# Cash Balance = Opening Cash + Total Receipts - Total Payments - Expenses
+	# Note: VAT is now included in cash_sales and sales_return_cash
 	cash_balance = (
 		opening_balance
-		+ cash_sales  # Cash sales income
-		+ cash_received_credit_sales  # Cash received from credit sales
-		+ receipts_petty_cash  # Petty cash receipts
-		- vat_collected_cash  # VAT collected (reduction)
-		- sales_return_cash  # Sales returns (expense)
-		- vat_refund_sales_return  # VAT refund on returns (expense)
+		+ total_receipts  # Total receipts (Cash Sales + VAT + Cash Received from Credit Sales)
+		- sales_return_cash  # Sales returns including VAT (expense)
 		- payments_petty_cash  # Petty cash payments (expense)
 	)
 	
@@ -310,13 +318,17 @@ def get_opening_cash_balance(from_date, company, cost_center):
 	
 	# Get cash sales up to previous day
 	cash_sales_data = get_cash_sales(None, prev_date, company, cost_center)
-	cash_sales = cash_sales_data.get("net_total", 0)
+	cash_sales_net = cash_sales_data.get("net_total", 0)
 	vat_collected_cash = cash_sales_data.get("vat_amount", 0)
+	# Include VAT in cash sales
+	cash_sales = cash_sales_net + vat_collected_cash
 	
 	# Get sales returns
 	sales_return_data = get_sales_returns_cash(None, prev_date, company, cost_center)
-	sales_return_cash = sales_return_data.get("net_total", 0)
+	sales_return_cash_net = sales_return_data.get("net_total", 0)
 	vat_refund_sales_return = sales_return_data.get("vat_amount", 0)
+	# Include VAT in sales return
+	sales_return_cash = sales_return_cash_net + vat_refund_sales_return
 	
 	# Get cash received from credit sales
 	cash_received_credit_sales = get_cash_received_credit_sales(None, prev_date, company, cost_center)
@@ -326,15 +338,14 @@ def get_opening_cash_balance(from_date, company, cost_center):
 	payments_petty_cash = petty_cash_data.get("payments", 0)
 	receipts_petty_cash = petty_cash_data.get("receipts", 0)
 	
-	# Calculate opening balance (removed unposted payments)
+	# Calculate opening balance
+	# Opening balance = Total Receipts (Cash Sales + VAT + Cash Received) - Payments - Expenses
+	# Note: VAT is now included in cash_sales and sales_return_cash
+	total_receipts_prev = cash_sales + cash_received_credit_sales
 	opening = (
-		cash_sales
-		+ cash_received_credit_sales
-		+ receipts_petty_cash
-		- vat_collected_cash
-		- sales_return_cash
-		- vat_refund_sales_return
-		- payments_petty_cash
+		total_receipts_prev  # Total receipts (Cash Sales + VAT + Cash Received from Credit Sales)
+		- sales_return_cash  # Sales returns including VAT (expense)
+		- payments_petty_cash  # Petty cash payments (expense)
 	)
 	
 	return flt(opening)
@@ -517,7 +528,8 @@ def get_sales_returns_cash(from_date, to_date, company, cost_center):
 
 
 def get_credit_purchases(from_date, to_date, company, cost_center):
-	"""Get credit purchases (Purchase Invoices not fully paid)"""
+	"""Get credit purchases (Purchase Invoices - all invoices regardless of payment status)
+	Returns total including VAT"""
 	conditions = "pi.docstatus = 1"
 	if from_date:
 		conditions += " AND pi.posting_date >= %(from_date)s"
@@ -532,12 +544,13 @@ def get_credit_purchases(from_date, to_date, company, cost_center):
 	
 	result = frappe.db.sql("""
 		SELECT 
-			SUM(pi.net_total) as net_total
+			SUM(pi.net_total) as net_total,
+			SUM(pi.total_taxes_and_charges) as vat_amount
 		FROM `tabPurchase Invoice` pi
 		LEFT JOIN `tabPurchase Invoice Item` pii ON pii.parent = pi.name
 		WHERE {conditions}
-			AND pi.outstanding_amount > 0
 			{cost_center_condition}
+		GROUP BY pi.name
 	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
 		"from_date": from_date,
 		"to_date": to_date,
@@ -545,9 +558,17 @@ def get_credit_purchases(from_date, to_date, company, cost_center):
 		"cost_center": cost_center
 	}, as_dict=True)
 	
-	if result and result[0].net_total:
-		return {"net_total": flt(result[0].net_total)}
-	return {"net_total": 0}
+	if result:
+		total_net = sum([flt(r.net_total) for r in result if r.net_total])
+		total_vat = sum([flt(r.vat_amount) for r in result if r.vat_amount])
+		# Return total including VAT
+		total_with_vat = total_net + total_vat
+		return {
+			"net_total": total_net,
+			"vat_amount": total_vat,
+			"total_with_vat": total_with_vat
+		}
+	return {"net_total": 0, "vat_amount": 0, "total_with_vat": 0}
 
 
 def get_cash_received_credit_sales(from_date, to_date, company, cost_center):
@@ -587,9 +608,9 @@ def get_cash_received_credit_sales(from_date, to_date, company, cost_center):
 
 
 def get_petty_cash_transactions(from_date, to_date, company, cost_center):
-	"""Get petty cash payments and receipts from Payment Entries"""
-	# Payments: Payment Entries with payment_type = 'Pay' against Purchase Invoice/Purchase Order
-	# Receipts: Payment Entries with payment_type = 'Receive' against Sales Invoice/Sales Order
+	"""Get petty cash payments and receipts
+	Payments: Payment Entry (Pay) + Purchase Invoice (is_paid=1) with Cash mode
+	Receipts: Payment Entry (Receive) + Sales Invoice payments with Cash mode"""
 	
 	conditions = "pe.docstatus = 1"
 	if from_date:
@@ -603,8 +624,8 @@ def get_petty_cash_transactions(from_date, to_date, company, cost_center):
 	if cost_center:
 		cost_center_condition = " AND pe.cost_center = %(cost_center)s"
 	
-	# Get Payments (Pay against Purchase Invoice/Purchase Order)
-	payments_result = frappe.db.sql("""
+	# Get Payments from Payment Entry (Pay against Purchase Invoice/Purchase Order)
+	payments_pe_result = frappe.db.sql("""
 		SELECT 
 			SUM(pe.paid_amount) as amount
 		FROM `tabPayment Entry` pe
@@ -622,8 +643,36 @@ def get_petty_cash_transactions(from_date, to_date, company, cost_center):
 		"cost_center": cost_center
 	}, as_dict=True)
 	
-	# Get Receipts (Receive against Sales Invoice/Sales Order)
-	receipts_result = frappe.db.sql("""
+	# Get Payments from Purchase Invoice (is_paid=1 with Cash mode)
+	pi_conditions = "pi.docstatus = 1 AND pi.is_paid = 1"
+	if from_date:
+		pi_conditions += " AND pi.posting_date >= %(from_date)s"
+	if to_date:
+		pi_conditions += " AND pi.posting_date <= %(to_date)s"
+	if company:
+		pi_conditions += " AND pi.company = %(company)s"
+	
+	pi_cost_center_condition = ""
+	if cost_center:
+		pi_cost_center_condition = " AND pi.cost_center = %(cost_center)s"
+	
+	payments_pi_result = frappe.db.sql("""
+		SELECT 
+			SUM(pi.base_paid_amount) as amount
+		FROM `tabPurchase Invoice` pi
+		INNER JOIN `tabMode of Payment` mop ON mop.name = pi.mode_of_payment
+		WHERE {conditions}
+			AND mop.type = 'Cash'
+			{cost_center_condition}
+	""".format(conditions=pi_conditions, cost_center_condition=pi_cost_center_condition), {
+		"from_date": from_date,
+		"to_date": to_date,
+		"company": company,
+		"cost_center": cost_center
+	}, as_dict=True)
+	
+	# Get Receipts from Payment Entry (Receive against Sales Invoice/Sales Order)
+	receipts_pe_result = frappe.db.sql("""
 		SELECT 
 			SUM(pe.received_amount) as amount
 		FROM `tabPayment Entry` pe
@@ -641,8 +690,19 @@ def get_petty_cash_transactions(from_date, to_date, company, cost_center):
 		"cost_center": cost_center
 	}, as_dict=True)
 	
-	payments = flt(payments_result[0].amount) if payments_result and payments_result[0].amount else 0
-	receipts = flt(receipts_result[0].amount) if receipts_result and receipts_result[0].amount else 0
+	# Don't count Sales Invoice Payment in receipts because:
+	# 1. Cash sales (with Sales Invoice Payment) are already counted as income in "CASH SALES"
+	# 2. Credit sales paid later are counted via Payment Entry
+	# So Sales Invoice Payment would cause double counting
+	
+	# Sum all payments
+	payments_pe = flt(payments_pe_result[0].amount) if payments_pe_result and payments_pe_result[0].amount else 0
+	payments_pi = flt(payments_pi_result[0].amount) if payments_pi_result and payments_pi_result[0].amount else 0
+	payments = payments_pe + payments_pi
+	
+	# Sum all receipts (only Payment Entry, not Sales Invoice Payment)
+	receipts_pe = flt(receipts_pe_result[0].amount) if receipts_pe_result and receipts_pe_result[0].amount else 0
+	receipts = receipts_pe
 	
 	return {
 		"payments": payments,
