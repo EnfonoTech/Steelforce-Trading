@@ -1,0 +1,13 @@
+[
+	{
+		"doc_type": "Sales Invoice Item",
+		"doctype": "Property Setter",
+		"doctype_or_field": "DocField",
+		"field_name": "barcode",
+		"module": "Sf Trading",
+		"name": "Sales Invoice Item-barcode-in_list_view",
+		"property": "in_list_view",
+		"property_type": "Check",
+		"value": "1"
+	}
+]
