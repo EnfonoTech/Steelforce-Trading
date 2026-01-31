@@ -94,9 +94,23 @@ function apply_barcode_scan(frm, cdt, cdn, data, row) {
 		.finally(done);
 }
 
+// Remove empty item rows (scan row) before save - runs on client before validation
+function remove_empty_item_rows(frm) {
+	if (!frm.doc.items || frm.doc.items.length === 0) return;
+	const kept = frm.doc.items.filter((row) => row.item_code);
+	if (kept.length !== frm.doc.items.length) {
+		frm.doc.items = kept;
+		kept.forEach((row, i) => (row.idx = i + 1));
+		frm.refresh_field("items");
+	}
+}
+
 // ----- Form-level "Scan Barcode" field -----
 // Ensures scanning in the form-level field triggers ERPNext BarcodeScanner (add/increment items).
 frappe.ui.form.on("Sales Invoice", {
+	before_save(frm) {
+		if (frm.doc.docstatus === 0) remove_empty_item_rows(frm);
+	},
 	scan_barcode(frm) {
 		if (frm.doc.docstatus !== 0) return;
 		const raw = (frm.doc.scan_barcode || "").toString().trim();

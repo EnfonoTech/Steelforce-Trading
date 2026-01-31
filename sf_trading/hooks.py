@@ -145,6 +145,7 @@ app_include_js = [
 
 doc_events = {
 	"Sales Invoice": {
+		"before_validate": "sf_trading.sales_invoice_override.before_validate",
 		"on_submit": "sf_trading.inter_company.sales_invoice_on_submit",
 	},
 }
