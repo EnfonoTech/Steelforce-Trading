@@ -30,7 +30,8 @@ app_include_js = [
 	"/assets/sf_trading/js/warehouse_stock_popup.js",
 	"/assets/sf_trading/js/last_selling_rate.js",
 	"/assets/sf_trading/js/create_customer.js",
-	"/assets/sf_trading/js/sales_invoice_barcode.js"
+	"/assets/sf_trading/js/sales_invoice_barcode.js",
+	"/assets/sf_trading/js/sales_invoice_inter_company.js",
 ]
 
 # include js, css files in header of web template
@@ -142,13 +143,11 @@ app_include_js = [
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+	"Sales Invoice": {
+		"on_submit": "sf_trading.inter_company.sales_invoice_on_submit",
+	},
+}
 
 # Scheduled Tasks
 # ---------------
@@ -258,6 +257,7 @@ fixtures = [
 				"in",
 				(
 					"Customer-custom_commercial_registration_number",
+					"Sales Invoice-inter_company_branch",
 				)
 			]
 		]
