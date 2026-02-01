@@ -60,7 +60,10 @@ def create_material_request(item_code, from_warehouse, to_warehouse, qty, schedu
 	material_request.transaction_date = nowdate()
 	material_request.company = company
 	material_request.material_request_type = "Material Transfer"
-	
+	# Set form-level warehouse fields (same as item table)
+	material_request.set_warehouse = to_warehouse  # target warehouse
+	material_request.set_from_warehouse = from_warehouse  # source warehouse
+
 	# Add item with from_warehouse and to_warehouse
 	material_request.append("items", {
 		"item_code": item_code,
