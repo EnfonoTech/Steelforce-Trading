@@ -148,6 +148,9 @@ doc_events = {
 		"before_validate": "sf_trading.sales_invoice_override.before_validate",
 		"on_submit": "sf_trading.inter_company.sales_invoice_on_submit",
 	},
+	"Purchase Invoice": {
+		"before_validate": "sf_trading.inter_company.purchase_invoice_before_validate",
+	},
 }
 
 # Scheduled Tasks
