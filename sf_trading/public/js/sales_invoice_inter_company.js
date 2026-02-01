@@ -6,7 +6,7 @@ frappe.ui.form.on("Sales Invoice", {
 				return { filters: { name: "" } };
 			}
 			return {
-				query: "sf_trading.sf_trading.sf_trading.doctype.inter_company_branch.inter_company_branch.get_branches_for_company",
+				query: "sf_trading.sf_trading.doctype.inter_company_branch.inter_company_branch.get_branches_for_company",
 				filters: { company: frm.doc.represents_company },
 			};
 		});

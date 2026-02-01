@@ -29,13 +29,18 @@ def sales_invoice_on_submit(doc, method=None):
 		# Fetch Supplier Invoice No & Date from source Sales Invoice (built-in does not set these)
 		pi.bill_no = doc.name
 		pi.bill_date = doc.posting_date
-		# Cost center: use Inter Company Branch if selected, else buying company's default
-		target_cc = _get_pi_cost_center(doc, pi.company)
-		if target_cc:
-			pi.cost_center = target_cc
+		# Cost center & warehouse: from Inter Company Branch if selected, else company default
+		branch_data = _get_branch_data(doc, pi.company)
+		if branch_data.get("cost_center"):
+			pi.cost_center = branch_data["cost_center"]
 			for item in pi.items:
 				if hasattr(item, "cost_center"):
-					item.cost_center = target_cc
+					item.cost_center = branch_data["cost_center"]
+		if branch_data.get("warehouse"):
+			pi.set_warehouse = branch_data["warehouse"]
+			for item in pi.items:
+				if hasattr(item, "warehouse"):
+					item.warehouse = branch_data["warehouse"]
 		pi.insert(ignore_permissions=True)
 		frappe.msgprint(
 			_("Inter Company Purchase Invoice {0} created as draft.").format(pi.name),
@@ -50,17 +55,24 @@ def sales_invoice_on_submit(doc, method=None):
 		)
 
 
-def _get_pi_cost_center(doc, buying_company: str) -> str | None:
-	"""Get cost center for PI: from Inter Company Branch if set, else company default."""
+def _get_branch_data(doc, buying_company: str) -> dict:
+	"""Get cost_center and warehouse for PI from Inter Company Branch, else company defaults."""
 	import erpnext
 
+	result = {}
 	branch = doc.get("inter_company_branch")
 	if branch and buying_company:
-		cc = frappe.db.get_value(
+		row = frappe.db.get_value(
 			"Inter Company Branch Cost Center",
 			{"parent": branch, "company": buying_company},
-			"cost_center",
+			["cost_center", "warehouse"],
+			as_dict=True,
 		)
-		if cc:
-			return cc
-	return erpnext.get_default_cost_center(buying_company)
+		if row:
+			if row.cost_center:
+				result["cost_center"] = row.cost_center
+			if row.warehouse:
+				result["warehouse"] = row.warehouse
+	if "cost_center" not in result:
+		result["cost_center"] = erpnext.get_default_cost_center(buying_company)
+	return result

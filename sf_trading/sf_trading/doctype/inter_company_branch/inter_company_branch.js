@@ -10,6 +10,13 @@ frappe.ui.form.on("Inter Company Branch", {
 				],
 			};
 		});
+		frm.set_query("warehouse", "company_cost_centers", function (doc, cdt, cdn) {
+			let row = locals[cdt][cdn];
+			if (!row.company) return { filters: { name: "" } };
+			return {
+				filters: [["Warehouse", "company", "=", row.company]],
+			};
+		});
 	},
 });
 
@@ -18,6 +25,7 @@ frappe.ui.form.on("Inter Company Branch Cost Center", {
 		let row = locals[cdt][cdn];
 		if (row.company) {
 			frappe.model.set_value(cdt, cdn, "cost_center", "");
+			frappe.model.set_value(cdt, cdn, "warehouse", "");
 		}
 	},
 });
