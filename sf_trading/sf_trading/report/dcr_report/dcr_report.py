@@ -13,14 +13,21 @@ def execute(filters=None):
 	return columns, data
 
 
+def _show_margin():
+	"""Show Gross Margin column only to System Manager."""
+	return "System Manager" in frappe.get_roles()
+
+
 def get_columns():
-	return [
+	cols = [
 		_("Particulars") + ":Data:300",
 		_("Income") + ":Currency:120",
 		_("Expense") + ":Currency:120",
 		_("Total Discount/Adj.") + ":Currency:150",
-		_("Gross Margin") + ":Currency:120",
 	]
+	if _show_margin():
+		cols.append(_("Gross Margin") + ":Currency:120")
+	return cols
 
 
 def get_list_view_link(doctype, label, filters_dict):
@@ -165,9 +172,15 @@ def get_data(filters):
 	# Calculate Gross Margin for Credit Sales (use net amount, VAT is not part of margin)
 	gross_margin_credit = credit_sales_net - credit_sales_data.get("cost", 0)
 	
-	# Build report data with clickable links
+	# Build report data with clickable links (margin column only for System Manager)
+	def _row(particulars, income, expense, discount_adj, margin=0):
+		row = [particulars, income, expense, discount_adj]
+		if _show_margin():
+			row.append(margin)
+		return row
+
 	# Opening Cash Balance - no link
-	data.append(["Opening Cash Balance", opening_balance, 0, 0, 0])
+	data.append(_row("Opening Cash Balance", opening_balance, 0, 0, 0))
 	
 	# CASH SALES - link to Sales Invoice list filtered by cash payments
 	# Format dates safely - validate using Frappe's getdate
@@ -214,8 +227,8 @@ def get_data(filters):
 		cash_sales_filters["posting_date"] = [from_date_str, to_date_str]
 	if cost_center:
 		cash_sales_filters["cost_center"] = cost_center
-	data.append([get_list_view_link("Sales Invoice", "CASH SALES", cash_sales_filters), cash_sales, 0, -total_discount_adj, gross_margin_cash])
-	
+	data.append(_row(get_list_view_link("Sales Invoice", "CASH SALES", cash_sales_filters), cash_sales, 0, -total_discount_adj, gross_margin_cash))
+
 	# CREDIT SALES - link to Sales Invoice list filtered by credit sales
 	credit_sales_filters = {
 		"company": company,
@@ -226,16 +239,16 @@ def get_data(filters):
 		credit_sales_filters["posting_date"] = [from_date_str, to_date_str]
 	if cost_center:
 		credit_sales_filters["cost_center"] = cost_center
-	data.append([get_list_view_link("Sales Invoice", "CREDIT SALES", credit_sales_filters), credit_sales, 0, 0, gross_margin_credit])
-	
+	data.append(_row(get_list_view_link("Sales Invoice", "CREDIT SALES", credit_sales_filters), credit_sales, 0, 0, gross_margin_credit))
+
 	# VAT Collected on Cash Sales - link to Sales Invoice list (same as cash sales)
 	# VAT collected is income, so it should be positive
-	data.append([get_list_view_link("Sales Invoice", "VAT Collected on Cash Sales", cash_sales_filters), vat_collected_cash, 0, 0, 0])
-	
+	data.append(_row(get_list_view_link("Sales Invoice", "VAT Collected on Cash Sales", cash_sales_filters), vat_collected_cash, 0, 0, 0))
+
 	# VAT Applied on Credit Sales - link to Sales Invoice list (same as credit sales)
 	# VAT applied is income, so it should be positive
-	data.append([get_list_view_link("Sales Invoice", "VAT Applied on Credit Sales", credit_sales_filters), vat_applied_credit, 0, 0, 0])
-	
+	data.append(_row(get_list_view_link("Sales Invoice", "VAT Applied on Credit Sales", credit_sales_filters), vat_applied_credit, 0, 0, 0))
+
 	# Sales Return - Cash - link to Sales Invoice list filtered by returns
 	returns_filters = {
 		"company": company,
@@ -246,12 +259,12 @@ def get_data(filters):
 		returns_filters["posting_date"] = [from_date_str, to_date_str]
 	if cost_center:
 		returns_filters["cost_center"] = cost_center
-	data.append([get_list_view_link("Sales Invoice", "Sales Return - Cash", returns_filters), 0, sales_return_cash, 0, 0])
-	
+	data.append(_row(get_list_view_link("Sales Invoice", "Sales Return - Cash", returns_filters), 0, sales_return_cash, 0, 0))
+
 	# VAT Refund on Sales Return - link to Sales Invoice list (same as returns)
 	# VAT refund is expense, so it should be in expense column
-	data.append([get_list_view_link("Sales Invoice", "VAT Refund on Sales Return", returns_filters), 0, vat_refund_sales_return, 0, 0])
-	
+	data.append(_row(get_list_view_link("Sales Invoice", "VAT Refund on Sales Return", returns_filters), 0, vat_refund_sales_return, 0, 0))
+
 	# Credit Purchase - link to Purchase Invoice list
 	purchase_filters = {
 		"company": company,
@@ -261,8 +274,8 @@ def get_data(filters):
 		purchase_filters["posting_date"] = [from_date_str, to_date_str]
 	if cost_center:
 		purchase_filters["cost_center"] = cost_center
-	data.append([get_list_view_link("Purchase Invoice", "Credit Purchase - GRN/DIRECT PURCHASE", purchase_filters), 0, credit_purchase, 0, 0])
-	
+	data.append(_row(get_list_view_link("Purchase Invoice", "Credit Purchase - GRN/DIRECT PURCHASE", purchase_filters), 0, credit_purchase, 0, 0))
+
 	# Cash Received : Credit Sales - link to Payment Entry list filtered by Receive type
 	payment_receive_filters = {
 		"company": company,
@@ -273,8 +286,8 @@ def get_data(filters):
 		payment_receive_filters["posting_date"] = [from_date_str, to_date_str]
 	if cost_center:
 		payment_receive_filters["cost_center"] = cost_center
-	data.append([get_list_view_link("Payment Entry", "Cash Received : Credit Sales", payment_receive_filters), cash_received_credit_sales, 0, 0, 0])
-	
+	data.append(_row(get_list_view_link("Payment Entry", "Cash Received : Credit Sales", payment_receive_filters), cash_received_credit_sales, 0, 0, 0))
+
 	# Payments-Petty Cash - link to Payment Entry list filtered by Pay type
 	payment_pay_filters = {
 		"company": company,
@@ -285,11 +298,11 @@ def get_data(filters):
 		payment_pay_filters["posting_date"] = [from_date_str, to_date_str]
 	if cost_center:
 		payment_pay_filters["cost_center"] = cost_center
-	data.append([get_list_view_link("Payment Entry", "Payments-Petty Cash (Total Payments)", payment_pay_filters), 0, payments_petty_cash, 0, 0])
-	
+	data.append(_row(get_list_view_link("Payment Entry", "Payments-Petty Cash (Total Payments)", payment_pay_filters), 0, payments_petty_cash, 0, 0))
+
 	# Total Receipts = Cash Sales + Cash Received from Credit Sales
 	total_receipts = cash_sales + cash_received_credit_sales
-	data.append(["Total Receipts", total_receipts, 0, 0, 0])
+	data.append(_row("Total Receipts", total_receipts, 0, 0, 0))
 	
 	# Calculate Cash Balance
 	# Cash Balance = Opening Cash + Total Receipts - Total Payments - Expenses
@@ -302,8 +315,8 @@ def get_data(filters):
 	)
 	
 	# Cash Balance - no link
-	data.append(["Cash Balance", cash_balance, 0, 0, 0])
-	
+	data.append(_row("Cash Balance", cash_balance, 0, 0, 0))
+
 	return data
 
 
