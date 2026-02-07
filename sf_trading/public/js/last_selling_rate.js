@@ -19,6 +19,38 @@ sf_trading.add_last_selling_rate_button = function(frm) {
 	}
 
 	const grid = frm.fields_dict.items.grid;
+
+	// Track last clicked row in items grid for default item in Last Selling Rate dialog.
+	// Use capture phase so we run before the row's click handler (which stops propagation).
+	if (!grid.wrapper.data('last_selling_rate_click_bound')) {
+		const capture_handler = function (e) {
+			const $body = grid.wrapper.find('.grid-body');
+			if (!$body.length || !$body[0].contains(e.target)) return;
+			const $row = $(e.target).closest('.grid-row');
+			if (!$row.length) return;
+			const grid_row = $row.data('grid_row');
+			if (grid_row && grid_row.doc && grid_row.doc.item_code) {
+				frm._last_selling_rate_clicked_item_code = grid_row.doc.item_code;
+			}
+		};
+		grid.wrapper[0].addEventListener('click', capture_handler, true);
+		// Track which row had focus so "add row + select item" works without clicking the row
+		function update_focused_item(e) {
+			const $body = grid.wrapper.find('.grid-body');
+			if (!$body.length || !$body[0].contains(e.target)) return;
+			const $row = $(e.target).closest('.grid-row');
+			if (!$row.length) return;
+			const grid_row = $row.data('grid_row');
+			if (grid_row && grid_row.doc && grid_row.doc.item_code) {
+				frm._last_selling_rate_focused_item_code = grid_row.doc.item_code;
+			}
+		}
+		grid.wrapper[0].addEventListener('focusin', update_focused_item, true);
+		// On focusout we read the row's current item (so after selecting from dropdown we still get it)
+		grid.wrapper[0].addEventListener('focusout', update_focused_item, true);
+		grid.wrapper.data('last_selling_rate_click_bound', true);
+		grid.wrapper.data('last_selling_rate_capture_handler', capture_handler);
+	}
 	
 	// Try multiple ways to find the toolbar
 	let $toolbar = grid.wrapper.find(".grid-buttons");
@@ -75,7 +107,8 @@ sf_trading.add_last_selling_rate_button = function(frm) {
 	</button>`);
 
 	last_selling_rate_btn.on('click', function () {
-		sf_trading.open_last_selling_rate_dialog(frm);
+		let default_item_code = sf_trading.get_default_item_for_last_selling_rate(frm);
+		sf_trading.open_last_selling_rate_dialog(frm, default_item_code);
 	});
 
 	// Insert after target button, or append if no target
@@ -86,6 +119,40 @@ sf_trading.add_last_selling_rate_button = function(frm) {
 		$toolbar.append(last_selling_rate_btn);
 		console.log("sf_trading: Button appended to toolbar");
 	}
+};
+
+// Get default item: from the currently open/expanded row in items grid, or from the last row
+sf_trading.get_default_item_for_last_selling_rate = function(frm) {
+	if (!frm || !frm.fields_dict.items || !frm.fields_dict.items.grid) {
+		return null;
+	}
+	const items_grid = frm.fields_dict.items.grid;
+
+	// 1. Prefer the row that is currently open/expanded (last clicked row that opened the form)
+	const open_row = frappe.ui.form.get_open_grid_form();
+	if (open_row && open_row.grid === items_grid && open_row.doc && open_row.doc.item_code) {
+		return open_row.doc.item_code;
+	}
+
+	// 2. Else the row that last had focus (covers: add row, select item, then click button)
+	if (frm._last_selling_rate_focused_item_code) {
+		return frm._last_selling_rate_focused_item_code;
+	}
+
+	// 3. Else the last clicked row in the items grid
+	if (frm._last_selling_rate_clicked_item_code) {
+		return frm._last_selling_rate_clicked_item_code;
+	}
+
+	// 4. Fallback: use the last row's item in the items table
+	if (frm.doc.items && frm.doc.items.length) {
+		const last_row = frm.doc.items[frm.doc.items.length - 1];
+		if (last_row && last_row.item_code) {
+			return last_row.item_code;
+		}
+	}
+
+	return null;
 };
 
 sf_trading.open_last_selling_rate_dialog = function(frm, default_item_code) {
