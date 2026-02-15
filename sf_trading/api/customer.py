@@ -1,23 +1,35 @@
 import frappe
 from frappe import _
 from frappe.utils import cstr
+from frappe.core.doctype.user_permission.user_permission import get_permitted_documents
+
+
+def _get_default_customer_group():
+	permitted = get_permitted_documents("Customer Group")
+	return (permitted[0] if permitted else None) or frappe.db.get_single_value("Selling Settings", "customer_group") or "All Customer Groups"
+
+
+def _get_default_territory():
+	permitted = get_permitted_documents("Territory")
+	return (permitted[0] if permitted else None) or frappe.db.get_single_value("Selling Settings", "territory") or "All Territories"
 
 
 @frappe.whitelist()
 def create_customer_with_address(
 	customer_name,
+	mobile_no=None,
+	customer_type="Individual",
+	email_id=None,
+	country=None,
+	default_currency=None,
 	tax_id=None,
 	commercial_registration_number=None,
-	mobile_no=None,
-	email_id=None,
 	address_line1=None,
 	building_number=None,
 	city=None,
 	state=None,
-	country=None,
 	pincode=None,
-	district=None,
-	company=None
+	district=None
 ):
 	"""
 	Create a new customer with address in one go (for ZATCA compliance).
@@ -42,6 +54,8 @@ def create_customer_with_address(
 	"""
 	if not customer_name:
 		frappe.throw(_("Customer Name is required"))
+	if not mobile_no:
+		frappe.throw(_("Mobile No is required"))
 	
 	# If VAT number is provided, address fields are mandatory for B2B customers
 	if tax_id:
@@ -60,24 +74,26 @@ def create_customer_with_address(
 		if missing_fields:
 			frappe.throw(_("The following fields are mandatory when VAT Registration Number is provided (B2B customer requirement): {0}").format(", ".join(missing_fields)))
 	
-	# Get company from context or use default
-	if not company:
-		company = frappe.defaults.get_user_default("company")
-	
-	if not company:
-		frappe.throw(_("Please set a default company"))
-	
-	# Default country to Saudi Arabia if not provided
-	if not country:
-		country = "Saudi Arabia"
+	# Get country and default_currency from default company if not provided
+	if not country or not default_currency:
+		permitted_companies = get_permitted_documents("Company")
+		company = (permitted_companies[0] if permitted_companies else None) or frappe.defaults.get_user_default("company")
+		if not company:
+			frappe.throw(_("Please set a default company"))
+		company_doc = frappe.get_cached_doc("Company", company)
+		if not country:
+			country = company_doc.country or "Saudi Arabia"
+		if not default_currency:
+			default_currency = company_doc.default_currency
 	
 	# Create Customer
 	customer_doc = frappe.get_doc({
 		"doctype": "Customer",
 		"customer_name": customer_name,
-		"customer_type": "Company",
-		"customer_group": frappe.db.get_single_value("Selling Settings", "customer_group") or "All Customer Groups",
-		"territory": frappe.db.get_single_value("Selling Settings", "territory") or "All Territories",
+		"customer_type": customer_type or "Individual",
+		"customer_group": _get_default_customer_group(),
+		"territory": _get_default_territory(),
+		"default_currency": default_currency,
 		"tax_id": tax_id,
 		"mobile_no": mobile_no,
 		"email_id": email_id
