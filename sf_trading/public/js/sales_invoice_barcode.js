@@ -38,6 +38,41 @@ function focus_grid_row(grid, idx) {
 	}
 }
 
+// Focus qty (or rate) on the row with given doc name. Activates the row first so the control exists.
+function focus_grid_cell(frm, grid, docname, fieldname) {
+	if (!grid || !docname) return;
+	fieldname = fieldname || "qty";
+	// Wait for grid to finish rendering after refresh
+	setTimeout(() => {
+		const grid_row = grid.grid_rows_by_docname && grid.grid_rows_by_docname[docname];
+		if (!grid_row || !grid_row.row) return;
+		// Activate row so inline controls (and qty input) are created
+		if (typeof grid_row.toggle_editable_row === "function") {
+			grid_row.toggle_editable_row(true);
+		}
+		setTimeout(() => {
+			// Prefer the control's $input (set when toggle_editable_row creates controls)
+			const col = grid_row.columns && grid_row.columns[fieldname];
+			if (col && col.field && col.field.$input && col.field.$input.length) {
+				col.field.$input.focus();
+				return;
+			}
+			// Fallback: find input in the cell by data-fieldname
+			const $cell = grid_row.row.find('[data-fieldname="' + fieldname + '"]');
+			const $input = $cell.find("input");
+			if ($input.length && $input.first().is(":visible")) {
+				$input.first().focus();
+				return;
+			}
+			// Last resort: focus first input in row
+			if (typeof grid.set_focus_on_row === "function") {
+				const idx = grid_row.doc && grid_row.doc.idx;
+				if (idx != null) grid.set_focus_on_row(idx - 1);
+			}
+		}, 100);
+	}, 350);
+}
+
 function apply_barcode_scan(frm, cdt, cdn, data, row) {
 	const grid = frm.fields_dict.items && frm.fields_dict.items.grid;
 	if (!grid) return Promise.resolve();
@@ -46,22 +81,25 @@ function apply_barcode_scan(frm, cdt, cdn, data, row) {
 	const existing = get_matching_row(frm, data, row.name);
 	const done = () => revert_barcode_scanner_flags();
 
-	// Clear scan row and focus it for next scan (no new rows added)
-	const clear_and_focus_scan_row = () =>
+	// Clear scan row; then focus qty (or rate) on the row we updated so user can adjust immediately
+	const clear_scan_row = () =>
 		frappe.model
 			.set_value(cdt, cdn, { item_code: "", qty: 0, barcode: "" })
-			.then(() => {
-				refresh_field("items");
-				focus_grid_row(grid, row.idx);
-			});
+			.then(() => refresh_field("items"));
+
+	const focus_updated_row_qty = (docname) => {
+		// Focus qty on the row we just updated/added so cursor goes there after scan
+		focus_grid_cell(frm, grid, docname, "qty");
+	};
 
 	if (existing) {
-		// Same item: add qty to existing row only, clear scan row, focus it for next scan
+		// Same item: add qty to existing row, clear scan row, focus qty on that row
 		const new_qty = flt(existing.qty) + 1;
 		return frappe.model
 			.set_value(existing.doctype, existing.name, "qty", new_qty)
-			.then(clear_and_focus_scan_row)
+			.then(clear_scan_row)
 			.then(() => {
+				focus_updated_row_qty(existing.name);
 				frappe.show_alert(
 					{ message: __("Row #{0}: Qty increased by 1", [existing.idx]), indicator: "green" },
 					3
@@ -70,7 +108,7 @@ function apply_barcode_scan(frm, cdt, cdn, data, row) {
 			.finally(done);
 	}
 
-	// New item: add one new row, set item there, clear scan row, focus scan row for next scan
+	// New item: add one new row, set item there, clear scan row, focus qty on new row
 	const target = frappe.model.add_child(frm.doc, "Sales Invoice Item", "items");
 	frm.script_manager.trigger("items_add", target.doctype, target.name);
 
@@ -84,8 +122,9 @@ function apply_barcode_scan(frm, cdt, cdn, data, row) {
 		});
 
 	return set_item()
-		.then(clear_and_focus_scan_row)
+		.then(clear_scan_row)
 		.then(() => {
+			focus_updated_row_qty(target.name);
 			frappe.show_alert(
 				{ message: __("Row #{0}: Item added", [target.idx]), indicator: "green" },
 				3
