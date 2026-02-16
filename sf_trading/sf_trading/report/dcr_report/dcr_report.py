@@ -161,10 +161,18 @@ def get_data(filters):
 	# Get Cash Received from Credit Sales (Payment Entries for Sales Invoices)
 	cash_received_credit_sales = get_cash_received_credit_sales(from_date, to_date, company, cost_center)
 	
+	# Get Cash Receipts from POS (only cash mode payments)
+	cash_receipts_pos = get_cash_receipts_from_pos(from_date, to_date, company, cost_center)
+	
 	# Get Petty Cash Payments and Receipts (based on Payment Entries)
 	petty_cash_data = get_petty_cash_transactions(from_date, to_date, company, cost_center)
 	payments_petty_cash = petty_cash_data.get("payments", 0)
 	receipts_petty_cash = petty_cash_data.get("receipts", 0)
+	
+	# Get Internal Transfer transactions affecting cash accounts
+	internal_transfer_data = get_internal_transfer_cash_transactions(from_date, to_date, company, cost_center)
+	cash_out_internal_transfer = internal_transfer_data.get("cash_out", 0)  # Cash transferred to bank
+	cash_in_internal_transfer = internal_transfer_data.get("cash_in", 0)  # Cash received from bank
 	
 	# Calculate Gross Margin for Cash Sales (use net amount, VAT is not part of margin)
 	gross_margin_cash = cash_sales_net - cash_sales_data.get("cost", 0)
@@ -300,18 +308,21 @@ def get_data(filters):
 		payment_pay_filters["cost_center"] = cost_center
 	data.append(_row(get_list_view_link("Payment Entry", "Payments-Petty Cash (Total Payments)", payment_pay_filters), 0, payments_petty_cash, 0, 0))
 
-	# Total Receipts = Cash Sales + Cash Received from Credit Sales
+	# Total Receipts = Cash Sales (all POS invoices) + Cash Received from Credit Sales
 	total_receipts = cash_sales + cash_received_credit_sales
 	data.append(_row("Total Receipts", total_receipts, 0, 0, 0))
 	
-	# Calculate Cash Balance
-	# Cash Balance = Opening Cash + Total Receipts - Total Payments - Expenses
-	# Note: VAT is now included in cash_sales and sales_return_cash
+	# Calculate Cash Balance (only cash mode payments)
+	# Cash Balance = Opening Cash + Cash Receipts (cash mode only) - Cash Payments - Expenses - Internal Transfers (Cash Out) + Internal Transfers (Cash In)
+	# Note: Only cash mode payments are included in cash balance calculation
 	cash_balance = (
 		opening_balance
-		+ total_receipts  # Total receipts (Cash Sales + VAT + Cash Received from Credit Sales)
+		+ cash_receipts_pos  # Cash receipts from POS (cash mode only)
+		+ cash_received_credit_sales  # Cash received from credit sales (cash mode only)
 		- sales_return_cash  # Sales returns including VAT (expense)
 		- payments_petty_cash  # Petty cash payments (expense)
+		- cash_out_internal_transfer  # Cash transferred to bank (Internal Transfer)
+		+ cash_in_internal_transfer  # Cash received from bank (Internal Transfer)
 	)
 	
 	# Cash Balance - no link
@@ -329,12 +340,8 @@ def get_opening_cash_balance(from_date, company, cost_center):
 	if company:
 		conditions += " AND si.company = %(company)s"
 	
-	# Get cash sales up to previous day
-	cash_sales_data = get_cash_sales(None, prev_date, company, cost_center)
-	cash_sales_net = cash_sales_data.get("net_total", 0)
-	vat_collected_cash = cash_sales_data.get("vat_amount", 0)
-	# Include VAT in cash sales
-	cash_sales = cash_sales_net + vat_collected_cash
+	# Get Cash Receipts from POS for previous period (only cash mode payments)
+	cash_receipts_pos_prev = get_cash_receipts_from_pos(None, prev_date, company, cost_center)
 	
 	# Get sales returns
 	sales_return_data = get_sales_returns_cash(None, prev_date, company, cost_center)
@@ -351,23 +358,29 @@ def get_opening_cash_balance(from_date, company, cost_center):
 	payments_petty_cash = petty_cash_data.get("payments", 0)
 	receipts_petty_cash = petty_cash_data.get("receipts", 0)
 	
-	# Calculate opening balance
-	# Opening balance = Total Receipts (Cash Sales + VAT + Cash Received) - Payments - Expenses
-	# Note: VAT is now included in cash_sales and sales_return_cash
-	total_receipts_prev = cash_sales + cash_received_credit_sales
+	# Get Internal Transfer transactions affecting cash accounts (for opening balance)
+	internal_transfer_prev = get_internal_transfer_cash_transactions(None, prev_date, company, cost_center)
+	cash_out_internal_transfer_prev = internal_transfer_prev.get("cash_out", 0)
+	cash_in_internal_transfer_prev = internal_transfer_prev.get("cash_in", 0)
+	
+	# Calculate opening balance (only cash mode payments)
+	# Opening balance = Cash Receipts (cash mode only) - Cash Payments - Expenses - Internal Transfers (Cash Out) + Internal Transfers (Cash In)
+	# Note: Only cash mode payments are included in cash balance calculation
 	opening = (
-		total_receipts_prev  # Total receipts (Cash Sales + VAT + Cash Received from Credit Sales)
+		cash_receipts_pos_prev  # Cash receipts from POS (cash mode only)
+		+ cash_received_credit_sales  # Cash received from credit sales (cash mode only)
 		- sales_return_cash  # Sales returns including VAT (expense)
 		- payments_petty_cash  # Petty cash payments (expense)
+		- cash_out_internal_transfer_prev  # Cash transferred to bank (Internal Transfer)
+		+ cash_in_internal_transfer_prev  # Cash received from bank (Internal Transfer)
 	)
 	
 	return flt(opening)
 
 
 def get_cash_sales(from_date, to_date, company, cost_center):
-	"""Get cash sales (Sales Invoices with is_pos=1 OR Mode of Payment type='Cash')
-	For POS invoices: net_total - change_amount
-	For regular cash invoices: net_total"""
+	"""Get cash sales (Sales Invoices with is_pos=1 only)
+	For POS invoices: net_total - change_amount"""
 	conditions = "si.docstatus = 1 AND si.is_return = 0"
 	if from_date:
 		conditions += " AND si.posting_date >= %(from_date)s"
@@ -380,7 +393,7 @@ def get_cash_sales(from_date, to_date, company, cost_center):
 	if cost_center:
 		cost_center_condition = " AND sii.cost_center = %(cost_center)s"
 	
-	# Get cash sales: is_pos=1 OR mode_of_payment type='Cash'
+	# Get cash sales: is_pos=1 only (no mode of payment check)
 	result = frappe.db.sql("""
 		SELECT 
 			si.name,
@@ -395,14 +408,7 @@ def get_cash_sales(from_date, to_date, company, cost_center):
 		FROM `tabSales Invoice` si
 		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
 		WHERE {conditions}
-			AND (
-				si.is_pos = 1 
-				OR EXISTS (
-					SELECT 1 FROM `tabSales Invoice Payment` sip
-					INNER JOIN `tabMode of Payment` mop ON mop.name = sip.mode_of_payment
-					WHERE sip.parent = si.name AND mop.type = 'Cash'
-				)
-			)
+			AND si.is_pos = 1
 			{cost_center_condition}
 		GROUP BY si.name, si.net_total, si.base_net_total, si.change_amount, 
 			si.base_change_amount, si.is_pos, si.total_taxes_and_charges, si.discount_amount
@@ -442,8 +448,8 @@ def get_cash_sales(from_date, to_date, company, cost_center):
 
 
 def get_credit_sales(from_date, to_date, company, cost_center):
-	"""Get credit sales (Sales Invoices that are NOT cash sales)
-	Credit sales = invoices that are NOT (is_pos=1 OR mode_of_payment type='Cash')
+	"""Get credit sales (Sales Invoices with is_pos=0 only)
+	Credit sales = invoices where is_pos=0 (non-POS invoices)
 	Even if they receive payment via Payment Entry later, they're still credit sales"""
 	conditions = "si.docstatus = 1 AND si.is_return = 0"
 	if from_date:
@@ -457,8 +463,7 @@ def get_credit_sales(from_date, to_date, company, cost_center):
 	if cost_center:
 		cost_center_condition = " AND sii.cost_center = %(cost_center)s"
 	
-	# Get invoices that are NOT cash sales
-	# NOT (is_pos=1 OR has cash mode of payment)
+	# Get invoices that are NOT POS (is_pos=0 only)
 	result = frappe.db.sql("""
 		SELECT 
 			SUM(DISTINCT si.net_total) as net_total,
@@ -468,11 +473,6 @@ def get_credit_sales(from_date, to_date, company, cost_center):
 		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
 		WHERE {conditions}
 			AND si.is_pos = 0
-			AND NOT EXISTS (
-				SELECT 1 FROM `tabSales Invoice Payment` sip
-				INNER JOIN `tabMode of Payment` mop ON mop.name = sip.mode_of_payment
-				WHERE sip.parent = si.name AND mop.type = 'Cash'
-			)
 			{cost_center_condition}
 		GROUP BY si.name
 	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
@@ -496,7 +496,7 @@ def get_credit_sales(from_date, to_date, company, cost_center):
 
 
 def get_sales_returns_cash(from_date, to_date, company, cost_center):
-	"""Get sales returns for cash invoices (is_pos=1 OR mode_of_payment type='Cash')"""
+	"""Get sales returns for POS invoices (is_pos=1 only)"""
 	conditions = "si.docstatus = 1 AND si.is_return = 1"
 	if from_date:
 		conditions += " AND si.posting_date >= %(from_date)s"
@@ -516,14 +516,7 @@ def get_sales_returns_cash(from_date, to_date, company, cost_center):
 		FROM `tabSales Invoice` si
 		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
 		WHERE {conditions}
-			AND (
-				si.is_pos = 1 
-				OR EXISTS (
-					SELECT 1 FROM `tabSales Invoice Payment` sip
-					INNER JOIN `tabMode of Payment` mop ON mop.name = sip.mode_of_payment
-					WHERE sip.parent = si.name AND mop.type = 'Cash'
-				)
-			)
+			AND si.is_pos = 1
 			{cost_center_condition}
 	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
 		"from_date": from_date,
@@ -582,6 +575,52 @@ def get_credit_purchases(from_date, to_date, company, cost_center):
 			"total_with_vat": total_with_vat
 		}
 	return {"net_total": 0, "vat_amount": 0, "total_with_vat": 0}
+
+
+def get_cash_receipts_from_pos(from_date, to_date, company, cost_center):
+	"""Get cash receipts from POS invoices (only cash mode payments)
+	Returns cash payment amounts minus change_amount (VAT is included proportionally in payment amounts)"""
+	conditions = "si.docstatus = 1 AND si.is_return = 0 AND si.is_pos = 1"
+	if from_date:
+		conditions += " AND si.posting_date >= %(from_date)s"
+	if to_date:
+		conditions += " AND si.posting_date <= %(to_date)s"
+	if company:
+		conditions += " AND si.company = %(company)s"
+	
+	cost_center_condition = ""
+	if cost_center:
+		cost_center_condition = " AND EXISTS (SELECT 1 FROM `tabSales Invoice Item` sii WHERE sii.parent = si.name AND sii.cost_center = %(cost_center)s)"
+	
+	result = frappe.db.sql("""
+		SELECT 
+			si.name,
+			COALESCE(si.base_change_amount, 0) as change_amount,
+			SUM(sip.base_amount) as cash_payment_amount
+		FROM `tabSales Invoice` si
+		INNER JOIN `tabSales Invoice Payment` sip ON sip.parent = si.name
+		INNER JOIN `tabMode of Payment` mop ON mop.name = sip.mode_of_payment
+		WHERE {conditions}
+			AND mop.type = 'Cash'
+			{cost_center_condition}
+		GROUP BY si.name, si.base_change_amount
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date,
+		"to_date": to_date,
+		"company": company,
+		"cost_center": cost_center
+	}, as_dict=True)
+	
+	if result:
+		total_cash_receipts = 0
+		for r in result:
+			# Cash payment amount already includes proportional VAT
+			# Subtract change_amount which is only for cash payments
+			cash_receipt = flt(r.cash_payment_amount) - flt(r.change_amount)
+			total_cash_receipts += cash_receipt
+		
+		return flt(total_cash_receipts)
+	return 0
 
 
 def get_cash_received_credit_sales(from_date, to_date, company, cost_center):
@@ -721,4 +760,62 @@ def get_petty_cash_transactions(from_date, to_date, company, cost_center):
 		"payments": payments,
 		"receipts": receipts,
 		"unposted_payments": 0
+	}
+
+
+def get_internal_transfer_cash_transactions(from_date, to_date, company, cost_center):
+	"""Get Internal Transfer Payment Entries affecting cash accounts
+	Cash Out: Internal Transfer where paid_from is Cash account (cash transferred to bank)
+	Cash In: Internal Transfer where paid_to is Cash account (cash received from bank)"""
+	
+	conditions = "pe.docstatus = 1 AND pe.payment_type = 'Internal Transfer'"
+	if from_date:
+		conditions += " AND pe.posting_date >= %(from_date)s"
+	if to_date:
+		conditions += " AND pe.posting_date <= %(to_date)s"
+	if company:
+		conditions += " AND pe.company = %(company)s"
+	
+	cost_center_condition = ""
+	if cost_center:
+		cost_center_condition = " AND pe.cost_center = %(cost_center)s"
+	
+	# Get Cash Out: Internal Transfer where paid_from is Cash account
+	cash_out_result = frappe.db.sql("""
+		SELECT 
+			SUM(pe.paid_amount) as amount
+		FROM `tabPayment Entry` pe
+		INNER JOIN `tabAccount` acc_from ON acc_from.name = pe.paid_from
+		WHERE {conditions}
+			AND acc_from.account_type = 'Cash'
+			{cost_center_condition}
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date,
+		"to_date": to_date,
+		"company": company,
+		"cost_center": cost_center
+	}, as_dict=True)
+	
+	# Get Cash In: Internal Transfer where paid_to is Cash account
+	cash_in_result = frappe.db.sql("""
+		SELECT 
+			SUM(pe.received_amount) as amount
+		FROM `tabPayment Entry` pe
+		INNER JOIN `tabAccount` acc_to ON acc_to.name = pe.paid_to
+		WHERE {conditions}
+			AND acc_to.account_type = 'Cash'
+			{cost_center_condition}
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date,
+		"to_date": to_date,
+		"company": company,
+		"cost_center": cost_center
+	}, as_dict=True)
+	
+	cash_out = flt(cash_out_result[0].amount) if cash_out_result and cash_out_result[0].amount else 0
+	cash_in = flt(cash_in_result[0].amount) if cash_in_result and cash_in_result[0].amount else 0
+	
+	return {
+		"cash_out": cash_out,
+		"cash_in": cash_in
 	}
