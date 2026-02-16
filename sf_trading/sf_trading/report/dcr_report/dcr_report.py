@@ -241,15 +241,7 @@ def get_data(filters):
 		credit_sales_filters["cost_center"] = cost_center
 	data.append(_row(get_list_view_link("Sales Invoice", "CREDIT SALES", credit_sales_filters), credit_sales, 0, 0, gross_margin_credit))
 
-	# VAT Collected on Cash Sales - link to Sales Invoice list (same as cash sales)
-	# VAT collected is income, so it should be positive
-	data.append(_row(get_list_view_link("Sales Invoice", "VAT Collected on Cash Sales", cash_sales_filters), vat_collected_cash, 0, 0, 0))
-
-	# VAT Applied on Credit Sales - link to Sales Invoice list (same as credit sales)
-	# VAT applied is income, so it should be positive
-	data.append(_row(get_list_view_link("Sales Invoice", "VAT Applied on Credit Sales", credit_sales_filters), vat_applied_credit, 0, 0, 0))
-
-	# Sales Return - Cash - link to Sales Invoice list filtered by returns
+	# Sales Return - Cash - link to Sales Invoice list filtered by returns (moved to position 4)
 	returns_filters = {
 		"company": company,
 		"docstatus": "1",
@@ -261,7 +253,15 @@ def get_data(filters):
 		returns_filters["cost_center"] = cost_center
 	data.append(_row(get_list_view_link("Sales Invoice", "Sales Return - Cash", returns_filters), 0, sales_return_cash, 0, 0))
 
-	# VAT Refund on Sales Return - link to Sales Invoice list (same as returns)
+	# VAT Collected on Cash Sales - link to Sales Invoice list (same as cash sales) (moved to position 5)
+	# VAT collected is income, so it should be positive
+	data.append(_row(get_list_view_link("Sales Invoice", "VAT Collected on Cash Sales", cash_sales_filters), vat_collected_cash, 0, 0, 0))
+
+	# VAT Applied on Credit Sales - link to Sales Invoice list (same as credit sales) (moved to position 6)
+	# VAT applied is income, so it should be positive
+	data.append(_row(get_list_view_link("Sales Invoice", "VAT Applied on Credit Sales", credit_sales_filters), vat_applied_credit, 0, 0, 0))
+
+	# VAT Refund on Sales Return - link to Sales Invoice list (same as returns) (position 7)
 	# VAT refund is expense, so it should be in expense column
 	data.append(_row(get_list_view_link("Sales Invoice", "VAT Refund on Sales Return", returns_filters), 0, vat_refund_sales_return, 0, 0))
 
@@ -274,7 +274,7 @@ def get_data(filters):
 		purchase_filters["posting_date"] = [from_date_str, to_date_str]
 	if cost_center:
 		purchase_filters["cost_center"] = cost_center
-	data.append(_row(get_list_view_link("Purchase Invoice", "Credit Purchase - GRN/DIRECT PURCHASE", purchase_filters), 0, credit_purchase, 0, 0))
+	data.append(_row(get_list_view_link("Purchase Invoice", "Credit Purchase - DIRECT PURCHASE", purchase_filters), 0, credit_purchase, 0, 0))
 
 	# Cash Received : Credit Sales - link to Payment Entry list filtered by Receive type
 	payment_receive_filters = {
