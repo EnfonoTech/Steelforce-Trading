@@ -259,12 +259,10 @@ function sf_trading_render_dialog(frm) {
 			}
 		};
 		
-		// Update payments with robust matching
+		// Update payments with robust matching - update ALL payments (including zero amounts)
 		let update_count = 0;
 		payments.forEach(function (p, i) {
 			const amt = flt(vals["pay_" + i]) || 0;
-			if (amt <= 0) return; // Skip zero amounts
-			
 			const base_amt = flt(amt * conversion_rate, get_precision("base_amount", p));
 			
 			// Try multiple matching strategies for reliability
@@ -290,8 +288,9 @@ function sf_trading_render_dialog(frm) {
 				form_payment = form_payments.find(fp => fp.name === p.name);
 			}
 			
-			// Update if match found
+			// Update if match found - update ALL payments including zero amounts
 			if (form_payment) {
+				// Update directly on the form doc - this is synchronous
 				form_payment.amount = amt;
 				form_payment.base_amount = base_amt;
 				update_count++;
@@ -308,20 +307,38 @@ function sf_trading_render_dialog(frm) {
 			return;
 		}
 		
-		// Mark form as dirty and refresh payments field
-		frm.dirty();
-		frm.refresh_field("payments");
-		
-		// Recalculate totals if available
-		if (frm.cscript && frm.cscript.calculate_taxes_and_totals) {
-			try {
-				frm.cscript.calculate_taxes_and_totals(true);
-			} catch (e) {
-				console.warn("Error calculating taxes:", e);
-			}
+		// Verify payments were updated
+		const updated_payments = frm.doc.payments.filter(p => flt(p.amount) > 0);
+		if (updated_payments.length === 0) {
+			frappe.msgprint({
+				title: __("Error"),
+				message: __("No payment amounts were set. Please try again."),
+				indicator: "red",
+			});
+			return;
 		}
 		
-		// Close dialog before saving and reset popup flag
+		// Ensure form recognizes payments as changed
+		// Update the local doclist to ensure changes are tracked
+		if (frm.local_doclist && frm.local_doclist["Sales Invoice Payment"]) {
+			frm.doc.payments.forEach(function(payment) {
+				const doclist_item = frm.local_doclist["Sales Invoice Payment"].find(
+					item => item.name === payment.name || item.idx === payment.idx
+				);
+				if (doclist_item) {
+					doclist_item.amount = payment.amount;
+					doclist_item.base_amount = payment.base_amount;
+				}
+			});
+		}
+		
+		// Mark form as dirty to ensure changes are saved
+		frm.dirty();
+		
+		// Refresh payments field to update UI before saving
+		frm.refresh_field("payments");
+		
+		// Close dialog before saving
 		d.hide();
 		frappe.flags.sf_trading_skip_payment_popup = true;
 		frappe.flags.sf_trading_popup_showing = false;
@@ -330,15 +347,49 @@ function sf_trading_render_dialog(frm) {
 		// Use save with "Submit" action instead of savesubmit
 		const save_action = submit ? "Submit" : "Save";
 		
-		// Add small delay to ensure form updates are processed
+		// Delay to ensure refresh_field completes and form processes updates
 		setTimeout(function() {
-			frm.save(save_action).then(function() {
-				if (submit) {
-					// Reload after submit to show updated status
-					setTimeout(function() {
-						frm.reload_doc();
-					}, 300);
-				}
+			// Double-check payments are in form doc before saving
+			if (!frm.doc.payments || frm.doc.payments.length === 0) {
+				frappe.msgprint({
+					title: __("Error"),
+					message: __("Payments were not updated. Please try again."),
+					indicator: "red",
+				});
+				delete frappe.flags.sf_trading_skip_payment_popup;
+				delete frappe.flags.sf_trading_saving;
+				return;
+			}
+			
+			// Verify payments have amounts
+			const total_payment = frm.doc.payments.reduce((sum, p) => sum + flt(p.amount), 0);
+			if (total_payment <= 0) {
+				frappe.msgprint({
+					title: __("Error"),
+					message: __("Total payment amount must be greater than zero."),
+					indicator: "red",
+				});
+				delete frappe.flags.sf_trading_skip_payment_popup;
+				delete frappe.flags.sf_trading_saving;
+				return;
+			}
+			
+			// Save - payments are already updated in frm.doc.payments
+			frm.save(save_action).then(function(r) {
+				// After save, refresh payments field to show updated values
+				// Frappe automatically refreshes the form, but we ensure payments are visible
+				setTimeout(function() {
+					frm.refresh_field("payments");
+					
+					if (submit) {
+						// Reload after submit to show updated status
+						setTimeout(function() {
+							frm.reload_doc();
+						}, 200);
+					}
+					// For Save, don't reload - just refresh payments field
+					// The form refresh happens automatically, payments should be visible
+				}, 100);
 			}).catch(function(err) {
 				// Show error if save fails
 				frappe.msgprint({
@@ -352,7 +403,7 @@ function sf_trading_render_dialog(frm) {
 					delete frappe.flags.sf_trading_saving;
 				}, 500);
 			});
-		}, 100);
+		}, 300);
 	}
 
 	const d = new frappe.ui.Dialog({
