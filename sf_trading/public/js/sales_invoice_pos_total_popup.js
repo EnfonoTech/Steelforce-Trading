@@ -38,9 +38,20 @@ frappe.ui.form.on("Sales Invoice", {
 		);
 	},
 	after_save: function (frm) {
+		// Prevent popup if flag is set (we're saving from popup)
 		if (frappe.flags.sf_trading_skip_payment_popup) return;
+		
+		// Prevent popup if already showing
+		if (frappe.flags.sf_trading_popup_showing) return;
+		
+		// Only show for POS invoices in draft state
 		if (!frm.doc.is_pos || frm.doc.docstatus !== 0) return;
+		
+		// Validate required fields
 		if (!frm.doc.pos_profile || !frm.doc.grand_total || frm.doc.grand_total <= 0) return;
+		
+		// Ensure form is ready
+		if (!frm.doc.name || frm.doc.name.startsWith("new-")) return;
 
 		// Show popup on every save (unless POS Profile disables it)
 		frappe.db.get_value(
@@ -56,6 +67,17 @@ frappe.ui.form.on("Sales Invoice", {
 });
 
 function sf_trading_show_pos_total_popup(frm) {
+	// Prevent multiple popups
+	if (frappe.flags.sf_trading_popup_showing) return;
+	
+	// Validate form state
+	if (!frm || !frm.doc || !frm.doc.pos_profile) {
+		console.warn("sf_trading: Cannot show popup - invalid form state");
+		return;
+	}
+	
+	frappe.flags.sf_trading_popup_showing = true;
+	
 	function do_show_popup() {
 		// Load payment modes from POS Profile if empty
 		if (!frm.doc.payments || frm.doc.payments.length === 0) {
@@ -78,11 +100,20 @@ function sf_trading_show_pos_total_popup(frm) {
 								frm.refresh_field("payments");
 								sf_trading_render_dialog(frm);
 							},
+							error: function() {
+								frappe.flags.sf_trading_popup_showing = false;
+								frappe.msgprint(__("Error loading payment accounts. Please try again."));
+							}
 						});
 					} else {
+						frappe.flags.sf_trading_popup_showing = false;
 						frappe.msgprint(__("Add payment modes in POS Profile first"));
 					}
 				},
+				error: function() {
+					frappe.flags.sf_trading_popup_showing = false;
+					frappe.msgprint(__("Error loading POS Profile. Please try again."));
+				}
 			});
 		} else {
 			sf_trading_render_dialog(frm);
@@ -93,11 +124,27 @@ function sf_trading_show_pos_total_popup(frm) {
 }
 
 function sf_trading_render_dialog(frm) {
+	// Validate form state
+	if (!frm || !frm.doc) {
+		frappe.flags.sf_trading_popup_showing = false;
+		return;
+	}
+	
 	const payments = frm.doc.payments || [];
-	if (payments.length === 0) return;
+	if (payments.length === 0) {
+		frappe.flags.sf_trading_popup_showing = false;
+		return;
+	}
 
-	const invoice_total = frm.doc.rounded_total || frm.doc.grand_total || 0;
+	const invoice_total = flt(frm.doc.rounded_total || frm.doc.grand_total || 0);
 	const currency = frm.doc.currency || "";
+	
+	// Validate invoice total
+	if (invoice_total <= 0) {
+		frappe.flags.sf_trading_popup_showing = false;
+		frappe.msgprint(__("Invoice total must be greater than zero."));
+		return;
+	}
 
 	const fields = [
 		{
@@ -143,13 +190,43 @@ function sf_trading_render_dialog(frm) {
 	});
 
 	function apply_payments_and_close(vals, submit) {
+		// Prevent multiple simultaneous saves
+		if (frappe.flags.sf_trading_saving) {
+			frappe.msgprint({
+				title: __("Please Wait"),
+				message: __("Saving in progress. Please wait..."),
+				indicator: "orange",
+			});
+			return;
+		}
+		
+		// Validate form state
+		if (!frm || !frm.doc || frm.doc.docstatus !== 0) {
+			frappe.msgprint({
+				title: __("Error"),
+				message: __("Cannot update payments. Form is not in draft state."),
+				indicator: "red",
+			});
+			return;
+		}
+		
+		// Validate inputs
+		if (!vals) {
+			frappe.msgprint({
+				title: __("Error"),
+				message: __("Please enter payment amounts."),
+				indicator: "red",
+			});
+			return;
+		}
+		
 		let total = 0;
+		// First validate total
 		payments.forEach(function (p, i) {
 			const amt = flt(vals["pay_" + i]) || 0;
 			total += amt;
-			p.amount = amt;
-			p.base_amount = flt(amt * frm.doc.conversion_rate, precision("base_amount", p));
 		});
+		
 		if (total < invoice_total) {
 			frappe.msgprint({
 				title: __("Incomplete"),
@@ -158,19 +235,124 @@ function sf_trading_render_dialog(frm) {
 			});
 			return;
 		}
-		frm.refresh_field("payments");
-		if (frm.cscript && frm.cscript.calculate_taxes_and_totals) {
-			frm.cscript.calculate_taxes_and_totals(true);
+		
+		// Ensure form payments exist and match
+		const form_payments = frm.doc.payments || [];
+		if (form_payments.length === 0) {
+			frappe.msgprint({
+				title: __("Error"),
+				message: __("No payment methods found. Please refresh the form."),
+				indicator: "red",
+			});
+			return;
 		}
-		frm.refresh_fields();
+		
+		// Ensure conversion_rate is valid
+		const conversion_rate = flt(frm.doc.conversion_rate) || 1;
+		
+		// Helper function for precision
+		const get_precision = function(fieldname, doc) {
+			try {
+				return precision(fieldname, doc) || 2;
+			} catch(e) {
+				return 2; // Default precision
+			}
+		};
+		
+		// Update payments with robust matching
+		let update_count = 0;
+		payments.forEach(function (p, i) {
+			const amt = flt(vals["pay_" + i]) || 0;
+			if (amt <= 0) return; // Skip zero amounts
+			
+			const base_amt = flt(amt * conversion_rate, get_precision("base_amount", p));
+			
+			// Try multiple matching strategies for reliability
+			let form_payment = null;
+			
+			// Strategy 1: Match by mode_of_payment
+			if (p.mode_of_payment) {
+				form_payment = form_payments.find(fp => fp.mode_of_payment === p.mode_of_payment);
+			}
+			
+			// Strategy 2: Match by index if same length
+			if (!form_payment && i < form_payments.length && payments.length === form_payments.length) {
+				form_payment = form_payments[i];
+			}
+			
+			// Strategy 3: Match by idx if available
+			if (!form_payment && p.idx) {
+				form_payment = form_payments.find(fp => fp.idx === p.idx);
+			}
+			
+			// Strategy 4: Match by name if available
+			if (!form_payment && p.name) {
+				form_payment = form_payments.find(fp => fp.name === p.name);
+			}
+			
+			// Update if match found
+			if (form_payment) {
+				form_payment.amount = amt;
+				form_payment.base_amount = base_amt;
+				update_count++;
+			}
+		});
+		
+		// Validate that we updated at least one payment
+		if (update_count === 0) {
+			frappe.msgprint({
+				title: __("Error"),
+				message: __("Could not match payments. Please refresh the form and try again."),
+				indicator: "red",
+			});
+			return;
+		}
+		
+		// Mark form as dirty and refresh payments field
+		frm.dirty();
+		frm.refresh_field("payments");
+		
+		// Recalculate totals if available
+		if (frm.cscript && frm.cscript.calculate_taxes_and_totals) {
+			try {
+				frm.cscript.calculate_taxes_and_totals(true);
+			} catch (e) {
+				console.warn("Error calculating taxes:", e);
+			}
+		}
+		
+		// Close dialog before saving and reset popup flag
 		d.hide();
 		frappe.flags.sf_trading_skip_payment_popup = true;
-		const save_fn = submit ? frm.savesubmit.bind(frm) : frm.save.bind(frm);
-		save_fn().finally(function () {
-			setTimeout(function () {
-				delete frappe.flags.sf_trading_skip_payment_popup;
-			}, 500);
-		});
+		frappe.flags.sf_trading_popup_showing = false;
+		frappe.flags.sf_trading_saving = true;
+		
+		// Use save with "Submit" action instead of savesubmit
+		const save_action = submit ? "Submit" : "Save";
+		
+		// Add small delay to ensure form updates are processed
+		setTimeout(function() {
+			frm.save(save_action).then(function() {
+				if (submit) {
+					// Reload after submit to show updated status
+					setTimeout(function() {
+						frm.reload_doc();
+					}, 300);
+				}
+			}).catch(function(err) {
+				// Show error if save fails
+				frappe.msgprint({
+					title: __("Error"),
+					message: __("Failed to save invoice: {0}", [err.message || err]),
+					indicator: "red",
+				});
+			}).finally(function () {
+				setTimeout(function () {
+					delete frappe.flags.sf_trading_skip_payment_popup;
+					delete frappe.flags.sf_trading_saving;
+				}, 500);
+			});
+		}, 100);
 	}
 
 	const d = new frappe.ui.Dialog({
@@ -185,6 +367,10 @@ function sf_trading_render_dialog(frm) {
 			const vals = d.get_values();
 			if (vals) apply_payments_and_close(vals, true);
 		},
+		onhide: function() {
+			// Reset flag when dialog is closed
+			frappe.flags.sf_trading_popup_showing = false;
+		}
 	});
 
 	d.show();
