@@ -187,8 +187,8 @@ def get_data(filters):
 			row.append(margin)
 		return row
 
-	# Opening Cash Balance - no link
-	data.append(_row("Opening Cash Balance", opening_balance, 0, 0, 0))
+	# Opening Cash Balance - no link (row 1 - bold)
+	data.append(_row("<b>Opening Cash Balance</b>", opening_balance, 0, 0, 0))
 	
 	# CASH SALES - link to Sales Invoice list filtered by cash payments
 	# Format dates safely - validate using Frappe's getdate
@@ -308,9 +308,19 @@ def get_data(filters):
 		payment_pay_filters["cost_center"] = cost_center
 	data.append(_row(get_list_view_link("Payment Entry", "Payments-Petty Cash (Total Payments)", payment_pay_filters), 0, payments_petty_cash, 0, 0))
 
-	# Total Receipts = Cash Sales (all POS invoices) + Cash Received from Credit Sales
-	total_receipts = cash_sales + cash_received_credit_sales
-	data.append(_row("Total Receipts", total_receipts, 0, 0, 0))
+	# Total receipt petty cash (row 11 - bold)
+	total_receipt_petty_cash = cash_receipts_pos + cash_received_credit_sales
+	data.append(_row("<b>" + _("Total Receipt-Petty Cash") + "</b>", total_receipt_petty_cash, 0, 0, 0))
+
+	# Bank Sales (row 12 - bold)
+	non_cash_data = get_non_cash_transactions(from_date, to_date, company, cost_center)
+	data.append(_row(
+		"<b>" + _("Bank Sales") + "</b>",
+		non_cash_data.get("receipts", 0),
+		non_cash_data.get("payments", 0),
+		0,
+		0
+	))
 	
 	# Calculate Cash Balance (only cash mode payments)
 	# Cash Balance = Opening Cash + Cash Receipts (cash mode only) - Cash Payments - Expenses - Internal Transfers (Cash Out) + Internal Transfers (Cash In)
@@ -325,8 +335,8 @@ def get_data(filters):
 		+ cash_in_internal_transfer  # Cash received from bank (Internal Transfer)
 	)
 	
-	# Cash Balance - no link
-	data.append(_row("Cash Balance", cash_balance, 0, 0, 0))
+	# Cash Balance (row 13 - bold)
+	data.append(_row("<b>Cash Balance</b>", cash_balance, 0, 0, 0))
 
 	return data
 
@@ -819,3 +829,87 @@ def get_internal_transfer_cash_transactions(from_date, to_date, company, cost_ce
 		"cash_out": cash_out,
 		"cash_in": cash_in
 	}
+
+
+def get_non_cash_transactions(from_date, to_date, company, cost_center):
+	"""Get all transactions where Mode of Payment type is NOT 'Cash' (i.e. goes to/from bank).
+	Returns receipts (income to bank) and payments (expense from bank)."""
+	conditions_pe = "pe.docstatus = 1"
+	if from_date:
+		conditions_pe += " AND pe.posting_date >= %(from_date)s"
+	if to_date:
+		conditions_pe += " AND pe.posting_date <= %(to_date)s"
+	if company:
+		conditions_pe += " AND pe.company = %(company)s"
+	cost_center_condition = " AND pe.cost_center = %(cost_center)s" if cost_center else ""
+
+	params = {"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center}
+
+	# Non-cash receipts: Payment Entry (Receive) where mop.type != 'Cash'
+	receipts_pe = frappe.db.sql("""
+		SELECT SUM(pe.received_amount) as amount
+		FROM `tabPayment Entry` pe
+		INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
+		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
+		WHERE {conditions}
+			AND pe.payment_type = 'Receive'
+			AND per.reference_doctype IN ('Sales Invoice', 'Sales Order')
+			AND (mop.type IS NULL OR mop.type != 'Cash')
+			{cost_center_condition}
+	""".format(conditions=conditions_pe, cost_center_condition=cost_center_condition), params, as_dict=True)
+
+	# Non-cash receipts: Sales Invoice Payment where mop.type != 'Cash'
+	conditions_si = "si.docstatus = 1 AND si.is_return = 0"
+	if from_date:
+		conditions_si += " AND si.posting_date >= %(from_date)s"
+	if to_date:
+		conditions_si += " AND si.posting_date <= %(to_date)s"
+	if company:
+		conditions_si += " AND si.company = %(company)s"
+	si_cost_condition = ""
+	if cost_center:
+		si_cost_condition = " AND EXISTS (SELECT 1 FROM `tabSales Invoice Item` sii WHERE sii.parent = si.name AND sii.cost_center = %(cost_center)s)"
+
+	receipts_si = frappe.db.sql("""
+		SELECT SUM(sip.base_amount) as amount
+		FROM `tabSales Invoice` si
+		INNER JOIN `tabSales Invoice Payment` sip ON sip.parent = si.name
+		INNER JOIN `tabMode of Payment` mop ON mop.name = sip.mode_of_payment
+		WHERE {conditions}
+			AND (mop.type IS NULL OR mop.type != 'Cash')
+			{si_cost_condition}
+	""".format(conditions=conditions_si, si_cost_condition=si_cost_condition), params, as_dict=True)
+
+	# Non-cash payments: Payment Entry (Pay) where mop.type != 'Cash'
+	payments_pe = frappe.db.sql("""
+		SELECT SUM(pe.paid_amount) as amount
+		FROM `tabPayment Entry` pe
+		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
+		WHERE {conditions}
+			AND pe.payment_type = 'Pay'
+			AND (mop.type IS NULL OR mop.type != 'Cash')
+			{cost_center_condition}
+	""".format(conditions=conditions_pe, cost_center_condition=cost_center_condition), params, as_dict=True)
+
+	# Non-cash payments: Purchase Invoice (is_paid) where mop.type != 'Cash'
+	pi_conditions = "pi.docstatus = 1 AND pi.is_paid = 1"
+	if from_date:
+		pi_conditions += " AND pi.posting_date >= %(from_date)s"
+	if to_date:
+		pi_conditions += " AND pi.posting_date <= %(to_date)s"
+	if company:
+		pi_conditions += " AND pi.company = %(company)s"
+	pi_cost_condition = " AND pi.cost_center = %(cost_center)s" if cost_center else ""
+	payments_pi = frappe.db.sql("""
+		SELECT SUM(pi.base_paid_amount) as amount
+		FROM `tabPurchase Invoice` pi
+		INNER JOIN `tabMode of Payment` mop ON mop.name = pi.mode_of_payment
+		WHERE {conditions}
+			AND (mop.type IS NULL OR mop.type != 'Cash')
+			{pi_cost_condition}
+	""".format(conditions=pi_conditions, pi_cost_condition=pi_cost_condition), params, as_dict=True)
+
+	receipts = flt(receipts_pe[0].amount if receipts_pe and receipts_pe[0].amount else 0) + flt(receipts_si[0].amount if receipts_si and receipts_si[0].amount else 0)
+	payments = flt(payments_pe[0].amount if payments_pe and payments_pe[0].amount else 0) + flt(payments_pi[0].amount if payments_pi and payments_pi[0].amount else 0)
+
+	return {"receipts": receipts, "payments": payments}
