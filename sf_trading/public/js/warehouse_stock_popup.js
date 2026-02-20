@@ -479,20 +479,20 @@ function setup_item_code_field_listeners(frm) {
 	if (!frm.fields_dict.items || !frm.fields_dict.items.grid) {
 		return;
 	}
-	
+
 	const grid = frm.fields_dict.items.grid;
-	
+
 	// Listen for clicks on item_code field in grid rows
 	grid.wrapper.on("click focus", "[data-fieldname='item_code'] input, [data-fieldname='item_code'] .link-field", function() {
 		let $field = $(this);
 		let $row = $field.closest(".grid-row");
 		let idx = $row.attr("data-idx");
-		
+
 		if (idx && frm.doc.items) {
 			let item_row = frm.doc.items.find(function(item) {
 				return item.idx == idx;
 			});
-			
+
 			if (item_row && item_row.item_code) {
 				sf_trading.current_selected_row = item_row;
 				if (frm.doc.company && frappe.meta.has_field(item_row.doctype, "warehouse")) {
@@ -506,16 +506,51 @@ function setup_item_code_field_listeners(frm) {
 	});
 }
 
+// Hide stock availability when user clicks or focuses outside the items grid
+function setup_hide_stock_on_click_outside(frm) {
+	if (!frm.fields_dict.items || !frm.fields_dict.items.grid) {
+		return;
+	}
+
+	const grid = frm.fields_dict.items.grid;
+	const $grid_wrapper = grid.wrapper;
+
+	// Remove previous handlers to avoid duplicates on refresh
+	$grid_wrapper.off("focusout.sf_trading_stock");
+	if (frm.wrapper) {
+		$(frm.wrapper).off("click.sf_trading_stock");
+	}
+
+	// When focus leaves the grid, hide stock if focus did not move to another element inside the grid
+	$grid_wrapper.on("focusout.sf_trading_stock", function() {
+		setTimeout(function() {
+			const active = document.activeElement;
+			if (!active || !$grid_wrapper[0].contains(active)) {
+				sf_trading.hide_stock_display(frm);
+			}
+		}, 150);
+	});
+
+	// When user clicks anywhere on the form, hide stock if click was outside the items grid
+	if (frm.wrapper) {
+		$(frm.wrapper).on("click.sf_trading_stock", function(e) {
+			if (!$grid_wrapper.length || !$grid_wrapper[0].contains(e.target)) {
+				sf_trading.hide_stock_display(frm);
+			}
+		});
+	}
+}
+
 // Only enable for Sales Invoice for now
 // Can be extended to other doctypes in future by adding them here
 frappe.ui.form.on("Sales Invoice", {
 	refresh: function(frm) {
 		setup_item_code_field_listeners(frm);
-		
-		// Check if any item is selected, if not hide display
-		if (!frm.doc.items || frm.doc.items.length === 0) {
-			sf_trading.hide_stock_display(frm);
-		}
+		// Always hide stock on load/refresh until user clicks an item
+		sf_trading.hide_stock_display(frm);
+
+		// Hide stock when user clicks or focuses outside the items grid
+		setup_hide_stock_on_click_outside(frm);
 	}
 });
 
