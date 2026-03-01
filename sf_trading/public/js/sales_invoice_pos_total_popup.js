@@ -1,4 +1,4 @@
-// sf_trading: Popup to enter payment amounts when is_pos is checked
+// sf_trading: Popup to enter payment amounts for Sales Invoice
 // Shows after save when the correct grand_total is available
 frappe.ui.form.on("Sales Invoice", {
 	refresh: function (frm) {
@@ -8,14 +8,40 @@ frappe.ui.form.on("Sales Invoice", {
 		const orig = frm.save.bind(frm);
 		frm.save = function (save_action, callback, btn, on_error) {
 			frappe.flags._sf_save_action = save_action || "Save";
+			// Show payment popup BEFORE submit (no confirmation); skip when submitting from popup
+			if (
+				save_action === "Submit" &&
+				!frappe.flags.sf_trading_skip_payment_popup &&
+				frm.doc.docstatus === 0 &&
+				frm.doc.name && !String(frm.doc.name).startsWith("new-") &&
+				frm.doc.custom_payment_mode !== "Credit" &&
+				frm.doc.grand_total > 0
+			) {
+				function show_popup() {
+					sf_trading_show_pos_total_popup(frm);
+					return Promise.resolve();
+				}
+				if (frm.doc.pos_profile) {
+					return frappe.db.get_value(
+						"POS Profile",
+						frm.doc.pos_profile,
+						"disable_grand_total_to_default_mop"
+					).then(function (r) {
+						if (r && r.message === 1) return orig(save_action, callback, btn, on_error);
+						return show_popup();
+					});
+				}
+				return show_popup();
+			}
 			return orig(save_action, callback, btn, on_error).finally(function () {
 				delete frappe.flags._sf_save_action;
 			});
 		};
 	},
 	before_save: function (frm) {
-		// When Include Payment (POS) is NOT checked, ask to submit on Save (not Submit)
-		if (frm.doc.is_pos || frm.doc.docstatus !== 0) return;
+		// Only show "Do you want to Submit?" for Credit sales
+		if (!frm.doc.custom_payment_mode || frm.doc.custom_payment_mode !== "Credit") return;
+		if (frm.doc.docstatus !== 0) return;
 		if (frappe.flags._sf_save_action === "Submit") return;
 		if (frm._asked_to_submit) return;
 
@@ -43,66 +69,86 @@ frappe.ui.form.on("Sales Invoice", {
 		
 		// Prevent popup if already showing
 		if (frappe.flags.sf_trading_popup_showing) return;
-		
-		// Only show for POS invoices in draft state
-		if (!frm.doc.is_pos || frm.doc.docstatus !== 0) return;
-		
-		// Validate required fields
-		if (!frm.doc.pos_profile || !frm.doc.grand_total || frm.doc.grand_total <= 0) return;
-		
-		// Ensure form is ready
+
+		// Credit: no payment popup (only "Do you want to Submit?" in before_save)
+		if (frm.doc.custom_payment_mode && frm.doc.custom_payment_mode === "Credit") {
+			return;
+		}
+
+		// Non-credit: show payment popup after save
+		if (!frm.doc.grand_total || frm.doc.grand_total <= 0) return;
 		if (!frm.doc.name || frm.doc.name.startsWith("new-")) return;
 
-		// Show popup on every save (unless POS Profile disables it)
-		frappe.db.get_value(
-			"POS Profile",
-			frm.doc.pos_profile,
-			"disable_grand_total_to_default_mop",
-			function (r) {
-				if (r && r.message === 1) return;
-				sf_trading_show_pos_total_popup(frm);
-			}
-		);
+		if (frm.doc.pos_profile) {
+			frappe.db.get_value(
+				"POS Profile",
+				frm.doc.pos_profile,
+				"disable_grand_total_to_default_mop",
+				function (r) {
+					if (r && r.message === 1) return;
+					sf_trading_show_pos_total_popup(frm);
+				}
+			);
+		} else {
+			sf_trading_show_pos_total_popup(frm);
+		}
 	},
 });
 
 function sf_trading_show_pos_total_popup(frm) {
-	// Prevent multiple popups
 	if (frappe.flags.sf_trading_popup_showing) return;
-	
-	// Validate form state
-	if (!frm || !frm.doc || !frm.doc.pos_profile) {
-		console.warn("sf_trading: Cannot show popup - invalid form state");
-		return;
-	}
-	
+	if (!frm || !frm.doc) return;
+
 	frappe.flags.sf_trading_popup_showing = true;
-	
-	function do_show_popup() {
-		// Load payment modes from POS Profile if empty
-		if (!frm.doc.payments || frm.doc.payments.length === 0) {
+
+	function ensure_payments_then_show() {
+		if (frm.doc.payments && frm.doc.payments.length > 0) {
+			sf_trading_render_dialog(frm);
+			return;
+		}
+		if (frm.doc.pos_profile) {
 			frappe.call({
 				method: "frappe.client.get",
 				args: { doctype: "POS Profile", name: frm.doc.pos_profile },
 				callback: function (r) {
 					if (r.message && r.message.payments && r.message.payments.length > 0) {
-						frm.clear_table("payments");
-						r.message.payments.forEach(function (pay) {
-							const row = frm.add_child("payments");
-							row.mode_of_payment = pay.mode_of_payment;
-							row.default = pay.default;
-						});
-						frm.refresh_field("payments");
+						const profile_payments = r.message.payments;
+						const mode_list = profile_payments.map(function (p) { return p.mode_of_payment; });
+						const default_by_mode = {};
+						profile_payments.forEach(function (p) { default_by_mode[p.mode_of_payment] = p.default; });
 						frappe.call({
-							doc: frm.doc,
-							method: "set_account_for_mode_of_payment",
-							callback: function () {
+							method: "sf_trading.api.sales_invoice_payment.get_payment_modes_with_account",
+							args: { company: frm.doc.company, mode_list: mode_list },
+							callback: function (res) {
+								const valid_modes = res.message || [];
+								if (valid_modes.length === 0) {
+									frappe.flags.sf_trading_popup_showing = false;
+									frappe.msgprint(__("No enabled payment modes with a default account for this company. Please set default Cash or Bank account in Mode of Payment or enable the mode."));
+									return;
+								}
+								frm.clear_table("payments");
+								valid_modes.forEach(function (mode) {
+									const row = frm.add_child("payments");
+									row.mode_of_payment = mode;
+									row.default = default_by_mode[mode] || 0;
+								});
 								frm.refresh_field("payments");
-								sf_trading_render_dialog(frm);
+								frappe.call({
+									doc: frm.doc,
+									method: "set_account_for_mode_of_payment",
+									callback: function () {
+										frm.refresh_field("payments");
+										sf_trading_render_dialog(frm);
+									},
+									error: function () {
+										frappe.flags.sf_trading_popup_showing = false;
+										frappe.msgprint(__("Error loading payment accounts. Please try again."));
+									}
+								});
 							},
-							error: function() {
+							error: function () {
 								frappe.flags.sf_trading_popup_showing = false;
-								frappe.msgprint(__("Error loading payment accounts. Please try again."));
+								frappe.msgprint(__("Error loading payment modes. Please try again."));
 							}
 						});
 					} else {
@@ -110,17 +156,51 @@ function sf_trading_show_pos_total_popup(frm) {
 						frappe.msgprint(__("Add payment modes in POS Profile first"));
 					}
 				},
-				error: function() {
+				error: function () {
 					frappe.flags.sf_trading_popup_showing = false;
 					frappe.msgprint(__("Error loading POS Profile. Please try again."));
 				}
 			});
 		} else {
-			sf_trading_render_dialog(frm);
+			// Non-credit without POS Profile: only enabled modes with default account
+			frappe.call({
+				method: "sf_trading.api.sales_invoice_payment.get_payment_modes_with_account",
+				args: { company: frm.doc.company },
+				callback: function (r) {
+					const modes = r.message || [];
+					if (modes.length === 0) {
+						frappe.flags.sf_trading_popup_showing = false;
+						frappe.msgprint(__("No enabled Mode of Payment with default Cash or Bank account for this company. Please set default account in Mode of Payment."));
+						return;
+					}
+					frm.clear_table("payments");
+					modes.forEach(function (name) {
+						const row = frm.add_child("payments");
+						row.mode_of_payment = name;
+					});
+					frm.refresh_field("payments");
+					frappe.call({
+						doc: frm.doc,
+						method: "set_account_for_mode_of_payment",
+						callback: function () {
+							frm.refresh_field("payments");
+							sf_trading_render_dialog(frm);
+						},
+						error: function () {
+							frappe.flags.sf_trading_popup_showing = false;
+							frappe.msgprint(__("Error loading payment accounts. Please try again."));
+						}
+					});
+				},
+				error: function () {
+					frappe.flags.sf_trading_popup_showing = false;
+					frappe.msgprint(__("Error loading payment modes. Please try again."));
+				}
+			});
 		}
 	}
 
-	do_show_popup();
+	ensure_payments_then_show();
 }
 
 function sf_trading_render_dialog(frm) {
@@ -190,26 +270,6 @@ function sf_trading_render_dialog(frm) {
 	});
 
 	function apply_payments_and_close(vals, submit) {
-		// Prevent multiple simultaneous saves
-		if (frappe.flags.sf_trading_saving) {
-			frappe.msgprint({
-				title: __("Please Wait"),
-				message: __("Saving in progress. Please wait..."),
-				indicator: "orange",
-			});
-			return;
-		}
-		
-		// Validate form state
-		if (!frm || !frm.doc || frm.doc.docstatus !== 0) {
-			frappe.msgprint({
-				title: __("Error"),
-				message: __("Cannot update payments. Form is not in draft state."),
-				indicator: "red",
-			});
-			return;
-		}
-		
 		// Validate inputs
 		if (!vals) {
 			frappe.msgprint({
@@ -220,190 +280,104 @@ function sf_trading_render_dialog(frm) {
 			return;
 		}
 		
+		// Collect entered payments
 		let total = 0;
-		// First validate total
+		const payments_payload = [];
 		payments.forEach(function (p, i) {
 			const amt = flt(vals["pay_" + i]) || 0;
-			total += amt;
+			if (amt > 0) {
+				payments_payload.push({
+					mode_of_payment: p.mode_of_payment,
+					amount: amt,
+				});
+				total += amt;
+			}
 		});
-		
+
+		if (!payments_payload.length) {
+			frappe.msgprint({
+				title: __("Error"),
+				message: __("Please enter at least one payment amount."),
+				indicator: "red",
+			});
+			return;
+		}
+
+		// Optional: ensure we are not under-allocating
 		if (total < invoice_total) {
 			frappe.msgprint({
 				title: __("Incomplete"),
-				message: __("{0} still to be allocated", [format_currency(invoice_total - total, currency)]),
+				message: __("{0} still to be allocated", [
+					format_currency(invoice_total - total, currency),
+				]),
 				indicator: "red",
 			});
 			return;
 		}
-		
-		// Ensure form payments exist and match
-		const form_payments = frm.doc.payments || [];
-		if (form_payments.length === 0) {
-			frappe.msgprint({
-				title: __("Error"),
-				message: __("No payment methods found. Please refresh the form."),
-				indicator: "red",
-			});
-			return;
-		}
-		
-		// Ensure conversion_rate is valid
-		const conversion_rate = flt(frm.doc.conversion_rate) || 1;
-		
-		// Helper function for precision
-		const get_precision = function(fieldname, doc) {
-			try {
-				return precision(fieldname, doc) || 2;
-			} catch(e) {
-				return 2; // Default precision
-			}
-		};
-		
-		// Update payments with robust matching - update ALL payments (including zero amounts)
-		let update_count = 0;
-		payments.forEach(function (p, i) {
-			const amt = flt(vals["pay_" + i]) || 0;
-			const base_amt = flt(amt * conversion_rate, get_precision("base_amount", p));
-			
-			// Try multiple matching strategies for reliability
-			let form_payment = null;
-			
-			// Strategy 1: Match by mode_of_payment
-			if (p.mode_of_payment) {
-				form_payment = form_payments.find(fp => fp.mode_of_payment === p.mode_of_payment);
-			}
-			
-			// Strategy 2: Match by index if same length
-			if (!form_payment && i < form_payments.length && payments.length === form_payments.length) {
-				form_payment = form_payments[i];
-			}
-			
-			// Strategy 3: Match by idx if available
-			if (!form_payment && p.idx) {
-				form_payment = form_payments.find(fp => fp.idx === p.idx);
-			}
-			
-			// Strategy 4: Match by name if available
-			if (!form_payment && p.name) {
-				form_payment = form_payments.find(fp => fp.name === p.name);
-			}
-			
-			// Update if match found - update ALL payments including zero amounts
-			if (form_payment) {
-				// Update directly on the form doc - this is synchronous
-				form_payment.amount = amt;
-				form_payment.base_amount = base_amt;
-				update_count++;
-			}
-		});
-		
-		// Validate that we updated at least one payment
-		if (update_count === 0) {
-			frappe.msgprint({
-				title: __("Error"),
-				message: __("Could not match payments. Please refresh the form and try again."),
-				indicator: "red",
-			});
-			return;
-		}
-		
-		// Verify payments were updated
-		const updated_payments = frm.doc.payments.filter(p => flt(p.amount) > 0);
-		if (updated_payments.length === 0) {
-			frappe.msgprint({
-				title: __("Error"),
-				message: __("No payment amounts were set. Please try again."),
-				indicator: "red",
-			});
-			return;
-		}
-		
-		// Ensure form recognizes payments as changed
-		// Update the local doclist to ensure changes are tracked
-		if (frm.local_doclist && frm.local_doclist["Sales Invoice Payment"]) {
-			frm.doc.payments.forEach(function(payment) {
-				const doclist_item = frm.local_doclist["Sales Invoice Payment"].find(
-					item => item.name === payment.name || item.idx === payment.idx
-				);
-				if (doclist_item) {
-					doclist_item.amount = payment.amount;
-					doclist_item.base_amount = payment.base_amount;
-				}
-			});
-		}
-		
-		// Mark form as dirty to ensure changes are saved
-		frm.dirty();
-		
-		// Refresh payments field to update UI before saving
-		frm.refresh_field("payments");
-		
-		// Close dialog before saving
+
+		// Close dialog before creating Payment Entries
 		d.hide();
-		frappe.flags.sf_trading_skip_payment_popup = true;
 		frappe.flags.sf_trading_popup_showing = false;
-		frappe.flags.sf_trading_saving = true;
-		
-		// Use save with "Submit" action instead of savesubmit
-		const save_action = submit ? "Submit" : "Save";
-		
-		// Delay to ensure refresh_field completes and form processes updates
-		setTimeout(function() {
-			// Double-check payments are in form doc before saving
-			if (!frm.doc.payments || frm.doc.payments.length === 0) {
-				frappe.msgprint({
-					title: __("Error"),
-					message: __("Payments were not updated. Please try again."),
-					indicator: "red",
-				});
-				delete frappe.flags.sf_trading_skip_payment_popup;
-				delete frappe.flags.sf_trading_saving;
-				return;
-			}
-			
-			// Verify payments have amounts
-			const total_payment = frm.doc.payments.reduce((sum, p) => sum + flt(p.amount), 0);
-			if (total_payment <= 0) {
-				frappe.msgprint({
-					title: __("Error"),
-					message: __("Total payment amount must be greater than zero."),
-					indicator: "red",
-				});
-				delete frappe.flags.sf_trading_skip_payment_popup;
-				delete frappe.flags.sf_trading_saving;
-				return;
-			}
-			
-			// Save - payments are already updated in frm.doc.payments
-			frm.save(save_action).then(function(r) {
-				// After save, refresh payments field to show updated values
-				// Frappe automatically refreshes the form, but we ensure payments are visible
-				setTimeout(function() {
-					frm.refresh_field("payments");
-					
-					if (submit) {
-						// Reload after submit to show updated status
-						setTimeout(function() {
-							frm.reload_doc();
-						}, 200);
+
+		// Helper to call backend and create Payment Entries
+		const create_payments = () => {
+			frappe.call({
+				method: "sf_trading.api.sales_invoice_payment.create_pos_payments_for_invoice",
+				args: {
+					sales_invoice: frm.doc.name,
+					payments: JSON.stringify(payments_payload),
+				},
+				freeze: true,
+				freeze_message: __("Creating payments..."),
+				callback: function (r) {
+					if (r && r.message && r.message.length) {
+						frappe.show_alert(
+							{
+								message: __(
+									"Created {0} Payment Entries for this invoice",
+									[r.message.length]
+								),
+								indicator: "green",
+							},
+							5
+						);
+						frm.reload_doc();
 					}
-					// For Save, don't reload - just refresh payments field
-					// The form refresh happens automatically, payments should be visible
-				}, 100);
-			}).catch(function(err) {
-				// Show error if save fails
-				frappe.msgprint({
-					title: __("Error"),
-					message: __("Failed to save invoice: {0}", [err.message || err]),
-					indicator: "red",
-				});
-			}).finally(function () {
-				setTimeout(function () {
-					delete frappe.flags.sf_trading_skip_payment_popup;
-					delete frappe.flags.sf_trading_saving;
-				}, 500);
+				},
+				error: function (err) {
+					console.error("sf_trading: error creating Payment Entries", err);
+					frappe.msgprint({
+						title: __("Error"),
+						message: __("Could not create Payment Entries. Please try again."),
+						indicator: "red",
+					});
+				},
 			});
-		}, 300);
+		};
+
+		// Ensure invoice is submitted before creating payments if user chose Save & Submit
+		if (submit && frm.doc.docstatus === 0) {
+			frappe.flags.sf_trading_skip_payment_popup = true;
+			frm
+				.save("Submit")
+				.then(() => {
+					create_payments();
+				})
+				.finally(() => {
+					setTimeout(() => {
+						delete frappe.flags.sf_trading_skip_payment_popup;
+					}, 500);
+				});
+		} else if (frm.doc.docstatus === 1) {
+			// Already submitted: just create payments
+			create_payments();
+		} else {
+			// Draft + user clicked Save: no payment creation; popup will show again when they Submit
+			frappe.show_alert({
+				message: __("Invoice saved. Submit the invoice when ready to add payments."),
+				indicator: "blue",
+			}, 4);
+		}
 	}
 
 	const d = new frappe.ui.Dialog({
@@ -411,6 +385,17 @@ function sf_trading_render_dialog(frm) {
 		fields: fields,
 		primary_action_label: __("Save"),
 		primary_action: function (vals) {
+			// Draft + Save: just close, no validation, no payment creation; reload so form shows saved state
+			if (frm.doc.docstatus === 0) {
+				d.hide();
+				frappe.flags.sf_trading_popup_showing = false;
+				frappe.show_alert({
+					message: __("Invoice saved. Submit the invoice when ready to add payments."),
+					indicator: "blue",
+				}, 4);
+				frm.reload_doc();
+				return;
+			}
 			apply_payments_and_close(vals, false);
 		},
 		secondary_action_label: __("Save & Submit"),
