@@ -2,6 +2,69 @@
 // Shows after save when the correct grand_total is available
 frappe.ui.form.on("Sales Invoice", {
 	refresh: function (frm) {
+		// Remove "Permanently Submit?" confirmation when clicking Submit
+		if (!frm._sf_savesubmit_wrapped) {
+			frm._sf_savesubmit_wrapped = true;
+			const orig_savesubmit = frm.savesubmit.bind(frm);
+			frm.savesubmit = function (btn, callback, on_error) {
+				var me = this;
+				// Submit without confirm: either show payment popup first or run submit directly
+				function do_submit_without_confirm() {
+					return new Promise(function (resolve) {
+						me.validate_form_action("Submit");
+						frappe.validated = true;
+						me.script_manager.trigger("before_submit").then(function () {
+							if (!frappe.validated) return me.handle_save_fail(btn, on_error);
+							me.save(
+								"Submit",
+								function (r) {
+									if (r.exc) me.handle_save_fail(btn, on_error);
+									else {
+										frappe.utils.play_sound("submit");
+										callback && callback();
+										me.script_manager.trigger("on_submit").then(function () {
+											resolve(me);
+										}).then(function () {
+											if (frappe.route_hooks.after_submit) {
+												var cb = frappe.route_hooks.after_submit;
+												delete frappe.route_hooks.after_submit;
+												cb(me);
+											}
+										});
+									}
+								},
+								btn,
+								function () { me.handle_save_fail(btn, on_error); resolve(); }
+							);
+						});
+					});
+				}
+				// Show payment popup before submit when applicable (no confirm)
+				if (
+					!frappe.flags.sf_trading_skip_payment_popup &&
+					frm.doc.docstatus === 0 &&
+					frm.doc.name && !String(frm.doc.name).startsWith("new-") &&
+					frm.doc.custom_payment_mode !== "Credit" &&
+					frm.doc.grand_total > 0
+				) {
+					if (frm.doc.pos_profile) {
+						return frappe.db.get_value(
+							"POS Profile",
+							frm.doc.pos_profile,
+							"disable_grand_total_to_default_mop"
+						).then(function (r) {
+							if (r && r.message === 1) return do_submit_without_confirm();
+							sf_trading_show_pos_total_popup(frm);
+							return Promise.resolve();
+						});
+					}
+					sf_trading_show_pos_total_popup(frm);
+					return Promise.resolve();
+				}
+				return do_submit_without_confirm();
+			};
+		}
+
 		// Capture save action so before_save knows if user clicked Submit (skip confirm)
 		if (frm._sf_save_wrapped) return;
 		frm._sf_save_wrapped = true;
@@ -383,8 +446,13 @@ function sf_trading_render_dialog(frm) {
 	const d = new frappe.ui.Dialog({
 		title: __("Enter Payment Amounts"),
 		fields: fields,
-		primary_action_label: __("Save"),
+		primary_action_label: __("Save & Submit"),
 		primary_action: function (vals) {
+			if (vals) apply_payments_and_close(vals, true);
+		},
+		secondary_action_label: __("Save"),
+		secondary_action: function () {
+			const vals = d.get_values();
 			// Draft + Save: just close, no validation, no payment creation; reload so form shows saved state
 			if (frm.doc.docstatus === 0) {
 				d.hide();
@@ -396,12 +464,7 @@ function sf_trading_render_dialog(frm) {
 				frm.reload_doc();
 				return;
 			}
-			apply_payments_and_close(vals, false);
-		},
-		secondary_action_label: __("Save & Submit"),
-		secondary_action: function () {
-			const vals = d.get_values();
-			if (vals) apply_payments_and_close(vals, true);
+			if (vals) apply_payments_and_close(vals, false);
 		},
 		onhide: function() {
 			// Reset flag when dialog is closed
