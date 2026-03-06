@@ -5,8 +5,14 @@ frappe.query_reports["Work Flow Approval"] = {
     filters: [
         { fieldname: "user", label: "User", fieldtype: "Link", options: "User", default: frappe.session.user },
         { fieldname: "company", label: "Company", fieldtype: "Link", options: "Company" },
+        
         {
             fieldname: "doctype", label: "Document Type", fieldtype: "Link", options: "DocType", reqd: 1,
+            get_query: function() {
+                return {
+                    query: "sf_trading.sf_trading.report.work_flow_approval.work_flow_approval.get_workflow_doctypes"
+                };
+            },
             on_change: function() {
                 wf_action = "";
                 $("#wf-action-select").val("");

@@ -1,15 +1,14 @@
+# # Copyright (c) 2026, enfono and contributors
+# # For license information, please see license.txt
 
-# Copyright (c) 2026, enfono and contributors
-# For license information, please see license.txt
 import frappe
-
-
 def execute(filters=None):
     return get_columns(), get_data(filters)
 
 
 def get_columns():
     return [
+        { "label": "User", "fieldname": "owner", "fieldtype": "Link", "options": "User", "width": 180 },
         { "label": "Company", "fieldname": "company", "fieldtype": "Link", "options": "Company", "width": 150 },
         { "label": "DocType", "fieldname": "doctype", "fieldtype": "Data", "width": 150 },
         { "label": "Document", "fieldname": "name", "fieldtype": "Dynamic Link", "options": "doctype", "width": 200 },
@@ -42,9 +41,8 @@ def get_data(filters):
     if filters.get("to_date"):
         conditions += " AND creation <= %(to_date)s"
         values["to_date"] = filters["to_date"]
-
-    fields = ("company, " if has_company else "") + "name, workflow_state, creation"
-
+    
+    fields = ("company, " if has_company else "") + "name, workflow_state, owner, creation"
     data = frappe.db.sql(f"""
         SELECT {fields} FROM `tab{doctype}`
         WHERE {conditions} ORDER BY creation DESC
@@ -74,7 +72,6 @@ def get_workflow_actions(doctype):
             actions.append(t.action)
     return actions
 
-
 @frappe.whitelist()
 def apply_bulk_workflow(docs, action):
     import json
@@ -90,3 +87,18 @@ def apply_bulk_workflow(docs, action):
 
     frappe.db.commit()
     return "<br>".join(results)
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def get_workflow_doctypes(doctype, txt, searchfield, start, page_len, filters):
+    workflows = frappe.db.get_all("Workflow",
+        filters={"is_active": 1},
+        fields=["document_type"],
+        limit=100
+    )
+
+    doctypes = [[w.document_type, w.document_type] for w in workflows
+                if w.document_type and txt.lower() in w.document_type.lower()]
+
+    return doctypes
