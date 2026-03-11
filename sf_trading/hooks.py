@@ -270,14 +270,15 @@ fixtures = [
 	{
 		"doctype": "Report",
 		"filters": [
-			[
-				"name",
-				"in",
-				(
-					"DCR Report",
-					"DCR Detailed",
-				)
-			]
+				[
+					"name",
+					"in",
+					(
+						"DCR Report",
+						"DCR Detailed",
+						"DCR Detail",
+					)
+				]
 		]
 	},
 	{

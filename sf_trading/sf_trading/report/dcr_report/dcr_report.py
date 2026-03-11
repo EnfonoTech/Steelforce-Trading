@@ -105,6 +105,23 @@ def get_list_view_link(doctype, label, filters_dict):
 	return f'<a href="{url}">{label}</a>'
 
 
+def get_report_link(label, report_type, from_date_str, to_date_str, company, cost_center):
+	"""Create a clickable link to DCR Detail report with the given type and filters."""
+	from frappe.utils import get_url
+	from urllib.parse import urlencode, quote
+	query_params = {
+		"report_type": report_type,
+		"from_date": from_date_str or "",
+		"to_date": to_date_str or "",
+		"company": company or "",
+		"cost_center": cost_center or "",
+	}
+	query_string = urlencode({k: v for k, v in query_params.items() if v})
+	report_path = quote("DCR Detail", safe="")
+	url = get_url(uri=f"/app/query-report/{report_path}?{query_string}")
+	return f'<a href="{url}">{label}</a>'
+
+
 def get_data(filters):
 	data = []
 	
@@ -225,97 +242,40 @@ def get_data(filters):
 		except:
 			to_date_str = None
 	
-	cash_sales_filters = {
-		"company": company,
-		"docstatus": "1",
-		"is_return": "0"
-	}
-	# Only add date filter if both dates are valid and not "0000-01-01"
-	if from_date_str and to_date_str and from_date_str != "0000-01-01" and to_date_str != "0000-01-01" and not from_date_str.startswith("0000-") and not to_date_str.startswith("0000-"):
-		cash_sales_filters["posting_date"] = [from_date_str, to_date_str]
-	if cost_center:
-		cash_sales_filters["cost_center"] = cost_center
-	data.append(_row(get_list_view_link("Sales Invoice", "CASH SALES", cash_sales_filters), cash_sales, 0, -total_discount_adj, gross_margin_cash))
+	data.append(_row(get_report_link("CASH SALES", "Cash Sales", from_date_str, to_date_str, company, cost_center), cash_sales, 0, -total_discount_adj, gross_margin_cash))
 
-	# CREDIT SALES - link to Sales Invoice list filtered by credit sales
-	credit_sales_filters = {
-		"company": company,
-		"docstatus": "1",
-		"is_return": "0"
-	}
-	if from_date_str and to_date_str and from_date_str != "0000-01-01" and to_date_str != "0000-01-01" and not from_date_str.startswith("0000-") and not to_date_str.startswith("0000-"):
-		credit_sales_filters["posting_date"] = [from_date_str, to_date_str]
-	if cost_center:
-		credit_sales_filters["cost_center"] = cost_center
-	data.append(_row(get_list_view_link("Sales Invoice", "CREDIT SALES", credit_sales_filters), credit_sales, 0, 0, gross_margin_credit))
+	# CREDIT SALES - link to DCR Detail report
+	data.append(_row(get_report_link("CREDIT SALES", "Credit Sales", from_date_str, to_date_str, company, cost_center), credit_sales, 0, 0, gross_margin_credit))
 
-	# Sales Return - Cash - link to Sales Invoice list filtered by returns (moved to position 4)
-	returns_filters = {
-		"company": company,
-		"docstatus": "1",
-		"is_return": "1"
-	}
-	if from_date_str and to_date_str and from_date_str != "0000-01-01" and to_date_str != "0000-01-01" and not from_date_str.startswith("0000-") and not to_date_str.startswith("0000-"):
-		returns_filters["posting_date"] = [from_date_str, to_date_str]
-	if cost_center:
-		returns_filters["cost_center"] = cost_center
-	data.append(_row(get_list_view_link("Sales Invoice", "Sales Return - Cash", returns_filters), 0, sales_return_cash, 0, 0))
+	# Sales Return - Cash - link to DCR Detail report
+	data.append(_row(get_report_link("Sales Return - Cash", "Sales Return - Cash", from_date_str, to_date_str, company, cost_center), 0, sales_return_cash, 0, 0))
 
-	# VAT Collected on Cash Sales - link to Sales Invoice list (same as cash sales) (moved to position 5)
-	# VAT collected is income, so it should be positive
-	data.append(_row(get_list_view_link("Sales Invoice", "VAT Collected on Cash Sales", cash_sales_filters), vat_collected_cash, 0, 0, 0))
+	# VAT Collected on Cash Sales - link to DCR Detail report (same invoices as Cash Sales)
+	data.append(_row(get_report_link("VAT Collected on Cash Sales", "VAT Collected on Cash Sales", from_date_str, to_date_str, company, cost_center), vat_collected_cash, 0, 0, 0))
 
-	# VAT Applied on Credit Sales - link to Sales Invoice list (same as credit sales) (moved to position 6)
-	# VAT applied is income, so it should be positive
-	data.append(_row(get_list_view_link("Sales Invoice", "VAT Applied on Credit Sales", credit_sales_filters), vat_applied_credit, 0, 0, 0))
+	# VAT Applied on Credit Sales - link to DCR Detail report
+	data.append(_row(get_report_link("VAT Applied on Credit Sales", "VAT Applied on Credit Sales", from_date_str, to_date_str, company, cost_center), vat_applied_credit, 0, 0, 0))
 
-	# VAT Refund on Sales Return - link to Sales Invoice list (same as returns) (position 7)
-	# VAT refund is expense, so it should be in expense column
-	data.append(_row(get_list_view_link("Sales Invoice", "VAT Refund on Sales Return", returns_filters), 0, vat_refund_sales_return, 0, 0))
+	# VAT Refund on Sales Return - link to DCR Detail report
+	data.append(_row(get_report_link("VAT Refund on Sales Return", "VAT Refund on Sales Return", from_date_str, to_date_str, company, cost_center), 0, vat_refund_sales_return, 0, 0))
 
-	# Credit Purchase - link to Purchase Invoice list
-	purchase_filters = {
-		"company": company,
-		"docstatus": "1"
-	}
-	if from_date_str and to_date_str and from_date_str != "0000-01-01" and to_date_str != "0000-01-01" and not from_date_str.startswith("0000-") and not to_date_str.startswith("0000-"):
-		purchase_filters["posting_date"] = [from_date_str, to_date_str]
-	if cost_center:
-		purchase_filters["cost_center"] = cost_center
-	data.append(_row(get_list_view_link("Purchase Invoice", "Credit Purchase - DIRECT PURCHASE", purchase_filters), 0, credit_purchase, 0, 0))
+	# Credit Purchase - link to DCR Detail report
+	data.append(_row(get_report_link("Credit Purchase - DIRECT PURCHASE", "Credit Purchase - DIRECT PURCHASE", from_date_str, to_date_str, company, cost_center), 0, credit_purchase, 0, 0))
 
-	# Cash Received : Credit Sales - link to Payment Entry list filtered by Receive type
-	payment_receive_filters = {
-		"company": company,
-		"docstatus": "1",
-		"payment_type": "Receive"
-	}
-	if from_date_str and to_date_str and from_date_str != "0000-01-01" and to_date_str != "0000-01-01" and not from_date_str.startswith("0000-") and not to_date_str.startswith("0000-"):
-		payment_receive_filters["posting_date"] = [from_date_str, to_date_str]
-	if cost_center:
-		payment_receive_filters["cost_center"] = cost_center
-	data.append(_row(get_list_view_link("Payment Entry", "Cash Received : Credit Sales", payment_receive_filters), cash_received_credit_sales, 0, 0, 0))
+	# Cash Received : Credit Sales - link to DCR Detail report
+	data.append(_row(get_report_link("Cash Received : Credit Sales", "Cash Received : Credit Sales", from_date_str, to_date_str, company, cost_center), cash_received_credit_sales, 0, 0, 0))
 
-	# Payments-Petty Cash - link to Payment Entry list filtered by Pay type
-	payment_pay_filters = {
-		"company": company,
-		"docstatus": "1",
-		"payment_type": "Pay"
-	}
-	if from_date_str and to_date_str and from_date_str != "0000-01-01" and to_date_str != "0000-01-01" and not from_date_str.startswith("0000-") and not to_date_str.startswith("0000-"):
-		payment_pay_filters["posting_date"] = [from_date_str, to_date_str]
-	if cost_center:
-		payment_pay_filters["cost_center"] = cost_center
-	data.append(_row(get_list_view_link("Payment Entry", "Payments-Petty Cash (Total Payments)", payment_pay_filters), 0, payments_petty_cash, 0, 0))
+	# Payments-Petty Cash - link to DCR Detail report
+	data.append(_row(get_report_link("Payments-Petty Cash (Total Payments)", "Payments-Petty Cash (Total Payments)", from_date_str, to_date_str, company, cost_center), 0, payments_petty_cash, 0, 0))
 
 	# Total receipt petty cash (row 11 - bold)
 	total_receipt_petty_cash = cash_receipts_pos + cash_received_credit_sales
 	data.append(_row("<b>" + _("Total Receipt-Petty Cash") + "</b>", total_receipt_petty_cash, 0, 0, 0))
 
-	# Bank Sales (row 12 - bold)
+	# Bank Sales (row 12 - bold) - link to DCR Detail (Bank Sales Receipts; user can change type for payments)
 	non_cash_data = get_non_cash_transactions(from_date, to_date, company, cost_center)
 	data.append(_row(
-		"<b>" + _("Bank Sales") + "</b>",
+		"<b>" + get_report_link(_("Bank Sales"), "Bank Sales Receipts", from_date_str, to_date_str, company, cost_center) + "</b>",
 		non_cash_data.get("receipts", 0),
 		non_cash_data.get("payments", 0),
 		0,
