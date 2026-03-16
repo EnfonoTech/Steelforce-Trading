@@ -1,5 +1,29 @@
 // sf_trading: Popup to enter payment amounts for Sales Invoice
 // Shows after save when the correct grand_total is available
+function sf_trading_open_invoice_print(frm) {
+	if (!frm || !frm.doc || !frm.doc.name) return;
+	const base_url = window.location.origin;
+	const format = encodeURIComponent(frm.meta.default_print_format || "");
+
+	const url =
+		`${base_url}/printview?` +
+		`doctype=Sales%20Invoice` +
+		`&name=${encodeURIComponent(frm.doc.name)}` +
+		`&trigger_print=1` +
+		`&format=${format}` +
+		`&no_letterhead=0` +
+		`&settings=%7B%7D` +
+		`&_lang=${frappe.boot.lang}`;
+
+	const a = document.createElement("a");
+	a.href = url;
+	a.target = "_blank";
+	a.rel = "noopener noreferrer";
+	document.body.appendChild(a);
+	a.click();
+	document.body.removeChild(a);
+}
+
 frappe.ui.form.on("Sales Invoice", {
 	refresh: function (frm) {
 		// Remove "Permanently Submit?" confirmation when clicking Submit
@@ -66,40 +90,48 @@ frappe.ui.form.on("Sales Invoice", {
 		}
 
 		// Capture save action so before_save knows if user clicked Submit (skip confirm)
-		if (frm._sf_save_wrapped) return;
-		frm._sf_save_wrapped = true;
-		const orig = frm.save.bind(frm);
-		frm.save = function (save_action, callback, btn, on_error) {
-			frappe.flags._sf_save_action = save_action || "Save";
-			// Show payment popup BEFORE submit (no confirmation); skip when submitting from popup
-			if (
-				save_action === "Submit" &&
-				!frappe.flags.sf_trading_skip_payment_popup &&
-				frm.doc.docstatus === 0 &&
-				frm.doc.name && !String(frm.doc.name).startsWith("new-") &&
-				frm.doc.custom_payment_mode !== "Credit" &&
-				frm.doc.grand_total > 0
-			) {
-				function show_popup() {
-					sf_trading_show_pos_total_popup(frm);
-					return Promise.resolve();
+		if (!frm._sf_save_wrapped) {
+			frm._sf_save_wrapped = true;
+			const orig = frm.save.bind(frm);
+			frm.save = function (save_action, callback, btn, on_error) {
+				frappe.flags._sf_save_action = save_action || "Save";
+				// Show payment popup BEFORE submit (no confirmation); skip when submitting from popup
+				if (
+					save_action === "Submit" &&
+					!frappe.flags.sf_trading_skip_payment_popup &&
+					frm.doc.docstatus === 0 &&
+					frm.doc.name && !String(frm.doc.name).startsWith("new-") &&
+					frm.doc.custom_payment_mode !== "Credit" &&
+					frm.doc.grand_total > 0
+				) {
+					function show_popup() {
+						sf_trading_show_pos_total_popup(frm);
+						return Promise.resolve();
+					}
+					if (frm.doc.pos_profile) {
+						return frappe.db.get_value(
+							"POS Profile",
+							frm.doc.pos_profile,
+							"disable_grand_total_to_default_mop"
+						).then(function (r) {
+							if (r && r.message === 1) return orig(save_action, callback, btn, on_error);
+							return show_popup();
+						});
+					}
+					return show_popup();
 				}
-				if (frm.doc.pos_profile) {
-					return frappe.db.get_value(
-						"POS Profile",
-						frm.doc.pos_profile,
-						"disable_grand_total_to_default_mop"
-					).then(function (r) {
-						if (r && r.message === 1) return orig(save_action, callback, btn, on_error);
-						return show_popup();
-					});
-				}
-				return show_popup();
-			}
-			return orig(save_action, callback, btn, on_error).finally(function () {
-				delete frappe.flags._sf_save_action;
+				return orig(save_action, callback, btn, on_error).finally(function () {
+					delete frappe.flags._sf_save_action;
+				});
+			};
+		}
+
+		// Add Print button on submitted invoices
+		if (frm.doc.docstatus === 1) {
+			frm.add_custom_button(__("Print Invoice"), function () {
+				sf_trading_open_invoice_print(frm);
 			});
-		};
+		}
 	},
 	before_save: function (frm) {
 		// Only show "Do you want to Submit?" for Credit sales
@@ -116,6 +148,8 @@ frappe.ui.form.on("Sales Invoice", {
 			function () {
 				frm.save("Submit").then(function () {
 					frm._asked_to_submit = false;
+					// Open print immediately after successful submit from confirm dialog
+					sf_trading_open_invoice_print(frm);
 					frm.reload_doc();
 				});
 			},
@@ -437,6 +471,8 @@ function sf_trading_render_dialog(frm) {
 			frm
 				.save("Submit")
 				.then(() => {
+					// Open print window immediately after successful submit
+					sf_trading_open_invoice_print(frm);
 					create_payments();
 				})
 				.finally(() => {
