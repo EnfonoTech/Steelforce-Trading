@@ -366,6 +366,19 @@ function sf_trading_render_dialog(frm) {
 			return;
 		}
 
+		// Prevent over-payment: do not allow total entered payments to exceed invoice total
+		if (total - invoice_total > 0.5) {
+			frappe.msgprint({
+				title: __("Error"),
+				message: __(
+					"Total payment amount {0} cannot be greater than invoice total {1}.",
+					[format_currency(total, currency), format_currency(invoice_total, currency)]
+				),
+				indicator: "red",
+			});
+			return;
+		}
+
 		// Optional: ensure we are not under-allocating
 		if (total < invoice_total) {
 			frappe.msgprint({
