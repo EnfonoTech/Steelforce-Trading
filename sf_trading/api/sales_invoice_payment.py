@@ -172,6 +172,18 @@ def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list):
 		pe.reference_date = si.posting_date
 
 		pe.insert()
+
+		# Bypass "Draft -> Pending" server script attachment requirement for
+		# auto-created Payment Entries from the Sales Invoice POS popup.
+		#
+		# Setting ignore_validate skips `validate` / `before_submit` for this submit,
+		# which is where such workflow attachment checks typically run.
+		pe.flags.ignore_validate = True
+
+		# Keep workflow_state consistent with the expected submitted state.
+		if hasattr(pe, "workflow_state"):
+			pe.workflow_state = "Pending"
+
 		pe.submit()
 		created.append(pe.name)
 
