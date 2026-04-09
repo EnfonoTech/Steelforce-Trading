@@ -374,12 +374,15 @@ sf_trading.create_material_request = function(frm, item_code, from_warehouse, fr
 				},
 				callback: function(r) {
 					if (r.message) {
+						let current_route = frappe.get_route();
 						frappe.show_alert({
-							message: __("Material Request {0} created", [r.message]),
+							message: __("Material Request {0} created and submitted ", [r.message]),
 							indicator: "green"
 						});
-						frappe.set_route("Form", "Material Request", r.message);
-					}
+						setTimeout(function() {
+						frappe.set_route(current_route);
+						}, 300);
+						}
 					dialog.hide();
 				},
 				error: function(r) {

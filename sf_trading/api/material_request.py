@@ -84,5 +84,7 @@ def create_material_request(item_code, from_warehouse, to_warehouse, qty, schedu
 	
 	# Insert
 	material_request.insert(ignore_permissions=True)
+	material_request.submit()  
+	
 	
 	return material_request.name
