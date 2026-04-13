@@ -151,6 +151,8 @@ doc_events = {
 	},
 	"Purchase Invoice": {
 		"before_validate": "sf_trading.inter_company.purchase_invoice_before_validate",
+		"validate": "sf_trading.overrides.purchase_invoice.validate",
+		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
 	},
 }
 
@@ -263,6 +265,8 @@ fixtures = [
 				(
 					"Customer-custom_commercial_registration_number",
 					"Sales Invoice-inter_company_branch",
+					"Sales Invoice-custom_sale_type",
+					"Purchase Receipt-custom_billing_approval_status",
 				)
 			]
 		]
