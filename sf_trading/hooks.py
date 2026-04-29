@@ -33,6 +33,8 @@ app_include_js = [
 	"/assets/sf_trading/js/sales_invoice_barcode.js",
 	"/assets/sf_trading/js/sales_invoice_inter_company.js",
 	"/assets/sf_trading/js/sales_invoice_pos_total_popup.js",
+    "/assets/sf_trading/js/work_flow_rejection.js",
+    "/assets/sf_trading/js/workflow_approval_shortcut.js",
 ]
 
 # include js, css files in header of web template
@@ -151,6 +153,7 @@ doc_events = {
 	},
 	"Purchase Invoice": {
 		"before_validate": "sf_trading.inter_company.purchase_invoice_before_validate",
+        
 	},
 }
 

@@ -1,13 +1,14 @@
 
+
 let wf_action = "";
 
 frappe.query_reports["Work Flow Approval"] = {
     filters: [
         { fieldname: "user", label: "User", fieldtype: "Link", options: "User", default: frappe.session.user },
         { fieldname: "company", label: "Company", fieldtype: "Link", options: "Company" },
-        
+
         {
-            fieldname: "doctype", label: "Document Type", fieldtype: "Link", options: "DocType", reqd: 1,
+            fieldname: "doctype", label: "Document Type", fieldtype: "Link", options: "DocType",
             get_query: function() {
                 return {
                     query: "sf_trading.sf_trading.report.work_flow_approval.work_flow_approval.get_workflow_doctypes"
@@ -95,10 +96,14 @@ frappe.query_reports["Work Flow Approval"] = {
 
 function load_actions() {
     let doctype = frappe.query_report.get_filter_value("doctype");
-    if (!doctype) return;
+    let method = doctype
+        ? "sf_trading.sf_trading.report.work_flow_approval.work_flow_approval.get_workflow_actions"
+        : "sf_trading.sf_trading.report.work_flow_approval.work_flow_approval.get_all_workflow_actions";
+    let args = doctype ? { doctype } : {};
+
     frappe.call({
-        method: "sf_trading.sf_trading.report.work_flow_approval.work_flow_approval.get_workflow_actions",
-        args: { doctype },
+        method: method,
+        args: args,
         callback: r => {
             let $s = $("#wf-action-select").empty().append('<option value="">Workflow Action</option>');
             (r.message || []).forEach(a => $s.append(`<option value="${a}">${a}</option>`));
