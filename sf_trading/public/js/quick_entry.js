@@ -57,7 +57,7 @@ sf_trading.open_quick_entry_dialog = function (frm) {
 				fieldtype: 'Link',
 				options: 'Item',
 				get_query: function () {
-					return { filters: { "is_sales_item": 1 } };
+					return { filters: { "is_sales_item": 1, "disabled": 0 } };
 				}
 			},
 			{ fieldname: 'results', fieldtype: 'HTML' }
