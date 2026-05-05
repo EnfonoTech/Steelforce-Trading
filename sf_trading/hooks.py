@@ -29,6 +29,7 @@ app_license = "mit"
 app_include_js = [
 	"/assets/sf_trading/js/warehouse_stock_popup.js",
 	"/assets/sf_trading/js/last_selling_rate.js",
+	"/assets/sf_trading/js/quick_entry.js",
 	"/assets/sf_trading/js/create_customer.js",
 	"/assets/sf_trading/js/sales_invoice_barcode.js",
 	"/assets/sf_trading/js/sales_invoice_inter_company.js",
