@@ -4,8 +4,6 @@
 
 frappe.provide("sf_trading");
 
-console.log("sf_trading: quick_entry.js loaded");
-
 sf_trading.add_quick_entry_button = function (frm) {
 	if (!frm.fields_dict.items || !frm.fields_dict.items.grid) return;
 
@@ -82,13 +80,28 @@ sf_trading.open_quick_entry_dialog = function (frm) {
 	sf_trading.fetch_quick_entry_items(d);
 
 	setTimeout(() => {
-		if (d.fields_dict.item_code) {
-			d.fields_dict.item_code.df.onchange = function () {
-				sf_trading.fetch_quick_entry_items(d);
-			};
-			d.fields_dict.item_code.refresh();
-		}
-	}, 200);
+	if (d.fields_dict.item_code) {
+		d.fields_dict.item_code.df.change = function () {
+			const item_code = (d.get_value("item_code") || "")
+				.trim()
+				.toLowerCase();
+			d.$wrapper.find("tbody tr").each(function () {
+				let row = $(this);
+				let current_item = row
+					.find("td:eq(1)")
+					.text()
+					.trim()
+					.toLowerCase();
+				if (!item_code || current_item === item_code) {
+					row.show();
+				} else {
+					row.hide();
+				}
+			});
+		};
+
+	}
+}, 300);
 };
 
 sf_trading.fetch_quick_entry_items = function (dialog) {
