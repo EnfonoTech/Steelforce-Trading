@@ -49,6 +49,8 @@ class BranchConfiguration(Document):
 			if old_doc.get("company"):
 				delete_permission(user, "Company", old_doc.company)
 
+			delete_permission(user, "Branch", old_doc.branch)
+
 			for w in old_doc.warehouse:
 				delete_permission(user, "Warehouse", w.warehouse)
 
@@ -56,6 +58,7 @@ class BranchConfiguration(Document):
 				delete_permission(user, "Cost Center", c.cost_center)
 
 			# Remove role if user is not in any other Branch Configuration
+			# Find what role they had in this branch
 			old_role = None
 			for old_u in old_doc.user:
 				if old_u.user == user:
@@ -78,6 +81,8 @@ class BranchConfiguration(Document):
 			# Create company permission (marked as default so Session Defaults picks it)
 			if self.company:
 				create_permission(u.user, "Company", self.company, is_default=1)
+
+			create_permission(u.user, "Branch", self.branch)
 
 			for idx, w in enumerate(self.warehouse):
 				# First warehouse is the default
@@ -191,28 +196,10 @@ def _assign_role(user, role):
 	}).insert(ignore_permissions=True)
 
 
-def _set_module_profile_for_role(user, role):
-	"""Set Module Profile based on assigned role."""
-	role_profile_map = {
-		"Branch User":   "Branch User",
-		"Damage User":   "Damage User",
-		"Sales Manager": "Sales Manager",
-		"Stock User":    "Stock User",
-	}
-
-	profile_name = role_profile_map.get(role)
-	if not profile_name:
-		return
-
+def _set_module_profile(user, profile_name):
+	"""Set the Module Profile on a user if not already set."""
 	if not frappe.db.exists("Module Profile", profile_name):
-		frappe.msgprint(
-			f"Module Profile <b>{profile_name}</b> does not exist. "
-			f"Please create it in Setup > Module Profile.",
-			indicator="orange",
-			alert=True
-		)
 		return
-
 	current = frappe.db.get_value("User", user, "module_profile")
 	if current != profile_name:
 		frappe.db.set_value("User", user, "module_profile", profile_name)
