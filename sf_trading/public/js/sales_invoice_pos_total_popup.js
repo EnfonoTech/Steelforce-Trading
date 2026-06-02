@@ -161,10 +161,7 @@ frappe.ui.form.on("Sales Invoice", {
 		);
 	},
 	after_save: function (frm) {
-		// Prevent popup if flag is set (we're saving from popup)
 		if (frappe.flags.sf_trading_skip_payment_popup) return;
-		
-		// Prevent popup if already showing
 		if (frappe.flags.sf_trading_popup_showing) return;
 
 		// Credit: no payment popup (only "Do you want to Submit?" in before_save)
@@ -175,6 +172,8 @@ frappe.ui.form.on("Sales Invoice", {
 		// Non-credit: show payment popup after save
 		if (!frm.doc.grand_total || frm.doc.grand_total <= 0) return;
 		if (!frm.doc.name || frm.doc.name.startsWith("new-")) return;
+		if (frm.doc.docstatus !== 0) return;
+		if (frm.doc.custom_payment_mode === "Credit") return;
 
 		if (frm.doc.pos_profile) {
 			frappe.db.get_value(
@@ -255,7 +254,7 @@ function sf_trading_show_pos_total_popup(frm) {
 				},
 				error: function () {
 					frappe.flags.sf_trading_popup_showing = false;
-					frappe.msgprint(__("Error loading POS Profile. Please try again."));
+					frappe.msgprint(__("No enabled payment modes with a default account for this company."));
 				}
 			});
 		} else {
@@ -543,6 +542,63 @@ function sf_trading_render_dialog(frm) {
 				});
 				d.set_value("pay_" + idx, Math.max(0, flt(invoice_total - other, 2)));
 			});
+		});
+	});
+}
+
+// ── Credit Limit fetch ────────────────────────────────────────────────────────
+// When custom_payment_mode = "Credit", read the customer's credit limit from
+// the Customer Credit Limit child table and populate custom_credit_limit.
+
+frappe.ui.form.on("Sales Invoice", {
+	custom_payment_mode: function (frm) {
+		sf_set_credit_limit(frm);
+	},
+	customer: function (frm) {
+		sf_set_credit_limit(frm);
+	},
+	company: function (frm) {
+		sf_set_credit_limit(frm);
+	},
+});
+
+function sf_set_credit_limit(frm) {
+	if (frm.doc.custom_payment_mode !== "Credit" || !frm.doc.customer) {
+		frm.doc.custom_credit_limit = 0;
+		frm.refresh_field("custom_credit_limit");
+		return;
+	}
+
+	var company = frm.doc.company || frappe.defaults.get_default("company");
+
+	// Step 1: get credit limit from Customer doc
+	frappe.db.get_doc("Customer", frm.doc.customer).then(function (cust) {
+		var credit_limit = 0;
+		if (cust.credit_limits && cust.credit_limits.length) {
+			var row = cust.credit_limits.find(function (r) { return r.company === company; });
+			credit_limit = flt(row ? row.credit_limit : cust.credit_limits[0].credit_limit);
+		}
+		if (!credit_limit) {
+			frm.doc.custom_credit_limit = 0;
+			frm.refresh_field("custom_credit_limit");
+			return;
+		}
+		// Step 2: subtract grand_total of ALL submitted credit invoices (paid or unpaid)
+		frappe.db.get_list("Sales Invoice", {
+			filters: {
+				customer: frm.doc.customer,
+				company: company,
+				custom_payment_mode: "Credit",
+				docstatus: 1,
+			},
+			fields: ["grand_total"],
+			limit: 500,
+		}).then(function (invoices) {
+			var used = 0;
+			(invoices || []).forEach(function (inv) { used += flt(inv.grand_total); });
+			var available = Math.max(0, flt(credit_limit - used, 2));
+			frm.doc.custom_credit_limit = available;
+			frm.refresh_field("custom_credit_limit");
 		});
 	});
 }

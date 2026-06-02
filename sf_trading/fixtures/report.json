@@ -55,23 +55,17 @@
   "javascript": null,
   "json": null,
   "letter_head": null,
-  "modified": "2026-02-11 23:38:16.427918",
-  "module": "Accounts",
+  "modified": "2026-01-22 14:17:47.939758",
+  "module": "Sf Trading",
   "name": "DCR Report",
   "prepared_report": 0,
   "query": null,
-  "ref_doctype": "GL Entry",
+  "ref_doctype": "Sales Invoice",
   "reference_report": null,
   "report_name": "DCR Report",
   "report_script": null,
   "report_type": "Script Report",
   "roles": [
-   {
-    "parent": "DCR Report",
-    "parentfield": "roles",
-    "parenttype": "Report",
-    "role": "Accounts User"
-   },
    {
     "parent": "DCR Report",
     "parentfield": "roles",
@@ -82,7 +76,19 @@
     "parent": "DCR Report",
     "parentfield": "roles",
     "parenttype": "Report",
+    "role": "Accounts User"
+   },
+   {
+    "parent": "DCR Report",
+    "parentfield": "roles",
+    "parenttype": "Report",
     "role": "Auditor"
+   },
+   {
+    "parent": "DCR Report",
+    "parentfield": "roles",
+    "parenttype": "Report",
+    "role": "System Manager"
    }
   ],
   "timeout": 0

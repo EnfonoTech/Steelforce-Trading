@@ -2,6 +2,50 @@ import json
 
 import frappe
 from frappe import _
+from frappe.utils import flt
+
+
+@frappe.whitelist()
+def get_available_credit(customer: str, company: str) -> float:
+	"""
+	Return the available credit for a customer:
+	  credit_limit (from Customer Credit Limit child table)
+	  minus sum of outstanding_amount on submitted Sales Invoices
+	  where custom_payment_mode = 'Credit'.
+	"""
+	if not customer or not company:
+		return 0.0
+
+	# Credit limit defined on Customer for this company
+	row = frappe.db.get_value(
+		"Customer Credit Limit",
+		{"parent": customer, "company": company},
+		"credit_limit",
+	)
+	if row is None:
+		# Fallback: first credit limit regardless of company
+		row = frappe.db.get_value(
+			"Customer Credit Limit",
+			{"parent": customer},
+			"credit_limit",
+		)
+	credit_limit = flt(row)
+	if not credit_limit:
+		return 0.0
+
+	used = frappe.db.sql(
+		"""
+		SELECT IFNULL(SUM(grand_total), 0)
+		FROM `tabSales Invoice`
+		WHERE customer = %s
+		  AND company = %s
+		  AND custom_payment_mode = 'Credit'
+		  AND docstatus = 1
+		""",
+		(customer, company),
+	)[0][0]
+
+	return max(0.0, flt(credit_limit) - flt(used))
 
 
 @frappe.whitelist()
