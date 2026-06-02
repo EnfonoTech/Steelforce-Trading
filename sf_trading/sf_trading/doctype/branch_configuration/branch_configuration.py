@@ -1,7 +1,8 @@
-# User permissions are created for company, branch, warehouse and cost center.
+# User permissions are created for company, warehouse and cost center.
 # Company and first warehouse are set as is_default=1 so Frappe uses them as
 # the user's Session Defaults instead of falling back to global defaults.
-# The "Branch User" role is auto-assigned to users added here.
+# The role assigned in the User child table is auto-assigned to the user.
+# A Module Profile matching the role is also applied automatically.
 
 import frappe
 from frappe.model.document import Document
@@ -98,15 +99,12 @@ class BranchConfiguration(Document):
 				if company_default_cc:
 					create_permission(u.user, "Cost Center", company_default_cc, is_default=0)
 
-			# Auto-assign the selected role (Branch User, Warehouse User, or Stock User)
+			# Auto-assign the selected role
 			selected_role = u.get("role") or BRANCH_USER_ROLE
 			_assign_role(u.user, selected_role)
 
-			# Auto-set Module Profile to restrict sidebar modules
-			if selected_role == BRANCH_USER_ROLE:
-				_set_module_profile(u.user, "Branch User")
-			elif selected_role == "Damage User":
-				_set_module_profile(u.user, "Damage User")
+			# Auto-set Module Profile based on role
+			_set_module_profile_for_role(u.user, selected_role)
 
 
 def create_permission(user, allow, value, is_default=0):
@@ -180,8 +178,7 @@ def _assign_role(user, role):
 	if not role or not frappe.db.exists("Role", role):
 		return
 
-	# Desk roles (Branch User / Stock User / Damage User / Stock Manager) require
-	# System User user_type; Website Users silently lose role assignments.
+	# Desk roles require System User user_type; Website Users silently lose role assignments.
 	_ensure_system_user(user)
 
 	# Check if role already assigned
