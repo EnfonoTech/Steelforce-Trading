@@ -69,7 +69,7 @@ frappe.ui.form.on("Sales Invoice", {
 					frm.doc.docstatus === 0 &&
 					frm.doc.name && !String(frm.doc.name).startsWith("new-") &&
 					frm.doc.custom_payment_mode !== "Credit" &&
-					frm.doc.grand_total > 0
+					Math.abs(flt(frm.doc.grand_total)) > 0
 				) {
 					if (frm.doc.pos_profile) {
 						return frappe.db.get_value(
@@ -102,7 +102,7 @@ frappe.ui.form.on("Sales Invoice", {
 					frm.doc.docstatus === 0 &&
 					frm.doc.name && !String(frm.doc.name).startsWith("new-") &&
 					frm.doc.custom_payment_mode !== "Credit" &&
-					frm.doc.grand_total > 0
+					Math.abs(flt(frm.doc.grand_total)) > 0
 				) {
 					function show_popup() {
 						sf_trading_show_pos_total_popup(frm);
@@ -170,7 +170,7 @@ frappe.ui.form.on("Sales Invoice", {
 		}
 
 		// Non-credit: show payment popup after save
-		if (!frm.doc.grand_total || frm.doc.grand_total <= 0) return;
+		if (!frm.doc.grand_total || Math.abs(flt(frm.doc.grand_total)) <= 0) return;
 		if (!frm.doc.name || frm.doc.name.startsWith("new-")) return;
 		if (frm.doc.docstatus !== 0) return;
 		if (frm.doc.custom_payment_mode === "Credit") return;
@@ -312,7 +312,7 @@ function sf_trading_render_dialog(frm) {
 		return;
 	}
 
-	const invoice_total = flt(frm.doc.rounded_total || frm.doc.grand_total || 0);
+	const invoice_total = Math.abs(flt(frm.doc.rounded_total || frm.doc.grand_total || 0));
 	const currency = frm.doc.currency || "";
 	
 	// Validate invoice total

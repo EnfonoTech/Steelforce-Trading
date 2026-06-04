@@ -173,7 +173,7 @@ def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list):
 		if amount <= 0:
 			continue
 
-		if amount - outstanding > 0.5:
+		if amount - abs(outstanding) > 0.5:
 			frappe.throw(
 				_(
 					"Payment amount {0} is greater than outstanding amount {1} for invoice {2}."
@@ -185,16 +185,28 @@ def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list):
 		# Set the specific mode of payment and amount
 		pe.mode_of_payment = row["mode_of_payment"]
 
-		# paid_to must be the default account from Mode of Payment (get_payment_entry uses SI's mode, not this row's)
 		bank_cash = get_bank_cash_account(row["mode_of_payment"], si.company)
-		pe.paid_to = bank_cash.get("account")
-		if pe.paid_to:
-			acc = frappe.get_cached_value(
-				"Account", pe.paid_to, ["account_currency", "account_type"], as_dict=True
-			)
-			if acc:
-				pe.paid_to_account_currency = acc.account_currency
-				pe.paid_to_account_type = acc.account_type
+		bank_account = bank_cash.get("account")
+
+		# For return SIs, payment_type is "Pay": cash/bank goes on paid_from.
+		# For normal SIs, payment_type is "Receive": cash/bank goes on paid_to.
+		if pe.payment_type == "Pay":
+			pe.paid_from = bank_account
+			if bank_account:
+				acc = frappe.get_cached_value(
+					"Account", bank_account, ["account_currency", "account_type"], as_dict=True
+				)
+				if acc:
+					pe.paid_from_account_currency = acc.account_currency
+		else:
+			pe.paid_to = bank_account
+			if bank_account:
+				acc = frappe.get_cached_value(
+					"Account", bank_account, ["account_currency", "account_type"], as_dict=True
+				)
+				if acc:
+					pe.paid_to_account_currency = acc.account_currency
+					pe.paid_to_account_type = acc.account_type
 
 		# paid_amount / received_amount in payment currency
 		pe.paid_amount = amount
@@ -204,7 +216,8 @@ def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list):
 		if pe.references:
 			# Assume single reference row for this invoice
 			ref = pe.references[0]
-			ref.allocated_amount = amount
+			# For "Pay" type (return SI), allocated_amount must be negative
+			ref.allocated_amount = -amount if pe.payment_type == "Pay" else amount
 
 		# Posting date same as invoice if not set
 		if not pe.posting_date:
