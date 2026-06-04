@@ -34,6 +34,7 @@ app_include_js = [
 	"/assets/sf_trading/js/sales_invoice_barcode.js",
 	"/assets/sf_trading/js/sales_invoice_inter_company.js",
 	"/assets/sf_trading/js/sales_invoice_pos_total_popup.js",
+	"/assets/sf_trading/js/sales_invoice_credit.js",
     "/assets/sf_trading/js/work_flow_rejection.js",
     "/assets/sf_trading/js/workflow_approval_shortcut.js",
     "/assets/sf_trading/js/sales_invoice_item_search.js",
@@ -140,9 +141,9 @@ app_include_js = [
 # ---------------
 # Override standard doctype classes
 
-# override_doctype_class = {
-# 	"ToDo": "custom_app.overrides.CustomToDo"
-# }
+override_doctype_class = {
+	"Sales Invoice": "sf_trading.overrides.sales_invoice_class.CustomSalesInvoice"
+}
 
 # Document Events
 # ---------------
@@ -304,6 +305,7 @@ fixtures = [
 	},
 	{
 		"doctype": "Property Setter",
+<<<<<<< HEAD
 		"filters": [["name",
                 "in",
                 (
@@ -482,5 +484,12 @@ fixtures = [
 					"Sales Order-po_no-hidden",
 				)
                 ]]
+=======
+		"filters": [["name", "in", (
+			"Sales Invoice Item-barcode-in_list_view",
+			"Sales Taxes and Charges-cost_center-ignore_user_permissions",
+			"Sales Invoice Item-cost_center-ignore_user_permissions",
+		)]]
+>>>>>>> 5b8d7fe (feat(sales-invoice): cost center override, credit mode validation, print guard)
 	}
 ]

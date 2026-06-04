@@ -71,19 +71,25 @@ frappe.ui.form.on("Sales Invoice", {
 					frm.doc.custom_payment_mode !== "Credit" &&
 					Math.abs(flt(frm.doc.grand_total)) > 0
 				) {
-					if (frm.doc.pos_profile) {
-						return frappe.db.get_value(
-							"POS Profile",
-							frm.doc.pos_profile,
-							"disable_grand_total_to_default_mop"
-						).then(function (r) {
-							if (r && r.message === 1) return do_submit_without_confirm();
-							sf_trading_show_pos_total_popup(frm);
-							return Promise.resolve();
-						});
-					}
-					sf_trading_show_pos_total_popup(frm);
-					return Promise.resolve();
+					// Save first so server-side validations run before popup shows
+					frappe.flags.sf_trading_skip_payment_popup = true;
+					return frm.save("Save").then(function () {
+						frappe.flags.sf_trading_skip_payment_popup = false;
+						if (frm.doc.docstatus !== 0) return;
+						if (frm.doc.pos_profile) {
+							return frappe.db.get_value(
+								"POS Profile",
+								frm.doc.pos_profile,
+								"disable_grand_total_to_default_mop"
+							).then(function (r) {
+								if (r && r.message === 1) return do_submit_without_confirm();
+								sf_trading_show_pos_total_popup(frm);
+							});
+						}
+						sf_trading_show_pos_total_popup(frm);
+					}).catch(function () {
+						frappe.flags.sf_trading_skip_payment_popup = false;
+					});
 				}
 				return do_submit_without_confirm();
 			};
@@ -104,21 +110,25 @@ frappe.ui.form.on("Sales Invoice", {
 					frm.doc.custom_payment_mode !== "Credit" &&
 					Math.abs(flt(frm.doc.grand_total)) > 0
 				) {
-					function show_popup() {
+					// Save first so server-side validations run before popup shows
+					frappe.flags.sf_trading_skip_payment_popup = true;
+					return orig("Save").then(function () {
+						frappe.flags.sf_trading_skip_payment_popup = false;
+						if (frm.doc.docstatus !== 0) return;
+						if (frm.doc.pos_profile) {
+							return frappe.db.get_value(
+								"POS Profile",
+								frm.doc.pos_profile,
+								"disable_grand_total_to_default_mop"
+							).then(function (r) {
+								if (r && r.message === 1) return orig(save_action, callback, btn, on_error);
+								sf_trading_show_pos_total_popup(frm);
+							});
+						}
 						sf_trading_show_pos_total_popup(frm);
-						return Promise.resolve();
-					}
-					if (frm.doc.pos_profile) {
-						return frappe.db.get_value(
-							"POS Profile",
-							frm.doc.pos_profile,
-							"disable_grand_total_to_default_mop"
-						).then(function (r) {
-							if (r && r.message === 1) return orig(save_action, callback, btn, on_error);
-							return show_popup();
-						});
-					}
-					return show_popup();
+					}).catch(function () {
+						frappe.flags.sf_trading_skip_payment_popup = false;
+					});
 				}
 				return orig(save_action, callback, btn, on_error).finally(function () {
 					delete frappe.flags._sf_save_action;
@@ -148,8 +158,14 @@ frappe.ui.form.on("Sales Invoice", {
 			function () {
 				frm.save("Submit").then(function () {
 					frm._asked_to_submit = false;
-					// Open print immediately after successful submit from confirm dialog
-					sf_trading_open_invoice_print(frm);
+					// Only print if submission actually succeeded
+					if (
+						frm.doc.docstatus === 1 &&
+						frm.doc.name &&
+						!String(frm.doc.name).startsWith("new-")
+					) {
+						sf_trading_open_invoice_print(frm);
+					}
 					frm.reload_doc();
 				});
 			},
@@ -470,7 +486,8 @@ function sf_trading_render_dialog(frm) {
 			frm
 				.save("Submit")
 				.then(() => {
-					// Open print window immediately after successful submit
+					// Only print and create payments if submission actually succeeded
+					if (frm.doc.docstatus !== 1) return;
 					sf_trading_open_invoice_print(frm);
 					create_payments();
 				})

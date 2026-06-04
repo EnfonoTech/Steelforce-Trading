@@ -1,6 +1,54 @@
 import frappe
 
 
+def override_cost_center_from_branch(doc, method=None):
+	"""before_validate: replace any cost center the user cannot access with
+	their default branch cost center — covers doc header, items, and tax rows.
+	Bypassed for Administrator and Guest.
+	"""
+	if frappe.session.user in ("Administrator", "Guest"):
+		return
+
+	user_cost_center = _get_user_default_cost_center()
+	if not user_cost_center:
+		return
+
+	def fix(cc):
+		if cc and not _user_has_cost_center_access(cc):
+			return user_cost_center
+		if not cc:
+			return user_cost_center
+		return cc
+
+	if "cost_center" in doc.as_dict():
+		doc.cost_center = fix(doc.get("cost_center"))
+
+	for item in doc.get("items") or []:
+		if hasattr(item, "cost_center"):
+			item.cost_center = fix(item.cost_center)
+
+	for tax in doc.get("taxes") or []:
+		if hasattr(tax, "cost_center"):
+			tax.cost_center = fix(tax.cost_center)
+
+
+def _get_user_default_cost_center():
+	return frappe.db.get_value(
+		"User Permission",
+		{"user": frappe.session.user, "allow": "Cost Center", "is_default": 1},
+		"for_value",
+	)
+
+
+def _user_has_cost_center_access(cost_center):
+	if not cost_center:
+		return True
+	return frappe.db.exists(
+		"User Permission",
+		{"user": frappe.session.user, "allow": "Cost Center", "for_value": cost_center},
+	)
+
+
 def _resolve_user_branch(user, company=None):
 	"""Return the most relevant Branch Configuration name for the user.
 
