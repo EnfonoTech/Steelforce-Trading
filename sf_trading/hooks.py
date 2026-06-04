@@ -26,18 +26,19 @@ app_license = "mit"
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/sf_trading/css/sf_trading.css"
+from sf_trading import __version__ as _v
 app_include_js = [
-	"/assets/sf_trading/js/warehouse_stock_popup.js",
-	"/assets/sf_trading/js/last_selling_rate.js",
-	"/assets/sf_trading/js/quick_entry.js",
-	"/assets/sf_trading/js/create_customer.js",
-	"/assets/sf_trading/js/sales_invoice_barcode.js",
-	"/assets/sf_trading/js/sales_invoice_inter_company.js",
-	"/assets/sf_trading/js/sales_invoice_pos_total_popup.js",
-	"/assets/sf_trading/js/sales_invoice_credit.js",
-    "/assets/sf_trading/js/work_flow_rejection.js",
-    "/assets/sf_trading/js/workflow_approval_shortcut.js",
-    "/assets/sf_trading/js/sales_invoice_item_search.js",
+	f"/assets/sf_trading/js/warehouse_stock_popup.js?{_v}",
+	f"/assets/sf_trading/js/last_selling_rate.js?{_v}",
+	f"/assets/sf_trading/js/quick_entry.js?{_v}",
+	f"/assets/sf_trading/js/create_customer.js?{_v}",
+	f"/assets/sf_trading/js/sales_invoice_barcode.js?{_v}",
+	f"/assets/sf_trading/js/sales_invoice_inter_company.js?{_v}",
+	f"/assets/sf_trading/js/sales_invoice_pos_total_popup.js?{_v}",
+	f"/assets/sf_trading/js/sales_invoice_credit.js?{_v}",
+	f"/assets/sf_trading/js/work_flow_rejection.js?{_v}",
+	f"/assets/sf_trading/js/workflow_approval_shortcut.js?{_v}",
+	f"/assets/sf_trading/js/sales_invoice_item_search.js?{_v}",
 ]
 
 # include js, css files in header of web template
