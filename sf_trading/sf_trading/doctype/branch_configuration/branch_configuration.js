@@ -45,4 +45,13 @@ function set_child_filters(frm) {
 	frm.set_query("mode_of_payment", "mode_of_payment", function () {
 		return { filters: { type: ["in", ["Cash", "Bank"]] } };
 	});
+
+	// Filter roles shown in user child table
+	frm.set_query("role", "user", function () {
+		return {
+			filters: {
+				name: ["in", ["Branch User", "Sales Manager", "Damage User", "Stock User"]]
+			}
+		};
+	});
 }

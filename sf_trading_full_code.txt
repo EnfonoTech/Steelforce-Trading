@@ -1,0 +1,2559 @@
+================================================================================
+SF TRADING - FULL SOURCE CODE EXPORT
+Generated: 2026-06-03
+App: sf_trading | Publisher: Enfono | Description: Trading Feature for Steel force
+================================================================================
+
+================================================================================
+FILE: pyproject.toml
+================================================================================
+[project]
+name = "sf_trading"
+authors = [
+    { name = "enfono", email = "ramees@enfono.com"}
+]
+description = "Trading Feature for Steel force"
+requires-python = ">=3.10"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = [
+    # "frappe~=15.0.0" # Installed and managed by bench.
+]
+
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.bench.dev-dependencies]
+# package_name = "~=1.1.0"
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["F","E","W","I","UP","B","RUF"]
+ignore = ["B017","B018","B023","B904","E101","E402","E501","E741","F401","F403","F405","F722","W191"]
+typing-modules = ["frappe.types.DF"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "tab"
+docstring-code-format = true
+
+================================================================================
+FILE: sf_trading/__init__.py
+================================================================================
+__version__ = "0.0.1"
+
+================================================================================
+FILE: sf_trading/hooks.py
+================================================================================
+app_name = "sf_trading"
+app_title = "Sf Trading"
+app_publisher = "enfono"
+app_description = "Trading Feature for Steel force"
+app_email = "ramees@enfono.com"
+app_license = "mit"
+
+app_include_js = [
+	"/assets/sf_trading/js/warehouse_stock_popup.js",
+	"/assets/sf_trading/js/last_selling_rate.js",
+	"/assets/sf_trading/js/create_customer.js",
+	"/assets/sf_trading/js/sales_invoice_barcode.js",
+	"/assets/sf_trading/js/sales_invoice_inter_company.js",
+	"/assets/sf_trading/js/sales_invoice_pos_total_popup.js",
+    "/assets/sf_trading/js/work_flow_rejection.js",
+    "/assets/sf_trading/js/workflow_approval_shortcut.js",
+]
+
+doc_events = {
+	"Sales Invoice": {
+		"before_validate": "sf_trading.sales_invoice_override.before_validate",
+		"on_submit": "sf_trading.inter_company.sales_invoice_on_submit",
+	},
+	"Purchase Invoice": {
+		"before_validate": "sf_trading.inter_company.purchase_invoice_before_validate",
+	},
+}
+
+fixtures = [
+	{
+		"doctype": "Custom Field",
+		"filters": [
+			[
+				"name",
+				"in",
+				(
+					"Customer-custom_commercial_registration_number",
+					"Sales Invoice-inter_company_branch",
+				)
+			]
+		]
+	},
+	{
+		"doctype": "Report",
+		"filters": [
+			[
+				"name",
+				"in",
+				(
+					"DCR Report",
+					"DCR Detailed",
+				)
+			]
+		]
+	},
+	{
+		"doctype": "Property Setter",
+		"filters": [["name", "=", "Sales Invoice Item-barcode-in_list_view"]]
+	}
+]
+
+================================================================================
+FILE: sf_trading/inter_company.py
+================================================================================
+"""
+Auto-create draft Inter Company Purchase Invoice (from Sales Invoice) on submit.
+Uses built-in methods, avoids duplicates.
+"""
+
+from __future__ import annotations
+
+import frappe
+from frappe import _
+from frappe.utils import cint
+
+
+def sales_invoice_on_submit(doc, method=None):
+	"""Auto-create draft Inter Company Purchase Invoice on SI submit (no duplicate)."""
+	if not doc.is_internal_customer or not doc.represents_company:
+		return
+	if frappe.db.exists(
+		"Purchase Invoice",
+		{"inter_company_invoice_reference": doc.name},
+	):
+		return
+
+	try:
+		import erpnext
+		from erpnext.accounts.doctype.sales_invoice.sales_invoice import (
+			make_inter_company_purchase_invoice,
+		)
+
+		frappe.flags.in_inter_company_pi_creation = True
+		from sf_trading.overrides.get_item_details import apply_patch, restore_patch
+		from sf_trading.overrides.defaults import apply_defaults_patch, restore_defaults_patch
+
+		apply_patch()
+		apply_defaults_patch()
+		try:
+			pi = make_inter_company_purchase_invoice(doc.name)
+			pi.bill_no = doc.name
+			pi.bill_date = doc.posting_date
+			branch_data = _get_branch_data(doc, pi.company)
+			frappe.flags._inter_company_pi_branch_data = branch_data
+			if branch_data.get("cost_center"):
+				pi.cost_center = branch_data["cost_center"]
+				for item in pi.items:
+					if hasattr(item, "cost_center"):
+						item.cost_center = branch_data["cost_center"]
+			if cint(pi.update_stock):
+				warehouse = branch_data.get("warehouse")
+				if warehouse and _warehouse_belongs_to_company(warehouse, pi.company):
+					pi.set_warehouse = warehouse
+					for item in pi.items:
+						if hasattr(item, "warehouse"):
+							item.warehouse = warehouse
+				else:
+					pi.set_warehouse = None
+					for item in pi.items:
+						if hasattr(item, "warehouse"):
+							item.warehouse = None
+					branch_name = doc.get("inter_company_branch") or ""
+					frappe.throw(
+						_(
+							"Configure Warehouse in Inter Company Branch {0} for company {1} to create Purchase Invoice with stock update."
+						).format(branch_name, pi.company),
+					)
+			_apply_default_purchase_taxes(pi, branch_data)
+			_clear_invalid_session_defaults(pi)
+			pi.insert(ignore_permissions=True)
+			frappe.msgprint(
+				_("Inter Company Purchase Invoice {0} created as draft.").format(pi.name),
+				alert=True,
+			)
+		finally:
+			restore_patch()
+			restore_defaults_patch()
+			frappe.flags.in_inter_company_pi_creation = False
+			frappe.flags.pop("_inter_company_pi_branch_data", None)
+	except Exception as e:
+		frappe.log_error(title="Inter Company PI auto-create", message=frappe.get_traceback())
+		frappe.msgprint(
+			_("Could not auto-create Inter Company Purchase Invoice: {0}").format(str(e)),
+			indicator="orange",
+			alert=True,
+		)
+
+
+def _apply_default_purchase_taxes(pi, branch_data: dict) -> None:
+	from erpnext.controllers.accounts_controller import get_taxes_and_charges
+
+	company = pi.company
+	template = frappe.db.get_value(
+		"Purchase Taxes and Charges Template",
+		{"is_default": 1, "company": company},
+		"name",
+	)
+	if not template:
+		return
+	pi.taxes_and_charges = template
+	taxes = get_taxes_and_charges("Purchase Taxes and Charges Template", template)
+	if taxes:
+		for row in list(pi.taxes or []):
+			pi.remove(row)
+		pi.extend("taxes", taxes)
+		if branch_data.get("cost_center"):
+			for row in pi.taxes or []:
+				if hasattr(row, "cost_center") and not row.cost_center:
+					row.cost_center = branch_data["cost_center"]
+
+
+def _get_branch_data(doc, buying_company: str) -> dict:
+	import erpnext
+
+	result = {}
+	branch = doc.get("inter_company_branch")
+	if branch and buying_company:
+		row = frappe.db.get_value(
+			"Inter Company Branch Cost Center",
+			{"parent": branch, "company": buying_company},
+			["cost_center", "warehouse"],
+			as_dict=True,
+		)
+		if row:
+			if row.cost_center:
+				result["cost_center"] = row.cost_center
+			if row.warehouse:
+				result["warehouse"] = row.warehouse
+	if "cost_center" not in result:
+		result["cost_center"] = erpnext.get_default_cost_center(buying_company)
+	return result
+
+
+def purchase_invoice_before_validate(doc, method=None):
+	if not getattr(frappe.flags, "in_inter_company_pi_creation", False):
+		return
+	_clear_invalid_session_defaults(doc)
+	_branch_data = getattr(frappe.flags, "_inter_company_pi_branch_data", None)
+	if _branch_data:
+		company = doc.company
+		if _branch_data.get("cost_center") and _cost_center_belongs_to_company(_branch_data["cost_center"], company):
+			doc.cost_center = _branch_data["cost_center"]
+			for item in doc.items or []:
+				if hasattr(item, "cost_center"):
+					item.cost_center = _branch_data["cost_center"]
+		if cint(doc.update_stock) and _branch_data.get("warehouse") and _warehouse_belongs_to_company(_branch_data["warehouse"], company):
+			doc.set_warehouse = _branch_data["warehouse"]
+			for item in doc.items or []:
+				if hasattr(item, "warehouse"):
+					item.warehouse = _branch_data["warehouse"]
+
+
+def _clear_invalid_session_defaults(pi) -> None:
+	company = pi.company
+	for attr in ("set_warehouse", "set_from_warehouse", "rejected_warehouse"):
+		val = pi.get(attr)
+		if val and not _warehouse_belongs_to_company(val, company):
+			pi.set(attr, None)
+	if pi.get("cost_center") and not _cost_center_belongs_to_company(pi.cost_center, company):
+		pi.cost_center = None
+	for item in pi.items or []:
+		for attr in ("warehouse", "from_warehouse", "target_warehouse", "rejected_warehouse"):
+			if hasattr(item, attr) and item.get(attr) and not _warehouse_belongs_to_company(item.get(attr), company):
+				item.set(attr, None)
+		if hasattr(item, "cost_center") and item.get("cost_center") and not _cost_center_belongs_to_company(item.cost_center, company):
+			item.cost_center = None
+
+
+def _cost_center_belongs_to_company(cost_center: str, company: str) -> bool:
+	if not cost_center or not company:
+		return False
+	cc_company = frappe.db.get_value("Cost Center", cost_center, "company", cache=True)
+	return cc_company == company
+
+
+def _warehouse_belongs_to_company(warehouse: str, company: str) -> bool:
+	if not warehouse or not company:
+		return False
+	wh_company = frappe.db.get_value("Warehouse", warehouse, "company", cache=True)
+	return wh_company == company
+
+================================================================================
+FILE: sf_trading/sales_invoice_override.py
+================================================================================
+"""
+Sales Invoice overrides: remove empty item rows before validation (barcode scanner scan row).
+"""
+
+from __future__ import annotations
+
+import frappe
+
+
+def before_validate(doc, method=None):
+	"""Remove item rows that have no item_code (leftover scan row from barcode). Runs before validation."""
+	if not doc.get("items"):
+		return
+	to_remove = [row for row in doc.items if not (row.get("item_code") or "").strip()]
+	for row in to_remove:
+		doc.remove(row)
+	for i, row in enumerate(doc.items, start=1):
+		row.idx = i
+
+================================================================================
+FILE: sf_trading/overrides/defaults.py
+================================================================================
+"""
+Override frappe.defaults.get_defaults to exclude warehouse-related keys when creating
+inter-company Purchase Invoice. Prevents session defaults from being applied.
+"""
+
+import frappe
+
+_original_get_defaults = None
+
+
+def _patched_get_defaults(user=None):
+	global _original_get_defaults
+	defaults = _original_get_defaults(user)
+	if not getattr(frappe.flags, "in_inter_company_pi_creation", False):
+		return defaults
+	for key in ("default_warehouse", "warehouse"):
+		defaults.pop(key, None)
+	return defaults
+
+
+def apply_defaults_patch():
+	global _original_get_defaults
+	import frappe.defaults as defaults_mod
+
+	if _original_get_defaults is None:
+		_original_get_defaults = defaults_mod.get_defaults
+	defaults_mod.get_defaults = _patched_get_defaults
+
+
+def restore_defaults_patch():
+	global _original_get_defaults
+	import frappe.defaults as defaults_mod
+
+	if _original_get_defaults is not None:
+		defaults_mod.get_defaults = _original_get_defaults
+
+================================================================================
+FILE: sf_trading/overrides/get_item_details.py
+================================================================================
+"""
+Override get_item_warehouse to skip session/default warehouse when creating
+inter-company Purchase Invoice. Ensures PI only gets warehouse from Inter Company Branch.
+"""
+
+import frappe
+from erpnext.setup.doctype.brand.brand import get_brand_defaults
+from erpnext.setup.doctype.item_group.item_group import get_item_group_defaults
+from erpnext.stock.doctype.item.item import get_item_defaults
+
+
+def _patched_get_item_warehouse(item, args, overwrite_warehouse, defaults=None):
+	if not defaults:
+		defaults = frappe._dict(
+			{
+				"item_defaults": get_item_defaults(item.name, args.company),
+				"item_group_defaults": get_item_group_defaults(item.name, args.company),
+				"brand_defaults": get_brand_defaults(item.name, args.company),
+			}
+		)
+
+	if overwrite_warehouse or not args.warehouse:
+		warehouse = (
+			args.get("set_warehouse")
+			or defaults.item_defaults.get("default_warehouse")
+			or defaults.item_group_defaults.get("default_warehouse")
+			or defaults.brand_defaults.get("default_warehouse")
+			or args.get("warehouse")
+		)
+
+		if not warehouse and not getattr(frappe.flags, "in_inter_company_pi_creation", False):
+			_defaults = frappe.defaults.get_defaults() or {}
+			warehouse_exists = frappe.db.exists(
+				"Warehouse", {"name": _defaults.get("default_warehouse"), "company": args.company}
+			)
+			if _defaults.get("default_warehouse") and warehouse_exists:
+				warehouse = _defaults.default_warehouse
+
+	else:
+		warehouse = args.get("warehouse")
+
+	if not warehouse and not getattr(frappe.flags, "in_inter_company_pi_creation", False):
+		default_warehouse = frappe.db.get_single_value("Stock Settings", "default_warehouse")
+		if default_warehouse and frappe.db.get_value("Warehouse", default_warehouse, "company") == args.company:
+			return default_warehouse
+
+	return warehouse
+
+
+def apply_patch():
+	from erpnext.stock import get_item_details as gid
+
+	if not hasattr(gid, "_original_get_item_warehouse"):
+		gid._original_get_item_warehouse = gid.get_item_warehouse
+	gid.get_item_warehouse = _patched_get_item_warehouse
+
+
+def restore_patch():
+	from erpnext.stock import get_item_details as gid
+
+	if hasattr(gid, "_original_get_item_warehouse"):
+		gid.get_item_warehouse = gid._original_get_item_warehouse
+
+================================================================================
+FILE: sf_trading/api/customer.py
+================================================================================
+import frappe
+from frappe import _
+from frappe.utils import cstr
+from frappe.core.doctype.user_permission.user_permission import get_permitted_documents
+
+
+def _get_default_customer_group():
+	permitted = get_permitted_documents("Customer Group")
+	return (permitted[0] if permitted else None) or frappe.db.get_single_value("Selling Settings", "customer_group") or "All Customer Groups"
+
+
+def _get_default_territory():
+	permitted = get_permitted_documents("Territory")
+	return (permitted[0] if permitted else None) or frappe.db.get_single_value("Selling Settings", "territory") or "All Territories"
+
+
+@frappe.whitelist()
+def create_customer_with_address(
+	customer_name,
+	mobile_no=None,
+	customer_type="Individual",
+	email_id=None,
+	country=None,
+	default_currency=None,
+	tax_id=None,
+	commercial_registration_number=None,
+	address_line1=None,
+	building_number=None,
+	city=None,
+	state=None,
+	pincode=None,
+	district=None
+):
+	if not customer_name:
+		frappe.throw(_("Customer Name is required"))
+	if not mobile_no:
+		frappe.throw(_("Mobile No is required"))
+
+	if tax_id:
+		missing_fields = []
+		if not address_line1:
+			missing_fields.append(_("Address Line 1"))
+		if not city:
+			missing_fields.append(_("City"))
+		if not building_number:
+			missing_fields.append(_("Building Number"))
+		if not district:
+			missing_fields.append(_("District / Area"))
+		if not pincode:
+			missing_fields.append(_("Postal Code"))
+
+		if missing_fields:
+			frappe.throw(_("The following fields are mandatory when VAT Registration Number is provided (B2B customer requirement): {0}").format(", ".join(missing_fields)))
+
+	if not country or not default_currency:
+		permitted_companies = get_permitted_documents("Company")
+		company = (permitted_companies[0] if permitted_companies else None) or frappe.defaults.get_user_default("company")
+		if not company:
+			frappe.throw(_("Please set a default company"))
+		company_doc = frappe.get_cached_doc("Company", company)
+		if not country:
+			country = company_doc.country or "Saudi Arabia"
+		if not default_currency:
+			default_currency = company_doc.default_currency
+
+	customer_doc = frappe.get_doc({
+		"doctype": "Customer",
+		"customer_name": customer_name,
+		"customer_type": customer_type or "Individual",
+		"customer_group": _get_default_customer_group(),
+		"territory": _get_default_territory(),
+		"default_currency": default_currency,
+		"tax_id": tax_id,
+		"mobile_no": mobile_no,
+		"email_id": email_id
+	})
+
+	if tax_id and frappe.db.has_column("Customer", "custom_vat_registration_number"):
+		customer_doc.custom_vat_registration_number = tax_id
+
+	if commercial_registration_number and frappe.db.has_column("Customer", "custom_commercial_registration_number"):
+		customer_doc.custom_commercial_registration_number = str(commercial_registration_number).strip()
+
+	customer_doc.insert(ignore_permissions=True)
+	customer_name_id = customer_doc.name
+
+	address_name = None
+	if address_line1 or city:
+		address_doc = frappe.get_doc({
+			"doctype": "Address",
+			"address_title": customer_name,
+			"address_type": "Billing",
+			"address_line1": address_line1 or "",
+			"city": city or "",
+			"state": state or "",
+			"country": country,
+			"pincode": pincode or "",
+			"is_primary_address": 1,
+			"is_shipping_address": 1
+		})
+
+		if building_number:
+			if frappe.db.has_column("Address", "custom_building_number"):
+				address_doc.custom_building_number = building_number
+
+		if district:
+			if frappe.db.has_column("Address", "custom_area"):
+				address_doc.custom_area = district
+
+		address_doc.append("links", {
+			"link_doctype": "Customer",
+			"link_name": customer_name_id
+		})
+
+		address_doc.insert(ignore_permissions=True)
+		address_name = address_doc.name
+
+		frappe.db.set_value("Customer", customer_name_id, "customer_primary_address", address_name)
+
+	frappe.db.commit()
+
+	return {
+		"customer": customer_name_id,
+		"customer_name": customer_name,
+		"address": address_name,
+		"message": _("Customer {0} created successfully").format(customer_name)
+	}
+
+================================================================================
+FILE: sf_trading/api/last_selling_rate.py
+================================================================================
+import frappe
+from frappe import _
+
+
+def _permission_conditions():
+	from frappe.core.doctype.user_permission.user_permission import get_permitted_documents
+
+	where_parts = []
+	params = {}
+
+	permitted_companies = get_permitted_documents("Company")
+	if permitted_companies:
+		where_parts.append("si.company IN %(permitted_companies)s")
+		params["permitted_companies"] = permitted_companies
+
+	permitted_cost_centers = get_permitted_documents("Cost Center")
+	if permitted_cost_centers:
+		where_parts.append(
+			"(sii.cost_center IN %(permitted_cost_centers)s "
+			"OR (IFNULL(sii.cost_center, '') = '' AND si.cost_center IN %(permitted_cost_centers)s))"
+		)
+		params["permitted_cost_centers"] = permitted_cost_centers
+
+	return where_parts, params
+
+
+@frappe.whitelist()
+def get_last_selling_rate(item_code, company=None):
+	if not item_code:
+		frappe.throw(_("Item Code is required"))
+
+	if not company:
+		company = frappe.defaults.get_user_default("company")
+
+	filters = {
+		"item_code": item_code,
+		"docstatus": 1
+	}
+
+	if company:
+		sales_invoices = frappe.get_all(
+			"Sales Invoice",
+			filters={"company": company, "docstatus": 1},
+			fields=["name"],
+			pluck="name"
+		)
+
+		if not sales_invoices:
+			return None
+
+		filters["parent"] = ["in", sales_invoices]
+
+	perm_where, perm_params = _permission_conditions()
+	perm_sql = " AND " + " AND ".join(perm_where) if perm_where else ""
+	sql_params = {"item_code": item_code, **perm_params}
+
+	last_sale = frappe.db.sql("""
+		SELECT
+			sii.rate AS selling_rate,
+			sii.base_rate AS base_selling_rate,
+			sii.amount AS amount,
+			sii.qty AS qty,
+			sii.uom AS uom,
+			si.posting_date AS posting_date,
+			si.name AS sales_invoice,
+			si.customer AS customer,
+			si.customer_name AS customer_name,
+			si.currency AS currency,
+			si.company AS company
+		FROM `tabSales Invoice Item` sii
+		INNER JOIN `tabSales Invoice` si ON si.name = sii.parent
+		WHERE sii.item_code = %(item_code)s
+			AND si.docstatus = 1
+			{perm_sql}
+		ORDER BY si.posting_date DESC, si.name DESC, sii.idx ASC
+		LIMIT 1
+	""".format(perm_sql=perm_sql), sql_params, as_dict=True)
+
+	if last_sale and len(last_sale) > 0:
+		return last_sale[0]
+
+	return None
+
+
+@frappe.whitelist()
+def get_item_selling_history(item_code=None, company=None, limit=20):
+	limit = int(limit or 20)
+	where = ["si.docstatus = 1"]
+	params = {"limit": limit}
+
+	if item_code:
+		where.append("sii.item_code = %(item_code)s")
+		params["item_code"] = item_code
+
+	if company:
+		where.append("si.company = %(company)s")
+		params["company"] = company
+
+	perm_where, perm_params = _permission_conditions()
+	where.extend(perm_where)
+	params.update(perm_params)
+
+	where_sql = " AND ".join(where)
+
+	rows = frappe.db.sql("""
+		SELECT
+			si.posting_date,
+			si.name AS sales_invoice,
+			si.customer,
+			si.customer_name,
+			si.company,
+			sii.item_code,
+			sii.item_name,
+			sii.qty,
+			sii.uom,
+			sii.rate AS selling_rate,
+			sii.base_rate AS base_selling_rate,
+			sii.amount AS selling_amount,
+			si.currency
+		FROM `tabSales Invoice Item` sii
+		INNER JOIN `tabSales Invoice` si ON si.name = sii.parent
+		WHERE {where_sql}
+		ORDER BY si.posting_date DESC, si.name DESC, sii.idx ASC
+		LIMIT %(limit)s
+	""".format(where_sql=where_sql), params, as_dict=True)
+
+	return rows
+
+================================================================================
+FILE: sf_trading/api/material_request.py
+================================================================================
+import frappe
+from frappe import _
+from frappe.utils import nowdate, add_days, flt
+
+
+@frappe.whitelist()
+def create_material_request(item_code, from_warehouse, to_warehouse, qty, schedule_date, material_request_type, company):
+	if not item_code:
+		frappe.throw(_("Item Code is required"))
+	if not from_warehouse:
+		frappe.throw(_("From Warehouse is required"))
+	if not to_warehouse:
+		frappe.throw(_("To Warehouse is required"))
+	if from_warehouse == to_warehouse:
+		frappe.throw(_("From Warehouse and To Warehouse cannot be the same"))
+	if not qty or flt(qty) <= 0:
+		frappe.throw(_("Quantity must be greater than 0"))
+	if not company:
+		frappe.throw(_("Company is required"))
+	if not frappe.db.exists("Item", item_code):
+		frappe.throw(_("Item {0} does not exist").format(item_code))
+	if not frappe.db.exists("Warehouse", from_warehouse):
+		frappe.throw(_("From Warehouse {0} does not exist").format(from_warehouse))
+	if not frappe.db.exists("Warehouse", to_warehouse):
+		frappe.throw(_("To Warehouse {0} does not exist").format(to_warehouse))
+
+	item_doc = frappe.get_cached_doc("Item", item_code)
+
+	material_request = frappe.new_doc("Material Request")
+	material_request.transaction_date = nowdate()
+	material_request.company = company
+	material_request.material_request_type = "Material Transfer"
+	material_request.set_warehouse = to_warehouse
+	material_request.set_from_warehouse = from_warehouse
+
+	material_request.append("items", {
+		"item_code": item_code,
+		"item_name": item_doc.item_name,
+		"description": item_doc.description,
+		"qty": flt(qty),
+		"uom": item_doc.stock_uom,
+		"stock_uom": item_doc.stock_uom,
+		"schedule_date": schedule_date or add_days(nowdate(), 7),
+		"warehouse": to_warehouse,
+		"from_warehouse": from_warehouse,
+		"item_group": item_doc.item_group,
+		"brand": item_doc.brand
+	})
+
+	material_request.set_missing_values()
+	material_request.insert(ignore_permissions=True)
+	material_request.submit()
+
+	return material_request.name
+
+================================================================================
+FILE: sf_trading/api/warehouse_stock.py
+================================================================================
+import frappe
+from frappe import _
+from erpnext.stock.utils import get_stock_balance
+
+
+@frappe.whitelist()
+def get_item_warehouse_stock(item_code, company=None, limit=None, target_warehouse=None):
+	if not item_code:
+		frappe.throw(_("Item Code is required"))
+
+	if not company:
+		company = frappe.defaults.get_user_default("company")
+
+	if not company:
+		frappe.throw(_("Please set a default company"))
+
+	warehouses = frappe.get_all(
+		"Warehouse",
+		filters={
+			"company": company,
+			"is_group": 0,
+			"disabled": 0
+		},
+		fields=["name", "warehouse_name"],
+		order_by="name"
+	)
+
+	if not warehouses:
+		return []
+
+	warehouse_names = [w.name for w in warehouses]
+
+	bin_data = frappe.db.sql("""
+		SELECT warehouse, actual_qty
+		FROM `tabBin`
+		WHERE item_code = %s AND warehouse IN %s
+	""", (item_code, warehouse_names), as_dict=True)
+
+	bin_dict = {d.warehouse: (d.actual_qty or 0.0) for d in bin_data}
+
+	stock_data = []
+	for warehouse in warehouses:
+		stock_qty = bin_dict.get(warehouse.name, 0.0)
+		stock_data.append({
+			"warehouse": warehouse.name,
+			"warehouse_name": warehouse.warehouse_name or warehouse.name,
+			"stock_qty": stock_qty
+		})
+
+	if target_warehouse:
+		filtered_stock_data = [item for item in stock_data if item["stock_qty"] > 0 or item["warehouse"] == target_warehouse]
+	else:
+		filtered_stock_data = [item for item in stock_data if item["stock_qty"] > 0]
+
+	if target_warehouse:
+		filtered_stock_data.sort(key=lambda x: (-1 if x["warehouse"] == target_warehouse else 0, -x["stock_qty"]))
+	else:
+		filtered_stock_data.sort(key=lambda x: x["stock_qty"], reverse=True)
+
+	if limit:
+		limit = int(limit)
+		return filtered_stock_data[:limit]
+
+	return filtered_stock_data
+
+================================================================================
+FILE: sf_trading/sf_trading/custom_search.py
+================================================================================
+import frappe
+import re
+
+def natural_sort_key(item_name):
+    parts = re.split(r'(\d+\.?\d*)', str(item_name))
+    result = []
+    for part in parts:
+        try:
+            result.append(float(part))
+        except ValueError:
+            result.append(part.lower())
+    return result
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def item_search_sorted(doctype, txt, searchfield, start, page_len, filters):
+    """Custom item search that sorts results by size (natural/numeric order)."""
+
+    conditions = ""
+    if txt:
+        conditions = """
+            AND (
+                item.item_code LIKE %(txt)s
+                OR item.item_name LIKE %(txt)s
+                OR item.description LIKE %(txt)s
+                OR EXISTS (
+                    SELECT 1 FROM `tabItem Barcode` ib
+                    WHERE ib.parent = item.item_code
+                    AND ib.barcode LIKE %(txt)s
+                )
+            )
+        """
+
+    results = frappe.db.sql(
+        f"""
+        SELECT
+            item.item_code,
+            item.item_name,
+            item.item_group,
+            item.description,
+            item.stock_uom
+        FROM `tabItem` item
+        WHERE
+            item.disabled = 0
+            AND item.has_variants = 0
+            {conditions}
+        LIMIT %(page_len)s OFFSET %(start)s
+        """,
+        {
+            "txt": f"%{txt}%",
+            "start": start,
+            "page_len": page_len,
+        },
+        as_dict=True
+    )
+
+    results.sort(key=lambda r: natural_sort_key(r.get("item_name", "")))
+
+    return [
+        (r.item_code, r.item_name, r.item_group or "", r.description or "")
+        for r in results
+    ]
+
+================================================================================
+FILE: sf_trading/sf_trading/doctype/branch_configuration/branch_configuration.py
+================================================================================
+# User permissions are created for company, warehouse and cost center.
+# Company and first warehouse are set as is_default=1 so Frappe uses them as
+# the user's Session Defaults instead of falling back to global defaults.
+# The role assigned in the User child table is auto-assigned to the user.
+# A Module Profile matching the role is also applied automatically.
+
+import frappe
+from frappe.model.document import Document
+
+BRANCH_USER_ROLE = "Branch User"
+
+
+class BranchConfiguration(Document):
+
+	def validate(self):
+		if self.company:
+			for w in self.warehouse:
+				if w.warehouse:
+					wh_company = frappe.db.get_value("Warehouse", w.warehouse, "company")
+					if wh_company and wh_company != self.company:
+						frappe.throw(
+							f"Warehouse <b>{w.warehouse}</b> belongs to company <b>{wh_company}</b>, "
+							f"not <b>{self.company}</b>. Please select a warehouse from the correct company."
+						)
+
+			for c in self.cost_center:
+				if c.cost_center:
+					cc_company = frappe.db.get_value("Cost Center", c.cost_center, "company")
+					if cc_company and cc_company != self.company:
+						frappe.throw(
+							f"Cost Center <b>{c.cost_center}</b> belongs to company <b>{cc_company}</b>, "
+							f"not <b>{self.company}</b>. Please select a cost center from the correct company."
+						)
+
+	def before_save(self):
+		if self.is_new():
+			return
+
+		old_doc = self.get_doc_before_save()
+
+		old_users = {d.user for d in old_doc.user}
+		new_users = {d.user for d in self.user}
+
+		removed_users = old_users - new_users
+
+		for user in removed_users:
+			if old_doc.get("company"):
+				delete_permission(user, "Company", old_doc.company)
+
+			for w in old_doc.warehouse:
+				delete_permission(user, "Warehouse", w.warehouse)
+
+			for c in old_doc.cost_center:
+				delete_permission(user, "Cost Center", c.cost_center)
+
+			old_role = None
+			for old_u in old_doc.user:
+				if old_u.user == user:
+					old_role = old_u.get("role") or BRANCH_USER_ROLE
+					break
+			_maybe_remove_role(user, old_role or BRANCH_USER_ROLE, exclude_branch=self.name)
+
+		old_company = old_doc.get("company")
+		new_company = self.get("company")
+		if old_company and old_company != new_company:
+			for u in self.user:
+				delete_permission(u.user, "Company", old_company)
+
+	def on_update(self):
+		self.create_permissions()
+
+	def create_permissions(self):
+		for u in self.user:
+			if self.company:
+				create_permission(u.user, "Company", self.company, is_default=1)
+
+			for idx, w in enumerate(self.warehouse):
+				create_permission(u.user, "Warehouse", w.warehouse, is_default=1 if idx == 0 else 0)
+
+			for idx, c in enumerate(self.cost_center):
+				create_permission(u.user, "Cost Center", c.cost_center, is_default=1 if idx == 0 else 0)
+
+			if self.company:
+				company_default_cc = frappe.db.get_value("Company", self.company, "cost_center")
+				if company_default_cc:
+					create_permission(u.user, "Cost Center", company_default_cc, is_default=0)
+
+			selected_role = u.get("role") or BRANCH_USER_ROLE
+			_assign_role(u.user, selected_role)
+			_set_module_profile_for_role(u.user, selected_role)
+
+
+def create_permission(user, allow, value, is_default=0):
+	if not value:
+		return
+
+	existing = frappe.db.exists("User Permission", {
+		"user": user,
+		"allow": allow,
+		"for_value": value
+	})
+
+	if existing:
+		if is_default and not _has_existing_default(user, allow, exclude_value=value):
+			frappe.db.set_value("User Permission", existing, "is_default", 1)
+	else:
+		if is_default and _has_existing_default(user, allow):
+			is_default = 0
+
+		doc = frappe.new_doc("User Permission")
+		doc.user = user
+		doc.allow = allow
+		doc.for_value = value
+		doc.is_default = is_default
+		doc.apply_to_all_doctypes = 1
+		doc.insert(ignore_permissions=True)
+
+
+def _has_existing_default(user, allow, exclude_value=None):
+	filters = {
+		"user": user,
+		"allow": allow,
+		"is_default": 1,
+	}
+	if exclude_value:
+		filters["for_value"] = ["!=", exclude_value]
+
+	return frappe.db.exists("User Permission", filters)
+
+
+def delete_permission(user, allow, value):
+	if not value:
+		return
+
+	perms = frappe.get_all(
+		"User Permission",
+		filters={
+			"user": user,
+			"allow": allow,
+			"for_value": value
+		},
+		pluck="name"
+	)
+
+	for p in perms:
+		frappe.delete_doc("User Permission", p, ignore_permissions=True)
+
+
+def _ensure_system_user(user):
+	current_type = frappe.db.get_value("User", user, "user_type")
+	if current_type and current_type != "System User":
+		frappe.db.set_value("User", user, "user_type", "System User")
+
+
+def _assign_role(user, role):
+	if not role or not frappe.db.exists("Role", role):
+		return
+
+	_ensure_system_user(user)
+
+	if frappe.db.exists("Has Role", {"parent": user, "role": role}):
+		return
+
+	frappe.get_doc({
+		"doctype": "Has Role",
+		"parent": user,
+		"parenttype": "User",
+		"parentfield": "roles",
+		"role": role,
+	}).insert(ignore_permissions=True)
+
+
+def _set_module_profile_for_role(user, role):
+	role_profile_map = {
+		"Branch User":   "Branch User",
+		"Damage User":   "Damage User",
+		"Sales Manager": "Sales Manager",
+		"Stock User":    "Stock User",
+	}
+
+	profile_name = role_profile_map.get(role)
+	if not profile_name:
+		return
+
+	if not frappe.db.exists("Module Profile", profile_name):
+		frappe.msgprint(
+			f"Module Profile <b>{profile_name}</b> does not exist. "
+			f"Please create it in Setup > Module Profile.",
+			indicator="orange",
+			alert=True
+		)
+		return
+
+	current = frappe.db.get_value("User", user, "module_profile")
+	if current != profile_name:
+		frappe.db.set_value("User", user, "module_profile", profile_name)
+
+
+def _maybe_remove_role(user, role, exclude_branch=None):
+	if not role:
+		return
+
+	other_configs = frappe.get_all(
+		"Branch Configuration User",
+		filters={"user": user},
+		fields=["parent", "role"],
+	)
+
+	has_role_elsewhere = any(
+		c.parent != exclude_branch and (c.get("role") or BRANCH_USER_ROLE) == role
+		for c in other_configs
+	)
+
+	if not has_role_elsewhere:
+		user_doc = frappe.get_doc("User", user)
+		if role in [r.role for r in user_doc.roles]:
+			user_doc.remove_roles(role)
+
+================================================================================
+FILE: sf_trading/sf_trading/doctype/branch_configuration/branch_configuration.js
+================================================================================
+// Copyright (c) 2026, Enfono and contributors
+// For license information, please see license.txt
+
+frappe.ui.form.on("Branch Configuration", {
+	refresh(frm) {
+		set_child_filters(frm);
+	},
+	company(frm) {
+		set_child_filters(frm);
+
+		if (frm.doc.warehouse && frm.doc.warehouse.length) {
+			frm.clear_table("warehouse");
+			frm.refresh_field("warehouse");
+		}
+		if (frm.doc.cost_center && frm.doc.cost_center.length) {
+			frm.clear_table("cost_center");
+			frm.refresh_field("cost_center");
+		}
+	}
+});
+
+function set_child_filters(frm) {
+	frm.set_query("warehouse", "warehouse", function () {
+		return {
+			filters: {
+				company: frm.doc.company,
+				is_group: 0
+			}
+		};
+	});
+
+	frm.set_query("cost_center", "cost_center", function () {
+		return {
+			filters: {
+				company: frm.doc.company,
+				is_group: 0
+			}
+		};
+	});
+
+	frm.set_query("mode_of_payment", "mode_of_payment", function () {
+		return { filters: { type: ["in", ["Cash", "Bank"]] } };
+	});
+
+	frm.set_query("role", "user", function () {
+		return {
+			filters: {
+				name: ["in", ["Branch User", "Sales Manager", "Damage User", "Stock User"]]
+			}
+		};
+	});
+}
+
+================================================================================
+FILE: sf_trading/sf_trading/doctype/inter_company_branch/inter_company_branch.py
+================================================================================
+# Copyright (c) 2026, Sf Trading and contributors
+# For license information, please see license.txt
+
+import frappe
+from frappe.model.document import Document
+
+
+class InterCompanyBranch(Document):
+	def validate(self):
+		companies = [row.company for row in self.company_cost_centers]
+		if len(companies) != len(set(companies)):
+			frappe.throw(frappe._("Duplicate company in Company Cost Centers"))
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def get_branches_for_company(doctype, txt, searchfield, start, page_len, filters):
+	"""Return Inter Company Branch names that have cost center for the given company."""
+	company = filters.get("company") if isinstance(filters, dict) and filters else None
+	if not company:
+		return []
+	txt = txt or ""
+	return frappe.db.sql(
+		"""
+		SELECT DISTINCT parent, parent FROM `tabInter Company Branch Cost Center`
+		WHERE company = %(company)s AND parent LIKE %(txt)s
+		ORDER BY parent
+		LIMIT %(start)s, %(page_len)s
+		""",
+		{"company": company, "txt": f"%%{txt}%%", "start": int(start), "page_len": int(page_len)},
+	)
+
+================================================================================
+FILE: sf_trading/sf_trading/doctype/inter_company_branch/inter_company_branch.js
+================================================================================
+frappe.ui.form.on("Inter Company Branch", {
+	onload: function (frm) {
+		frm.set_query("cost_center", "company_cost_centers", function (doc, cdt, cdn) {
+			let row = locals[cdt][cdn];
+			if (!row.company) return { filters: { name: "" } };
+			return {
+				filters: [
+					["Cost Center", "company", "=", row.company],
+					["Cost Center", "is_group", "=", 0],
+				],
+			};
+		});
+		frm.set_query("warehouse", "company_cost_centers", function (doc, cdt, cdn) {
+			let row = locals[cdt][cdn];
+			if (!row.company) return { filters: { name: "" } };
+			return {
+				filters: [["Warehouse", "company", "=", row.company]],
+			};
+		});
+	},
+});
+
+frappe.ui.form.on("Inter Company Branch Cost Center", {
+	company: function (frm, cdt, cdn) {
+		let row = locals[cdt][cdn];
+		if (row.company) {
+			frappe.model.set_value(cdt, cdn, "cost_center", "");
+			frappe.model.set_value(cdt, cdn, "warehouse", "");
+		}
+	},
+});
+
+================================================================================
+FILE: sf_trading/sf_trading/doctype/inter_company_branch/inter_company_branch.json
+================================================================================
+{
+ "actions": [],
+ "allow_import": 1,
+ "autoname": "field:branch_name",
+ "creation": "2026-01-01 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": ["branch_name", "company_cost_centers"],
+ "fields": [
+  {
+   "fieldname": "branch_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Branch Name",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "company_cost_centers",
+   "fieldtype": "Table",
+   "label": "Company Cost Centers",
+   "options": "Inter Company Branch Cost Center",
+   "reqd": 1
+  }
+ ],
+ "modified": "2026-01-01 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "Inter Company Branch",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "Accounts User"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "track_changes": 1
+}
+
+================================================================================
+FILE: sf_trading/sf_trading/report/dcr_report/dcr_report.py
+================================================================================
+# Copyright (c) 2025, sf_trading and contributors
+# For license information, please see license.txt
+
+import frappe
+from frappe import _
+from frappe.utils import flt, getdate, add_days, slug
+from frappe.utils.data import quoted
+
+
+def execute(filters=None):
+	columns = get_columns()
+	data = get_data(filters)
+	return columns, data
+
+
+def _show_margin():
+	return "System Manager" in frappe.get_roles()
+
+
+def get_columns():
+	cols = [
+		_("Particulars") + ":Data:300",
+		_("Income") + ":Currency:120",
+		_("Expense") + ":Currency:120",
+		_("Total Discount/Adj.") + ":Currency:150",
+	]
+	if _show_margin():
+		cols.append(_("Gross Margin") + ":Currency:120")
+	return cols
+
+
+def get_list_view_link(doctype, label, filters_dict):
+	from frappe.utils import get_url, getdate
+	import json
+	from urllib.parse import urlencode
+
+	doctype_slug = slug(doctype)
+	route = f"{doctype_slug}/view/list"
+
+	query_params = {}
+	for key, value in filters_dict.items():
+		if value is not None and value != "":
+			if isinstance(value, list) and len(value) == 2:
+				valid_dates = []
+				for date_val in value:
+					if date_val:
+						date_str_check = str(date_val)
+						if date_str_check and not date_str_check.startswith("0000-") and date_str_check != "0000-01-01":
+							try:
+								parsed_date = getdate(date_val)
+								if parsed_date and parsed_date.year > 0:
+									date_str = parsed_date.strftime("%Y-%m-%d")
+									if date_str and not date_str.startswith("0000-") and date_str != "0000-01-01":
+										valid_dates.append(date_str)
+							except:
+								pass
+				if len(valid_dates) == 2:
+					date1, date2 = valid_dates[0], valid_dates[1]
+					if (date1 and date2 and
+						not date1.startswith("0000-") and not date2.startswith("0000-") and
+						date1 != "0000-01-01" and date2 != "0000-01-01"):
+						query_params[key] = json.dumps(["between", valid_dates])
+			else:
+				str_value = str(value)
+				if str_value and not str_value.startswith("0000-") and str_value != "0000-01-01":
+					if key.endswith("_date") or key == "posting_date":
+						try:
+							parsed_date = getdate(str_value)
+							if parsed_date and parsed_date.year > 0:
+								date_str = parsed_date.strftime("%Y-%m-%d")
+								if date_str and not date_str.startswith("0000-") and date_str != "0000-01-01":
+									query_params[key] = date_str
+						except:
+							pass
+					else:
+						query_params[key] = str_value
+
+	if query_params:
+		query_string = urlencode(query_params)
+		url = get_url(uri=f"/app/{route}?{query_string}")
+	else:
+		url = get_url(uri=f"/app/{route}")
+
+	return f'<a href="{url}">{label}</a>'
+
+
+def get_data(filters):
+	data = []
+
+	if not filters.get("from_date") or not filters.get("to_date"):
+		frappe.throw(_("Please select From Date and To Date"))
+
+	from_date = getdate(filters.get("from_date"))
+	to_date = getdate(filters.get("to_date"))
+	company = filters.get("company")
+	cost_center = filters.get("cost_center")
+
+	opening_balance = get_opening_cash_balance(from_date, company, cost_center)
+
+	cash_sales_data = get_cash_sales(from_date, to_date, company, cost_center)
+	cash_sales_net = cash_sales_data.get("net_total", 0)
+	vat_collected_cash = cash_sales_data.get("vat_amount", 0)
+	cash_sales = cash_sales_net + vat_collected_cash
+	total_discount_adj = cash_sales_data.get("discount", 0)
+
+	credit_sales_data = get_credit_sales(from_date, to_date, company, cost_center)
+	credit_sales_net = credit_sales_data.get("net_total", 0)
+	vat_applied_credit = credit_sales_data.get("vat_amount", 0)
+	credit_sales = credit_sales_net + vat_applied_credit
+
+	sales_return_data = get_sales_returns_cash(from_date, to_date, company, cost_center)
+	sales_return_cash_net = sales_return_data.get("net_total", 0)
+	vat_refund_sales_return = sales_return_data.get("vat_amount", 0)
+	sales_return_cash = sales_return_cash_net + vat_refund_sales_return
+
+	credit_purchase_data = get_credit_purchases(from_date, to_date, company, cost_center)
+	credit_purchase = credit_purchase_data.get("total_with_vat", 0)
+
+	cash_received_credit_sales = get_cash_received_credit_sales(from_date, to_date, company, cost_center)
+	cash_receipts_pos = get_cash_receipts_from_pos(from_date, to_date, company, cost_center)
+
+	petty_cash_data = get_petty_cash_transactions(from_date, to_date, company, cost_center)
+	payments_petty_cash = petty_cash_data.get("payments", 0)
+	receipts_petty_cash = petty_cash_data.get("receipts", 0)
+
+	internal_transfer_data = get_internal_transfer_cash_transactions(from_date, to_date, company, cost_center)
+	cash_out_internal_transfer = internal_transfer_data.get("cash_out", 0)
+	cash_in_internal_transfer = internal_transfer_data.get("cash_in", 0)
+
+	gross_margin_cash = cash_sales_net - cash_sales_data.get("cost", 0)
+	gross_margin_credit = credit_sales_net - credit_sales_data.get("cost", 0)
+
+	def _row(particulars, income, expense, discount_adj, margin=0):
+		row = [particulars, income, expense, discount_adj]
+		if _show_margin():
+			row.append(margin)
+		return row
+
+	from_date_str = None
+	to_date_str = None
+	if from_date:
+		try:
+			from_date_check = str(from_date)
+			if from_date_check and not from_date_check.startswith("0000-") and from_date_check != "0000-01-01":
+				valid_from = getdate(from_date)
+				if valid_from and valid_from.year > 0:
+					from_date_str = valid_from.strftime("%Y-%m-%d")
+					if from_date_str.startswith("0000-") or from_date_str == "0000-01-01":
+						from_date_str = None
+		except:
+			from_date_str = None
+	if to_date:
+		try:
+			to_date_check = str(to_date)
+			if to_date_check and not to_date_check.startswith("0000-") and to_date_check != "0000-01-01":
+				valid_to = getdate(to_date)
+				if valid_to and valid_to.year > 0:
+					to_date_str = valid_to.strftime("%Y-%m-%d")
+					if to_date_str.startswith("0000-") or to_date_str == "0000-01-01":
+						to_date_str = None
+		except:
+			to_date_str = None
+
+	data.append(_row("<b>Opening Cash Balance</b>", opening_balance, 0, 0, 0))
+
+	cash_sales_filters = {"company": company, "docstatus": "1", "is_return": "0"}
+	if from_date_str and to_date_str:
+		cash_sales_filters["posting_date"] = [from_date_str, to_date_str]
+	if cost_center:
+		cash_sales_filters["cost_center"] = cost_center
+	data.append(_row(get_list_view_link("Sales Invoice", "CASH SALES", cash_sales_filters), cash_sales, 0, -total_discount_adj, gross_margin_cash))
+
+	credit_sales_filters = {"company": company, "docstatus": "1", "is_return": "0"}
+	if from_date_str and to_date_str:
+		credit_sales_filters["posting_date"] = [from_date_str, to_date_str]
+	if cost_center:
+		credit_sales_filters["cost_center"] = cost_center
+	data.append(_row(get_list_view_link("Sales Invoice", "CREDIT SALES", credit_sales_filters), credit_sales, 0, 0, gross_margin_credit))
+
+	returns_filters = {"company": company, "docstatus": "1", "is_return": "1"}
+	if from_date_str and to_date_str:
+		returns_filters["posting_date"] = [from_date_str, to_date_str]
+	if cost_center:
+		returns_filters["cost_center"] = cost_center
+	data.append(_row(get_list_view_link("Sales Invoice", "Sales Return - Cash", returns_filters), 0, sales_return_cash, 0, 0))
+
+	data.append(_row(get_list_view_link("Sales Invoice", "VAT Collected on Cash Sales", cash_sales_filters), vat_collected_cash, 0, 0, 0))
+	data.append(_row(get_list_view_link("Sales Invoice", "VAT Applied on Credit Sales", credit_sales_filters), vat_applied_credit, 0, 0, 0))
+	data.append(_row(get_list_view_link("Sales Invoice", "VAT Refund on Sales Return", returns_filters), 0, vat_refund_sales_return, 0, 0))
+
+	purchase_filters = {"company": company, "docstatus": "1"}
+	if from_date_str and to_date_str:
+		purchase_filters["posting_date"] = [from_date_str, to_date_str]
+	if cost_center:
+		purchase_filters["cost_center"] = cost_center
+	data.append(_row(get_list_view_link("Purchase Invoice", "Credit Purchase - DIRECT PURCHASE", purchase_filters), 0, credit_purchase, 0, 0))
+
+	payment_receive_filters = {"company": company, "docstatus": "1", "payment_type": "Receive"}
+	if from_date_str and to_date_str:
+		payment_receive_filters["posting_date"] = [from_date_str, to_date_str]
+	if cost_center:
+		payment_receive_filters["cost_center"] = cost_center
+	data.append(_row(get_list_view_link("Payment Entry", "Cash Received : Credit Sales", payment_receive_filters), cash_received_credit_sales, 0, 0, 0))
+
+	payment_pay_filters = {"company": company, "docstatus": "1", "payment_type": "Pay"}
+	if from_date_str and to_date_str:
+		payment_pay_filters["posting_date"] = [from_date_str, to_date_str]
+	if cost_center:
+		payment_pay_filters["cost_center"] = cost_center
+	data.append(_row(get_list_view_link("Payment Entry", "Payments-Petty Cash (Total Payments)", payment_pay_filters), 0, payments_petty_cash, 0, 0))
+
+	total_receipt_petty_cash = cash_receipts_pos + cash_received_credit_sales
+	data.append(_row("<b>" + _("Total Receipt-Petty Cash") + "</b>", total_receipt_petty_cash, 0, 0, 0))
+
+	non_cash_data = get_non_cash_transactions(from_date, to_date, company, cost_center)
+	data.append(_row(
+		"<b>" + _("Bank Sales") + "</b>",
+		non_cash_data.get("receipts", 0),
+		non_cash_data.get("payments", 0),
+		0,
+		0
+	))
+
+	cash_balance = (
+		opening_balance
+		+ cash_receipts_pos
+		+ cash_received_credit_sales
+		- sales_return_cash
+		- payments_petty_cash
+		- cash_out_internal_transfer
+		+ cash_in_internal_transfer
+	)
+
+	data.append(_row("<b>Cash Balance</b>", cash_balance, 0, 0, 0))
+
+	return data
+
+
+def get_opening_cash_balance(from_date, company, cost_center):
+	prev_date = add_days(from_date, -1)
+	cash_receipts_pos_prev = get_cash_receipts_from_pos(None, prev_date, company, cost_center)
+	sales_return_data = get_sales_returns_cash(None, prev_date, company, cost_center)
+	sales_return_cash = sales_return_data.get("net_total", 0) + sales_return_data.get("vat_amount", 0)
+	cash_received_credit_sales = get_cash_received_credit_sales(None, prev_date, company, cost_center)
+	petty_cash_data = get_petty_cash_transactions(None, prev_date, company, cost_center)
+	payments_petty_cash = petty_cash_data.get("payments", 0)
+	internal_transfer_prev = get_internal_transfer_cash_transactions(None, prev_date, company, cost_center)
+	cash_out_internal_transfer_prev = internal_transfer_prev.get("cash_out", 0)
+	cash_in_internal_transfer_prev = internal_transfer_prev.get("cash_in", 0)
+
+	opening = (
+		cash_receipts_pos_prev
+		+ cash_received_credit_sales
+		- sales_return_cash
+		- payments_petty_cash
+		- cash_out_internal_transfer_prev
+		+ cash_in_internal_transfer_prev
+	)
+
+	return flt(opening)
+
+
+def get_cash_sales(from_date, to_date, company, cost_center):
+	conditions = "si.docstatus = 1 AND si.is_return = 0"
+	if from_date:
+		conditions += " AND si.posting_date >= %(from_date)s"
+	if to_date:
+		conditions += " AND si.posting_date <= %(to_date)s"
+	if company:
+		conditions += " AND si.company = %(company)s"
+
+	cost_center_condition = ""
+	if cost_center:
+		cost_center_condition = " AND sii.cost_center = %(cost_center)s"
+
+	result = frappe.db.sql("""
+		SELECT
+			si.name,
+			si.net_total,
+			si.base_net_total,
+			COALESCE(si.change_amount, 0) as change_amount,
+			COALESCE(si.base_change_amount, 0) as base_change_amount,
+			si.is_pos,
+			si.total_taxes_and_charges as vat_amount,
+			si.discount_amount as discount,
+			SUM(COALESCE(sii.incoming_rate, 0) * sii.stock_qty) as cost
+		FROM `tabSales Invoice` si
+		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
+		WHERE {conditions}
+			AND si.is_pos = 1
+			{cost_center_condition}
+		GROUP BY si.name, si.net_total, si.base_net_total, si.change_amount,
+			si.base_change_amount, si.is_pos, si.total_taxes_and_charges, si.discount_amount
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center
+	}, as_dict=True)
+
+	if result:
+		total_net = 0
+		total_vat = 0
+		total_discount = 0
+		total_cost = 0
+		for r in result:
+			if r.is_pos:
+				net_amount = flt(r.base_net_total) - flt(r.base_change_amount)
+			else:
+				net_amount = flt(r.net_total)
+			total_net += net_amount
+			total_vat += flt(r.vat_amount) if r.vat_amount else 0
+			total_discount += flt(r.discount) if r.discount else 0
+			total_cost += flt(r.cost) if r.cost else 0
+		return {"net_total": total_net, "vat_amount": total_vat, "discount": total_discount, "cost": total_cost}
+	return {"net_total": 0, "vat_amount": 0, "discount": 0, "cost": 0}
+
+
+def get_credit_sales(from_date, to_date, company, cost_center):
+	conditions = "si.docstatus = 1 AND si.is_return = 0"
+	if from_date:
+		conditions += " AND si.posting_date >= %(from_date)s"
+	if to_date:
+		conditions += " AND si.posting_date <= %(to_date)s"
+	if company:
+		conditions += " AND si.company = %(company)s"
+	cost_center_condition = ""
+	if cost_center:
+		cost_center_condition = " AND sii.cost_center = %(cost_center)s"
+
+	result = frappe.db.sql("""
+		SELECT
+			SUM(DISTINCT si.net_total) as net_total,
+			SUM(DISTINCT si.total_taxes_and_charges) as vat_amount,
+			SUM(COALESCE(sii.incoming_rate, 0) * sii.stock_qty) as cost
+		FROM `tabSales Invoice` si
+		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
+		WHERE {conditions}
+			AND si.is_pos = 0
+			{cost_center_condition}
+		GROUP BY si.name
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center
+	}, as_dict=True)
+
+	if result:
+		return {
+			"net_total": sum([flt(r.net_total) for r in result if r.net_total]),
+			"vat_amount": sum([flt(r.vat_amount) for r in result if r.vat_amount]),
+			"cost": sum([flt(r.cost) for r in result if r.cost])
+		}
+	return {"net_total": 0, "vat_amount": 0, "cost": 0}
+
+
+def get_sales_returns_cash(from_date, to_date, company, cost_center):
+	conditions = "si.docstatus = 1 AND si.is_return = 1"
+	if from_date:
+		conditions += " AND si.posting_date >= %(from_date)s"
+	if to_date:
+		conditions += " AND si.posting_date <= %(to_date)s"
+	if company:
+		conditions += " AND si.company = %(company)s"
+	cost_center_condition = ""
+	if cost_center:
+		cost_center_condition = " AND sii.cost_center = %(cost_center)s"
+
+	result = frappe.db.sql("""
+		SELECT
+			SUM(ABS(si.net_total)) as net_total,
+			SUM(ABS(si.total_taxes_and_charges)) as vat_amount
+		FROM `tabSales Invoice` si
+		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
+		WHERE {conditions}
+			AND si.is_pos = 1
+			{cost_center_condition}
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center
+	}, as_dict=True)
+
+	if result and result[0].net_total:
+		return {"net_total": flt(result[0].net_total), "vat_amount": flt(result[0].vat_amount)}
+	return {"net_total": 0, "vat_amount": 0}
+
+
+def get_credit_purchases(from_date, to_date, company, cost_center):
+	conditions = "pi.docstatus = 1"
+	if from_date:
+		conditions += " AND pi.posting_date >= %(from_date)s"
+	if to_date:
+		conditions += " AND pi.posting_date <= %(to_date)s"
+	if company:
+		conditions += " AND pi.company = %(company)s"
+	cost_center_condition = ""
+	if cost_center:
+		cost_center_condition = " AND pii.cost_center = %(cost_center)s"
+
+	result = frappe.db.sql("""
+		SELECT
+			SUM(pi.net_total) as net_total,
+			SUM(pi.total_taxes_and_charges) as vat_amount
+		FROM `tabPurchase Invoice` pi
+		LEFT JOIN `tabPurchase Invoice Item` pii ON pii.parent = pi.name
+		WHERE {conditions}
+			{cost_center_condition}
+		GROUP BY pi.name
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center
+	}, as_dict=True)
+
+	if result:
+		total_net = sum([flt(r.net_total) for r in result if r.net_total])
+		total_vat = sum([flt(r.vat_amount) for r in result if r.vat_amount])
+		return {"net_total": total_net, "vat_amount": total_vat, "total_with_vat": total_net + total_vat}
+	return {"net_total": 0, "vat_amount": 0, "total_with_vat": 0}
+
+
+def get_cash_receipts_from_pos(from_date, to_date, company, cost_center):
+	conditions = "si.docstatus = 1 AND si.is_return = 0 AND si.is_pos = 1"
+	if from_date:
+		conditions += " AND si.posting_date >= %(from_date)s"
+	if to_date:
+		conditions += " AND si.posting_date <= %(to_date)s"
+	if company:
+		conditions += " AND si.company = %(company)s"
+	cost_center_condition = ""
+	if cost_center:
+		cost_center_condition = " AND EXISTS (SELECT 1 FROM `tabSales Invoice Item` sii WHERE sii.parent = si.name AND sii.cost_center = %(cost_center)s)"
+
+	result = frappe.db.sql("""
+		SELECT
+			si.name,
+			COALESCE(si.base_change_amount, 0) as change_amount,
+			SUM(sip.base_amount) as cash_payment_amount
+		FROM `tabSales Invoice` si
+		INNER JOIN `tabSales Invoice Payment` sip ON sip.parent = si.name
+		INNER JOIN `tabMode of Payment` mop ON mop.name = sip.mode_of_payment
+		WHERE {conditions}
+			AND mop.type = 'Cash'
+			{cost_center_condition}
+		GROUP BY si.name, si.base_change_amount
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center
+	}, as_dict=True)
+
+	if result:
+		total_cash_receipts = 0
+		for r in result:
+			cash_receipt = flt(r.cash_payment_amount) - flt(r.change_amount)
+			total_cash_receipts += cash_receipt
+		return flt(total_cash_receipts)
+	return 0
+
+
+def get_cash_received_credit_sales(from_date, to_date, company, cost_center):
+	conditions = "pe.docstatus = 1 AND pe.payment_type = 'Receive'"
+	if from_date:
+		conditions += " AND pe.posting_date >= %(from_date)s"
+	if to_date:
+		conditions += " AND pe.posting_date <= %(to_date)s"
+	if company:
+		conditions += " AND pe.company = %(company)s"
+	cost_center_condition = ""
+	if cost_center:
+		cost_center_condition = " AND pe.cost_center = %(cost_center)s"
+
+	result = frappe.db.sql("""
+		SELECT
+			SUM(per.allocated_amount) as amount
+		FROM `tabPayment Entry` pe
+		INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
+		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
+		WHERE {conditions}
+			AND per.reference_doctype IN ('Sales Invoice', 'Sales Order')
+			AND mop.type = 'Cash'
+			{cost_center_condition}
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center
+	}, as_dict=True)
+
+	if result and result[0].amount:
+		return flt(result[0].amount)
+	return 0
+
+
+def get_petty_cash_transactions(from_date, to_date, company, cost_center):
+	conditions = "pe.docstatus = 1"
+	if from_date:
+		conditions += " AND pe.posting_date >= %(from_date)s"
+	if to_date:
+		conditions += " AND pe.posting_date <= %(to_date)s"
+	if company:
+		conditions += " AND pe.company = %(company)s"
+	cost_center_condition = ""
+	if cost_center:
+		cost_center_condition = " AND pe.cost_center = %(cost_center)s"
+
+	payments_pe_result = frappe.db.sql("""
+		SELECT SUM(pe.paid_amount) as amount
+		FROM `tabPayment Entry` pe
+		INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
+		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
+		WHERE {conditions}
+			AND pe.payment_type = 'Pay'
+			AND per.reference_doctype IN ('Purchase Invoice', 'Purchase Order')
+			AND mop.type = 'Cash'
+			{cost_center_condition}
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center
+	}, as_dict=True)
+
+	pi_conditions = "pi.docstatus = 1 AND pi.is_paid = 1"
+	if from_date:
+		pi_conditions += " AND pi.posting_date >= %(from_date)s"
+	if to_date:
+		pi_conditions += " AND pi.posting_date <= %(to_date)s"
+	if company:
+		pi_conditions += " AND pi.company = %(company)s"
+	pi_cost_center_condition = ""
+	if cost_center:
+		pi_cost_center_condition = " AND pi.cost_center = %(cost_center)s"
+
+	payments_pi_result = frappe.db.sql("""
+		SELECT SUM(pi.base_paid_amount) as amount
+		FROM `tabPurchase Invoice` pi
+		INNER JOIN `tabMode of Payment` mop ON mop.name = pi.mode_of_payment
+		WHERE {conditions}
+			AND mop.type = 'Cash'
+			{cost_center_condition}
+	""".format(conditions=pi_conditions, cost_center_condition=pi_cost_center_condition), {
+		"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center
+	}, as_dict=True)
+
+	receipts_pe_result = frappe.db.sql("""
+		SELECT SUM(pe.received_amount) as amount
+		FROM `tabPayment Entry` pe
+		INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
+		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
+		WHERE {conditions}
+			AND pe.payment_type = 'Receive'
+			AND per.reference_doctype IN ('Sales Invoice', 'Sales Order')
+			AND mop.type = 'Cash'
+			{cost_center_condition}
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center
+	}, as_dict=True)
+
+	payments_pe = flt(payments_pe_result[0].amount) if payments_pe_result and payments_pe_result[0].amount else 0
+	payments_pi = flt(payments_pi_result[0].amount) if payments_pi_result and payments_pi_result[0].amount else 0
+	receipts_pe = flt(receipts_pe_result[0].amount) if receipts_pe_result and receipts_pe_result[0].amount else 0
+
+	return {"payments": payments_pe + payments_pi, "receipts": receipts_pe, "unposted_payments": 0}
+
+
+def get_internal_transfer_cash_transactions(from_date, to_date, company, cost_center):
+	conditions = "pe.docstatus = 1 AND pe.payment_type = 'Internal Transfer'"
+	if from_date:
+		conditions += " AND pe.posting_date >= %(from_date)s"
+	if to_date:
+		conditions += " AND pe.posting_date <= %(to_date)s"
+	if company:
+		conditions += " AND pe.company = %(company)s"
+	cost_center_condition = ""
+	if cost_center:
+		cost_center_condition = " AND pe.cost_center = %(cost_center)s"
+
+	cash_out_result = frappe.db.sql("""
+		SELECT SUM(pe.paid_amount) as amount
+		FROM `tabPayment Entry` pe
+		INNER JOIN `tabAccount` acc_from ON acc_from.name = pe.paid_from
+		WHERE {conditions}
+			AND acc_from.account_type = 'Cash'
+			{cost_center_condition}
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center
+	}, as_dict=True)
+
+	cash_in_result = frappe.db.sql("""
+		SELECT SUM(pe.received_amount) as amount
+		FROM `tabPayment Entry` pe
+		INNER JOIN `tabAccount` acc_to ON acc_to.name = pe.paid_to
+		WHERE {conditions}
+			AND acc_to.account_type = 'Cash'
+			{cost_center_condition}
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center
+	}, as_dict=True)
+
+	return {
+		"cash_out": flt(cash_out_result[0].amount) if cash_out_result and cash_out_result[0].amount else 0,
+		"cash_in": flt(cash_in_result[0].amount) if cash_in_result and cash_in_result[0].amount else 0
+	}
+
+
+def get_non_cash_transactions(from_date, to_date, company, cost_center):
+	conditions_pe = "pe.docstatus = 1"
+	if from_date:
+		conditions_pe += " AND pe.posting_date >= %(from_date)s"
+	if to_date:
+		conditions_pe += " AND pe.posting_date <= %(to_date)s"
+	if company:
+		conditions_pe += " AND pe.company = %(company)s"
+	cost_center_condition = " AND pe.cost_center = %(cost_center)s" if cost_center else ""
+	params = {"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center}
+
+	receipts_pe = frappe.db.sql("""
+		SELECT SUM(pe.received_amount) as amount
+		FROM `tabPayment Entry` pe
+		INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
+		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
+		WHERE {conditions}
+			AND pe.payment_type = 'Receive'
+			AND per.reference_doctype IN ('Sales Invoice', 'Sales Order')
+			AND (mop.type IS NULL OR mop.type != 'Cash')
+			{cost_center_condition}
+	""".format(conditions=conditions_pe, cost_center_condition=cost_center_condition), params, as_dict=True)
+
+	conditions_si = "si.docstatus = 1 AND si.is_return = 0"
+	if from_date:
+		conditions_si += " AND si.posting_date >= %(from_date)s"
+	if to_date:
+		conditions_si += " AND si.posting_date <= %(to_date)s"
+	if company:
+		conditions_si += " AND si.company = %(company)s"
+	si_cost_condition = ""
+	if cost_center:
+		si_cost_condition = " AND EXISTS (SELECT 1 FROM `tabSales Invoice Item` sii WHERE sii.parent = si.name AND sii.cost_center = %(cost_center)s)"
+
+	receipts_si = frappe.db.sql("""
+		SELECT SUM(sip.base_amount) as amount
+		FROM `tabSales Invoice` si
+		INNER JOIN `tabSales Invoice Payment` sip ON sip.parent = si.name
+		INNER JOIN `tabMode of Payment` mop ON mop.name = sip.mode_of_payment
+		WHERE {conditions}
+			AND (mop.type IS NULL OR mop.type != 'Cash')
+			{si_cost_condition}
+	""".format(conditions=conditions_si, si_cost_condition=si_cost_condition), params, as_dict=True)
+
+	payments_pe = frappe.db.sql("""
+		SELECT SUM(pe.paid_amount) as amount
+		FROM `tabPayment Entry` pe
+		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
+		WHERE {conditions}
+			AND pe.payment_type = 'Pay'
+			AND (mop.type IS NULL OR mop.type != 'Cash')
+			{cost_center_condition}
+	""".format(conditions=conditions_pe, cost_center_condition=cost_center_condition), params, as_dict=True)
+
+	pi_conditions = "pi.docstatus = 1 AND pi.is_paid = 1"
+	if from_date:
+		pi_conditions += " AND pi.posting_date >= %(from_date)s"
+	if to_date:
+		pi_conditions += " AND pi.posting_date <= %(to_date)s"
+	if company:
+		pi_conditions += " AND pi.company = %(company)s"
+	pi_cost_condition = " AND pi.cost_center = %(cost_center)s" if cost_center else ""
+
+	payments_pi = frappe.db.sql("""
+		SELECT SUM(pi.base_paid_amount) as amount
+		FROM `tabPurchase Invoice` pi
+		INNER JOIN `tabMode of Payment` mop ON mop.name = pi.mode_of_payment
+		WHERE {conditions}
+			AND (mop.type IS NULL OR mop.type != 'Cash')
+			{pi_cost_condition}
+	""".format(conditions=pi_conditions, pi_cost_condition=pi_cost_condition), params, as_dict=True)
+
+	receipts = flt(receipts_pe[0].amount if receipts_pe and receipts_pe[0].amount else 0) + flt(receipts_si[0].amount if receipts_si and receipts_si[0].amount else 0)
+	payments = flt(payments_pe[0].amount if payments_pe and payments_pe[0].amount else 0) + flt(payments_pi[0].amount if payments_pi and payments_pi[0].amount else 0)
+
+	return {"receipts": receipts, "payments": payments}
+
+================================================================================
+FILE: sf_trading/sf_trading/report/dcr_report/dcr_report.js
+================================================================================
+// Copyright (c) 2025, sf_trading and contributors
+
+frappe.query_reports["DCR Report"] = {
+	filters: [
+		{
+			fieldname: "from_date",
+			label: __("From Date"),
+			fieldtype: "Date",
+			default: frappe.datetime.get_today(),
+			reqd: 1,
+		},
+		{
+			fieldname: "to_date",
+			label: __("To Date"),
+			fieldtype: "Date",
+			default: frappe.datetime.get_today(),
+			reqd: 1,
+		},
+		{
+			fieldname: "company",
+			label: __("Company"),
+			fieldtype: "Link",
+			options: "Company",
+			default: frappe.defaults.get_user_default("Company"),
+			reqd: 1,
+		},
+		{
+			fieldname: "cost_center",
+			label: __("Cost Center"),
+			fieldtype: "Link",
+			options: "Cost Center",
+		},
+	],
+};
+
+================================================================================
+FILE: sf_trading/sf_trading/report/dcr_detailed/dcr_detailed.py
+================================================================================
+# Copyright (c) 2025, sf_trading and contributors
+
+import frappe
+from frappe import _
+from frappe.utils import flt, getdate
+
+
+def execute(filters=None):
+	columns = get_columns()
+	data = get_data(filters)
+	return columns, data
+
+
+def get_columns():
+	return [
+		_("Transaction Type") + ":Data:150",
+		_("Document") + ":Link/Dynamic Link:120",
+		_("Party") + ":Data:200",
+		_("Party Name") + ":Data:200",
+		_("Mode of Payment") + ":Data:150",
+		_("Amount") + ":Currency:120",
+		_("Cash Amount") + ":Currency:120",
+		_("Bank/Card Amount") + ":Currency:120",
+		_("Posting Date") + ":Date:100",
+		_("Remarks") + ":Data:300",
+	]
+
+
+def get_data(filters):
+	data = []
+	if not filters.get("date"):
+		frappe.throw(_("Please select a date"))
+	date = getdate(filters.get("date"))
+	company = filters.get("company")
+	data.extend(get_sales_invoices(date, company))
+	data.extend(get_purchase_invoices(date, company))
+	data.extend(get_payment_entries(date, company))
+	data.sort(key=lambda x: (x[8], x[0]))
+	return data
+
+
+def get_sales_invoices(date, company):
+	data = []
+	conditions = "si.posting_date = %(date)s AND si.docstatus = 1"
+	if company:
+		conditions += " AND si.company = %(company)s"
+	sales_invoices = frappe.db.sql("""
+		SELECT si.name, si.posting_date, si.customer, si.customer_name,
+			si.grand_total, si.net_total, si.outstanding_amount, si.remarks, si.company
+		FROM `tabSales Invoice` si
+		WHERE {conditions}
+		ORDER BY si.posting_date, si.name
+	""".format(conditions=conditions), {"date": date, "company": company}, as_dict=True)
+
+	for inv in sales_invoices:
+		payment_details = frappe.db.sql("""
+			SELECT mode_of_payment, SUM(base_amount) as amount
+			FROM `tabSales Invoice Payment`
+			WHERE parent = %(invoice)s
+			GROUP BY mode_of_payment
+		""", {"invoice": inv.name}, as_dict=True)
+		pe_payments = frappe.db.sql("""
+			SELECT pe.mode_of_payment, SUM(per.allocated_amount) as amount
+			FROM `tabPayment Entry` pe
+			INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
+			WHERE per.reference_doctype = 'Sales Invoice'
+				AND per.reference_name = %(invoice)s
+				AND pe.docstatus = 1
+				AND pe.posting_date = %(date)s
+			GROUP BY pe.mode_of_payment
+		""", {"invoice": inv.name, "date": date}, as_dict=True)
+
+		all_payments = {}
+		for pd in payment_details:
+			all_payments[pd.mode_of_payment] = all_payments.get(pd.mode_of_payment, 0) + flt(pd.amount)
+		for pe in pe_payments:
+			all_payments[pe.mode_of_payment] = all_payments.get(pe.mode_of_payment, 0) + flt(pe.amount)
+
+		cash_amount = 0
+		bank_amount = 0
+		mode_of_payment_str = ", ".join(all_payments.keys()) if all_payments else ""
+		for mode, amount in all_payments.items():
+			if mode:
+				mode_type = frappe.db.get_value("Mode of Payment", mode, "type")
+				if mode_type == "Cash":
+					cash_amount += flt(amount)
+				else:
+					bank_amount += flt(amount)
+		if not all_payments:
+			bank_amount = inv.grand_total
+
+		data.append(["Sales Invoice", inv.name, inv.customer, inv.customer_name or "",
+			mode_of_payment_str or "Not Paid", inv.grand_total, cash_amount, bank_amount,
+			inv.posting_date, inv.remarks or ""])
+	return data
+
+
+def get_purchase_invoices(date, company):
+	data = []
+	conditions = "pi.posting_date = %(date)s AND pi.docstatus = 1"
+	if company:
+		conditions += " AND pi.company = %(company)s"
+	purchase_invoices = frappe.db.sql("""
+		SELECT pi.name, pi.posting_date, pi.supplier, pi.supplier_name,
+			pi.grand_total, pi.net_total, pi.outstanding_amount, pi.remarks, pi.company
+		FROM `tabPurchase Invoice` pi
+		WHERE {conditions}
+		ORDER BY pi.posting_date, pi.name
+	""".format(conditions=conditions), {"date": date, "company": company}, as_dict=True)
+
+	for inv in purchase_invoices:
+		pe_payments = frappe.db.sql("""
+			SELECT pe.mode_of_payment, SUM(per.allocated_amount) as amount
+			FROM `tabPayment Entry` pe
+			INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
+			WHERE per.reference_doctype = 'Purchase Invoice'
+				AND per.reference_name = %(invoice)s
+				AND pe.docstatus = 1
+				AND pe.posting_date = %(date)s
+			GROUP BY pe.mode_of_payment
+		""", {"invoice": inv.name, "date": date}, as_dict=True)
+
+		cash_amount = 0
+		bank_amount = 0
+		mode_of_payment_str = ", ".join([p.mode_of_payment for p in pe_payments if p.mode_of_payment]) if pe_payments else ""
+		for pe in pe_payments:
+			if pe.mode_of_payment:
+				mode_type = frappe.db.get_value("Mode of Payment", pe.mode_of_payment, "type")
+				if mode_type == "Cash":
+					cash_amount += flt(pe.amount)
+				else:
+					bank_amount += flt(pe.amount)
+		if not pe_payments:
+			bank_amount = inv.grand_total
+
+		data.append(["Purchase Invoice", inv.name, inv.supplier, inv.supplier_name or "",
+			mode_of_payment_str or "Not Paid", inv.grand_total, cash_amount, bank_amount,
+			inv.posting_date, inv.remarks or ""])
+	return data
+
+
+def get_payment_entries(date, company):
+	data = []
+	conditions = "pe.posting_date = %(date)s AND pe.docstatus = 1"
+	if company:
+		conditions += " AND pe.company = %(company)s"
+	payment_entries = frappe.db.sql("""
+		SELECT pe.name, pe.posting_date, pe.party_type, pe.party, pe.party_name,
+			pe.mode_of_payment, pe.paid_amount, pe.received_amount, pe.payment_type,
+			pe.remarks, pe.company
+		FROM `tabPayment Entry` pe
+		WHERE {conditions}
+		ORDER BY pe.posting_date, pe.name
+	""".format(conditions=conditions), {"date": date, "company": company}, as_dict=True)
+
+	for pe in payment_entries:
+		amount = pe.paid_amount if pe.payment_type == "Pay" else pe.received_amount
+		cash_amount = 0
+		bank_amount = 0
+		if pe.mode_of_payment:
+			mode_type = frappe.db.get_value("Mode of Payment", pe.mode_of_payment, "type")
+			if mode_type == "Cash":
+				cash_amount = amount
+			else:
+				bank_amount = amount
+		else:
+			bank_amount = amount
+
+		data.append(["Payment Entry", pe.name, pe.party or "",
+			pe.party_name or pe.party or "", pe.mode_of_payment or "", amount,
+			cash_amount, bank_amount, pe.posting_date, pe.remarks or ""])
+	return data
+
+================================================================================
+FILE: sf_trading/sf_trading/report/dcr_detailed/dcr_detailed.js
+================================================================================
+// Copyright (c) 2025, sf_trading and contributors
+
+frappe.query_reports["DCR Detailed"] = {
+	filters: [
+		{
+			fieldname: "date",
+			label: __("Date"),
+			fieldtype: "Date",
+			default: frappe.datetime.get_today(),
+			reqd: 1,
+		},
+		{
+			fieldname: "company",
+			label: __("Company"),
+			fieldtype: "Link",
+			options: "Company",
+			default: frappe.defaults.get_user_default("Company"),
+			reqd: 1,
+		},
+	],
+};
+
+================================================================================
+FILE: sf_trading/sf_trading/report/work_flow_approval/work_flow_approval.py
+================================================================================
+# Copyright (c) 2026, enfono and contributors
+
+import frappe
+
+
+def execute(filters=None):
+    return get_columns(), get_data(filters)
+
+
+def get_columns():
+    return [
+        { "label": "User", "fieldname": "owner", "fieldtype": "Link", "options": "User", "width": 180 },
+        { "label": "Company", "fieldname": "company", "fieldtype": "Link", "options": "Company", "width": 150 },
+        { "label": "DocType", "fieldname": "doctype", "fieldtype": "Data", "width": 150 },
+        { "label": "Document", "fieldname": "name", "fieldtype": "Dynamic Link", "options": "doctype", "width": 200 },
+        { "label": "Status", "fieldname": "workflow_state", "fieldtype": "Data", "width": 150 },
+        { "label": "Created Date", "fieldname": "creation", "fieldtype": "Datetime", "width": 180 }
+    ]
+
+
+def get_data(filters):
+    filters = filters or {}
+    if filters.get("doctype"):
+        return get_doctype_data(filters.get("doctype"), filters)
+
+    workflows = frappe.db.get_all("Workflow", filters={"is_active": 1}, fields=["document_type"])
+    all_data = []
+    seen = set()
+    for w in workflows:
+        dt = w.document_type
+        if not dt or dt in seen:
+            continue
+        seen.add(dt)
+        try:
+            all_data.extend(get_doctype_data(dt, filters))
+        except Exception:
+            continue
+
+    all_data.sort(key=lambda x: x.get("creation") or "", reverse=True)
+    return all_data
+
+
+def get_doctype_data(doctype, filters):
+    if not frappe.db.has_column(doctype, "workflow_state"):
+        return []
+
+    has_company = frappe.db.has_column(doctype, "company")
+    conditions = "workflow_state = 'Pending'"
+    values = {}
+
+    if filters.get("company") and has_company:
+        conditions += " AND company = %(company)s"
+        values["company"] = filters["company"]
+    if filters.get("from_date"):
+        conditions += " AND creation >= %(from_date)s"
+        values["from_date"] = filters["from_date"]
+    if filters.get("to_date"):
+        conditions += " AND creation <= %(to_date)s"
+        values["to_date"] = filters["to_date"]
+
+    fields = ("company, " if has_company else "") + "name, workflow_state, owner, creation"
+    data = frappe.db.sql(f"""
+        SELECT {fields} FROM `tab{doctype}`
+        WHERE {conditions} ORDER BY creation DESC
+    """, values, as_dict=True)
+
+    for d in data:
+        d["doctype"] = doctype
+        if not has_company:
+            d["company"] = ""
+    return data
+
+
+@frappe.whitelist()
+def get_workflow_actions(doctype):
+    wf = frappe.db.get_all("Workflow", filters={"document_type": doctype, "is_active": 1}, fields=["name"], limit=1)
+    if not wf:
+        return []
+    seen, actions = set(), []
+    for t in frappe.get_doc("Workflow", wf[0].name).transitions:
+        if t.action and t.action not in seen:
+            seen.add(t.action)
+            actions.append(t.action)
+    return actions
+
+
+@frappe.whitelist()
+def get_all_workflow_actions():
+    workflows = frappe.db.get_all("Workflow", filters={"is_active": 1}, fields=["name"])
+    seen, actions = set(), []
+    for w in workflows:
+        try:
+            for t in frappe.get_doc("Workflow", w.name).transitions:
+                if t.action and t.action not in seen:
+                    seen.add(t.action)
+                    actions.append(t.action)
+        except Exception:
+            continue
+    return actions
+
+
+@frappe.whitelist()
+def apply_bulk_workflow(docs, action):
+    import json
+    from frappe.model.workflow import apply_workflow
+
+    results = []
+    for d in json.loads(docs):
+        try:
+            apply_workflow(frappe.get_doc(d["doctype"], d["name"]), action)
+            results.append(f" {d['name']} — Success")
+        except Exception as e:
+            results.append(f" {d['name']} — {str(e)}")
+
+    frappe.db.commit()
+    return "<br>".join(results)
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def get_workflow_doctypes(doctype, txt, searchfield, start, page_len, filters):
+    workflows = frappe.db.get_all("Workflow", filters={"is_active": 1}, fields=["document_type"], limit=100)
+    return [[w.document_type, w.document_type] for w in workflows
+            if w.document_type and txt.lower() in w.document_type.lower()]
+
+
+@frappe.whitelist()
+def get_pending_approval_count(user=None):
+    user = user or frappe.session.user
+    if user == "Administrator":
+        return _count_all_pending()
+
+    user_roles = set(frappe.get_roles(user))
+    workflows = frappe.db.get_all("Workflow", filters={"is_active": 1}, fields=["name", "document_type"])
+
+    total = 0
+    seen = set()
+    for w in workflows:
+        dt = w.document_type
+        if not dt or dt in seen:
+            continue
+        seen.add(dt)
+        if not frappe.db.has_column(dt, "workflow_state"):
+            continue
+        try:
+            wf_doc = frappe.get_cached_doc("Workflow", w.name)
+        except Exception:
+            continue
+        approver_roles = set()
+        for state in wf_doc.states:
+            if state.state == "Pending" and state.allow_edit:
+                approver_roles.add(state.allow_edit)
+        if approver_roles and not (user_roles & approver_roles):
+            continue
+        try:
+            total += frappe.db.count(dt, filters={"workflow_state": "Pending"}) or 0
+        except Exception:
+            continue
+
+    return total
+
+
+def _count_all_pending():
+    workflows = frappe.db.get_all("Workflow", filters={"is_active": 1}, fields=["document_type"])
+    total = 0
+    seen = set()
+    for w in workflows:
+        dt = w.document_type
+        if not dt or dt in seen:
+            continue
+        seen.add(dt)
+        if not frappe.db.has_column(dt, "workflow_state"):
+            continue
+        try:
+            total += frappe.db.count(dt, filters={"workflow_state": "Pending"}) or 0
+        except Exception:
+            continue
+    return total
+
+================================================================================
+FILE: sf_trading/sf_trading/report/work_flow_approval/work_flow_approval.js
+================================================================================
+let wf_action = "";
+
+frappe.query_reports["Work Flow Approval"] = {
+    filters: [
+        { fieldname: "user", label: "User", fieldtype: "Link", options: "User", default: frappe.session.user },
+        { fieldname: "company", label: "Company", fieldtype: "Link", options: "Company" },
+        {
+            fieldname: "doctype", label: "Document Type", fieldtype: "Link", options: "DocType",
+            get_query: function() {
+                return { query: "sf_trading.sf_trading.report.work_flow_approval.work_flow_approval.get_workflow_doctypes" };
+            },
+            on_change: function() {
+                wf_action = "";
+                $("#wf-action-select").val("");
+                load_actions();
+                frappe.query_report.refresh();
+            }
+        },
+        { fieldname: "from_date", label: "From Date", fieldtype: "Date" },
+        { fieldname: "to_date", label: "To Date", fieldtype: "Date" }
+    ],
+
+    after_datatable_render: function(dt) {
+        $(dt.wrapper).find(".dt-cell--col-0").each(function(i) {
+            if (i === 0) return;
+            let $c = $(this).css({ "text-align": "center", "cursor": "pointer" });
+            if (!$c.find('input[type="checkbox"]').length)
+                $c.html('<input type="checkbox" class="row-check" style="width:16px;height:16px;cursor:pointer;">');
+            $c.off("click").on("click", function(e) {
+                if (!$(e.target).is("input"))
+                    $c.find('input[type="checkbox"]').prop("checked", v => !v);
+            });
+        });
+    },
+
+    onload: function(report) {
+        setTimeout(function() {
+            if (report.page.page_form.length && !$("#wf-action-select").length) {
+                report.page.page_form.append(`
+                    <div style="display:inline-block;margin-left:8px;vertical-align:middle;">
+                        <select id="wf-action-select" style="height:30px;border:none;border-radius:25px;
+                            padding:0 14px;font-size:13px;font-family:inherit;color:#333;
+                            background-color:#f4f5f6;min-width:160px;cursor:pointer;outline:none;">
+                            <option value="">Workflow Action</option>
+                        </select>
+                    </div>`);
+                $("#wf-action-select").on("change", function() { wf_action = $(this).val(); });
+            }
+            load_actions();
+        }, 800);
+
+        report.page.add_inner_button("Apply Workflow Action", function() {
+            let docs = [];
+            $(report.datatable.wrapper).find("input.row-check:checked").each(function() {
+                let idx = parseInt($(this).closest(".dt-row").attr("data-row-index"));
+                if (!isNaN(idx) && report.data[idx])
+                    docs.push({ doctype: report.data[idx].doctype, name: report.data[idx].name });
+            });
+            if (!docs.length) return frappe.msgprint(__("Please select at least one document."));
+
+            let action = $("#wf-action-select").val() || wf_action;
+            if (!action) return frappe.msgprint(__("Please select a Workflow Action."));
+
+            frappe.confirm(
+                __("Apply <b>{0}</b> to {1} document(s)?", [action, docs.length]),
+                () => frappe.call({
+                    method: "sf_trading.sf_trading.report.work_flow_approval.work_flow_approval.apply_bulk_workflow",
+                    args: { docs: JSON.stringify(docs), action },
+                    freeze: true,
+                    freeze_message: __("Applying..."),
+                    callback: r => {
+                        if (!r.exc) {
+                            frappe.msgprint({ title: __("Result"), message: r.message, indicator: "green" });
+                            frappe.query_report.refresh();
+                        }
+                    }
+                })
+            );
+        });
+    }
+};
+
+function load_actions() {
+    let doctype = frappe.query_report.get_filter_value("doctype");
+    let method = doctype
+        ? "sf_trading.sf_trading.report.work_flow_approval.work_flow_approval.get_workflow_actions"
+        : "sf_trading.sf_trading.report.work_flow_approval.work_flow_approval.get_all_workflow_actions";
+    let args = doctype ? { doctype } : {};
+    frappe.call({
+        method: method, args: args,
+        callback: r => {
+            let $s = $("#wf-action-select").empty().append('<option value="">Workflow Action</option>');
+            (r.message || []).forEach(a => $s.append(`<option value="${a}">${a}</option>`));
+        }
+    });
+}
+
+================================================================================
+FILE: sf_trading/public/js/warehouse_stock_popup.js
+================================================================================
+[... see file: sf_trading/public/js/warehouse_stock_popup.js - 559 lines of warehouse stock display and material request UI logic ...]
+
+================================================================================
+FILE: sf_trading/public/js/last_selling_rate.js
+================================================================================
+[... see file: sf_trading/public/js/last_selling_rate.js - 417 lines of last selling rate dialog and history table logic ...]
+
+================================================================================
+FILE: sf_trading/public/js/create_customer.js
+================================================================================
+[... see file: sf_trading/public/js/create_customer.js - 165 lines of quick customer creation dialog logic ...]
+
+================================================================================
+FILE: sf_trading/public/js/sales_invoice_barcode.js
+================================================================================
+[... see file: sf_trading/public/js/sales_invoice_barcode.js - 213 lines of barcode scanner integration for Sales Invoice ...]
+
+================================================================================
+FILE: sf_trading/public/js/sales_invoice_inter_company.js
+================================================================================
+// sf_trading: Inter Company Branch - filter branches by buying company
+frappe.ui.form.on("Sales Invoice", {
+	onload: function (frm) {
+		frm.set_query("inter_company_branch", function () {
+			if (!frm.doc.represents_company) {
+				return { filters: { name: "" } };
+			}
+			return {
+				query: "sf_trading.sf_trading.doctype.inter_company_branch.inter_company_branch.get_branches_for_company",
+				filters: { company: frm.doc.represents_company },
+			};
+		});
+	},
+});
+
+================================================================================
+FILE: sf_trading/public/js/sales_invoice_pos_total_popup.js
+================================================================================
+[... see file: sf_trading/public/js/sales_invoice_pos_total_popup.js - 452 lines of POS payment entry popup logic ...]
+
+================================================================================
+FILE: sf_trading/public/js/workflow_approval_shortcut.js
+================================================================================
+// Adds a pending count badge next to the "Work Flow Approval" shortcut on any workspace.
+
+frappe.provide("sf_trading.wf_shortcut");
+
+sf_trading.wf_shortcut.update_count = function() {
+    let $links = $('.shortcut-widget-box a, .widget.shortcut-widget-box .widget-title')
+        .filter(function() {
+            return $(this).text().trim().toLowerCase().includes("work flow approval")
+                || $(this).text().trim().toLowerCase().includes("workflow approval");
+        });
+
+    if (!$links.length) return;
+
+    frappe.call({
+        method: "sf_trading.sf_trading.report.work_flow_approval.work_flow_approval.get_pending_approval_count",
+        callback: function(r) {
+            let count = r.message || 0;
+            $('.shortcut-widget-box').each(function() {
+                let $box = $(this);
+                let txt = $box.find('.widget-title, a').first().text().trim().toLowerCase();
+                if (!txt.includes("work flow approval") && !txt.includes("workflow approval")) return;
+                $box.find('.wf-pending-count').remove();
+                let $badge = $(`<span class="wf-pending-count" style="display:inline-block;margin-left:8px;
+                    padding:2px 8px;background:#f4f5f6;color:${count > 0 ? '#e24c4c' : '#525252'};
+                    border-radius:8px;font-size:12px;font-weight:500;vertical-align:middle;">${count}</span>`);
+                let $target = $box.find('.widget-title').first();
+                if (!$target.length) $target = $box.find('a').first();
+                $target.append($badge);
+            });
+        }
+    });
+};
+
+$(document).on("page-change app_ready", function() {
+    setTimeout(sf_trading.wf_shortcut.update_count, 600);
+    setTimeout(sf_trading.wf_shortcut.update_count, 1500);
+});
+
+frappe.after_ajax(function() {
+    setTimeout(sf_trading.wf_shortcut.update_count, 1000);
+});
+
+setInterval(sf_trading.wf_shortcut.update_count, 60000);
+
+================================================================================
+END OF SF TRADING SOURCE CODE EXPORT
+Total files: 24 source files
+App version: 0.0.1
+================================================================================
