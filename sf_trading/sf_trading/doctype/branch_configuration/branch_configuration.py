@@ -55,6 +55,9 @@ class BranchConfiguration(Document):
 			for c in old_doc.cost_center:
 				delete_permission(user, "Cost Center", c.cost_center)
 
+			for m in old_doc.mode_of_payment:
+				delete_permission(user, "Mode of Payment", m.mode_of_payment)
+
 			# Remove role if user is not in any other Branch Configuration
 			old_role = None
 			for old_u in old_doc.user:
@@ -62,6 +65,16 @@ class BranchConfiguration(Document):
 					old_role = old_u.get("role") or BRANCH_USER_ROLE
 					break
 			_maybe_remove_role(user, old_role or BRANCH_USER_ROLE, exclude_branch=self.name)
+
+		# Handle mode of payment removals for remaining users
+		old_mops = {m.mode_of_payment for m in old_doc.mode_of_payment if m.mode_of_payment}
+		new_mops = {m.mode_of_payment for m in self.mode_of_payment if m.mode_of_payment}
+		removed_mops = old_mops - new_mops
+		if removed_mops:
+			remaining_users = old_users & new_users
+			for user in remaining_users:
+				for mop in removed_mops:
+					delete_permission(user, "Mode of Payment", mop)
 
 		# Handle company change — remove old company permission for remaining users
 		old_company = old_doc.get("company")
@@ -87,6 +100,10 @@ class BranchConfiguration(Document):
 				# First cost center is the default
 				create_permission(u.user, "Cost Center", c.cost_center, is_default=1 if idx == 0 else 0)
 
+			for idx, m in enumerate(self.mode_of_payment):
+				# First mode of payment is the default
+				create_permission(u.user, "Mode of Payment", m.mode_of_payment, is_default=1 if idx == 0 else 0)
+
 			# Also grant access to the company's default cost center (used in tax templates)
 			# without marking it as default — the branch cost center stays as the user's default
 			if self.company:
@@ -99,7 +116,10 @@ class BranchConfiguration(Document):
 			_assign_role(u.user, selected_role)
 
 			# Auto-set Module Profile based on role
-			_set_module_profile_for_role(u.user, selected_role)
+			if selected_role == BRANCH_USER_ROLE:
+				_set_module_profile(u.user, "Branch User")
+			elif selected_role == "Damage User":
+				_set_module_profile(u.user, "Damage User")
 
 
 def create_permission(user, allow, value, is_default=0):

@@ -22,7 +22,9 @@
    "fetch_if_empty": 1,
    "fieldname": "type",
    "fieldtype": "Data",
-   "label": "Type"
+   "in_list_view": 1,
+   "label": "Type",
+   "read_only": 1
   }
  ],
  "grid_page_length": 50,
@@ -51,5 +53,7 @@
  "rows_threshold_for_grid_search": 20,
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "editable_grid": 1,
+ "istable": 1
 }

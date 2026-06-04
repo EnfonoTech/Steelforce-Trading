@@ -108,7 +108,62 @@ def get_payment_modes_with_account(company: str, mode_list: str | list = None):
 	if mode_list is not None and names:
 		order = {m: i for i, m in enumerate(names)}
 		valid.sort(key=lambda m: order.get(m, 999))
+
+	valid = _restrict_to_branch_allowlist(valid, company)
 	return valid
+
+
+def _restrict_to_branch_allowlist(modes: list, company: str) -> list:
+	"""For users in a Branch Configuration, filter Cash/Bank MoPs to the
+	branch's allowlist. Other types (General, Phone, etc.) pass through.
+	Bypassed for Administrator, Guest, System Manager, Sales Manager.
+	"""
+	if not modes:
+		return modes
+
+	user = frappe.session.user
+	if user in ("Administrator", "Guest"):
+		return modes
+
+	roles = set(frappe.get_roles(user))
+	if roles & {"System Manager", "Sales Manager", "Sales Master Manager"}:
+		return modes
+
+	from sf_trading.branch_defaults import _branch_mops_by_type, _resolve_user_branch
+
+	branch = _resolve_user_branch(user, company=company)
+	if not branch:
+		return modes
+
+	cash_allow, bank_allow = _branch_mops_by_type(branch)
+	# If branch has no Cash/Bank MoPs configured, don't filter
+	if not cash_allow and not bank_allow:
+		return modes
+
+	cash_allow_set = set(cash_allow)
+	bank_allow_set = set(bank_allow)
+
+	mop_types = {
+		m["name"]: (m.get("type") or "")
+		for m in frappe.get_all(
+			"Mode of Payment",
+			filters={"name": ["in", modes]},
+			fields=["name", "type"],
+		)
+	}
+
+	out = []
+	for m in modes:
+		t = mop_types.get(m, "")
+		if t == "Cash":
+			if m in cash_allow_set:
+				out.append(m)
+		elif t == "Bank":
+			if m in bank_allow_set:
+				out.append(m)
+		else:
+			out.append(m)
+	return out
 
 
 @frappe.whitelist()

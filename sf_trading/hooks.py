@@ -153,7 +153,11 @@ doc_events = {
 		"validate": "sf_trading.api.customer_override.validate",
 	},
 	"Sales Invoice": {
-		"before_validate": "sf_trading.api.sales_invoice_override.before_validate",
+		"before_validate": [
+			"sf_trading.api.sales_invoice_override.before_validate",
+			"sf_trading.branch_defaults.override_cost_center_from_branch",
+			"sf_trading.branch_defaults.override_payment_accounts_from_branch",
+		],
 		"validate": "sf_trading.api.sales_invoice_override.validate",
 		"on_submit": "sf_trading.inter_company.sales_invoice_on_submit",
 	},

@@ -19,10 +19,10 @@
   },
   {
    "fieldname": "role",
-   "fieldtype": "Select",
+   "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Role",
-   "options": "Branch User\nStock User\nStock Manager\nDamage User"
+   "options": "Role"
   }
  ],
  "grid_page_length": 50,
@@ -39,5 +39,6 @@
  "rows_threshold_for_grid_search": 20,
  "sort_field": "modified",
  "sort_order": "DESC",
- "states": []
+ "states": [],
+ "editable_grid": 1
 }
