@@ -1,6 +1,33 @@
 import frappe
 
 
+def item_permission_query(user=None):
+	"""Restrict Item list/search to items that have an Item Default for the
+	user's permitted company. Bypassed for System Manager and Administrator.
+	"""
+	user = user or frappe.session.user
+	if user in ("Administrator", "Guest"):
+		return ""
+
+	if "System Manager" in frappe.get_roles(user):
+		return ""
+
+	company = (
+		frappe.defaults.get_user_default("company")
+		or frappe.defaults.get_user_default("Company")
+	)
+	if not company:
+		return ""
+
+	company_escaped = frappe.db.escape(company)
+	return (
+		"`tabItem`.`name` IN ("
+		"  SELECT `parent` FROM `tabItem Default`"
+		"  WHERE `company` = {company}"
+		")".format(company=company_escaped)
+	)
+
+
 def override_cost_center_from_branch(doc, method=None):
 	"""before_validate: replace any cost center the user cannot access with
 	their default branch cost center — covers doc header, items, and tax rows.

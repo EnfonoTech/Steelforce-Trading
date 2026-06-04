@@ -51,6 +51,19 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 	if not item_codes:
 		return list(base_rows)
 
+	# Filter: only show items that have an Item Default for the user's company
+	if company:
+		items_with_company_default = frappe.get_all(
+			"Item Default",
+			filters={"company": company, "parent": ["in", item_codes]},
+			pluck="parent",
+		)
+		allowed = set(items_with_company_default)
+		base_rows = [row for row in base_rows if row and row[0] in allowed]
+		item_codes = [row[0] for row in base_rows if row and row[0]]
+		if not item_codes:
+			return []
+
 	# --- Resolve "the logged user's warehouse(s)" ---
 	# Priority:
 	#   1. User Permission on Warehouse (matches Quick Entry's behaviour).
