@@ -1,5 +1,17 @@
 [
  {
+  "doctype": "Custom Field",
+  "dt": "Customer Credit Limit",
+  "fieldname": "custom_credit_days",
+  "fieldtype": "Int",
+  "label": "Credit Days",
+  "insert_after": "credit_limit",
+  "default": "0",
+  "description": "Number of days before an unpaid credit invoice blocks new credit invoices. Leave 0 to disable.",
+  "modified": "2026-06-06 00:00:00.000000",
+  "name": "Customer Credit Limit-custom_credit_days"
+ },
+ {
   "allow_in_quick_entry": 0,
   "allow_on_submit": 0,
   "bold": 0,

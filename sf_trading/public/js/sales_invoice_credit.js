@@ -22,16 +22,43 @@ function sf_get_customer_credit_limit(customer, company) {
 	});
 }
 
+function sf_check_overdue_on_customer(frm) {
+	if (frm.doc.custom_payment_mode !== "Credit" || !frm.doc.customer || !frm.doc.company) return;
+	frappe.call({
+		method: "sf_trading.api.sales_invoice_override.check_customer_credit_overdue",
+		args: { customer: frm.doc.customer, company: frm.doc.company },
+		callback: function (r) {
+			if (r.message) {
+				var inv = r.message;
+				frappe.msgprint({
+					title: __("Overdue Credit Invoice"),
+					message: __(
+						"Customer {0} has an overdue credit invoice <b>{1}</b> dated {2} "
+						+ "with outstanding amount {3}. "
+						+ "Saving this invoice will be blocked until it is settled.",
+						[frm.doc.customer, inv.name, inv.posting_date,
+						format_currency(inv.outstanding_amount, frm.doc.currency)]
+					),
+					indicator: "orange",
+				});
+			}
+		},
+	});
+}
+
 frappe.ui.form.on("Sales Invoice", {
 	onload: function (frm) {
 		sf_apply_customer_credit_filter(frm);
+		// Warn once on initial load if draft already has a customer in Credit mode
+		if (frm.doc.docstatus === 0 && frm.doc.customer) {
+			sf_check_overdue_on_customer(frm);
+		}
 	},
 	refresh: function (frm) {
 		sf_apply_customer_credit_filter(frm);
 	},
 	custom_payment_mode: function (frm) {
 		sf_apply_customer_credit_filter(frm);
-		// Re-validate current customer when switching to Credit
 		if (frm.doc.custom_payment_mode === "Credit" && frm.doc.customer) {
 			sf_get_customer_credit_limit(frm.doc.customer, frm.doc.company).then(function (limit) {
 				if (limit <= 0) {
@@ -41,7 +68,9 @@ frappe.ui.form.on("Sales Invoice", {
 						indicator: "red",
 					});
 					frm.set_value("customer", "");
+					return;
 				}
+				sf_check_overdue_on_customer(frm);
 			});
 		}
 	},
@@ -55,7 +84,9 @@ frappe.ui.form.on("Sales Invoice", {
 					indicator: "red",
 				});
 				frm.set_value("customer", "");
+				return;
 			}
+			sf_check_overdue_on_customer(frm);
 		});
 	},
 });

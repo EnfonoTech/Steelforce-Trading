@@ -26,13 +26,45 @@ def before_validate(doc, _method=None):
 
 
 def validate(doc, _method=None):
-	"""Block new credit invoice if customer has overdue unsettled credit (> 30 days)."""
+	"""Block new credit invoice if customer has overdue unsettled credit."""
+	if doc.is_return:
+		return
 	if doc.custom_payment_mode != "Credit":
 		return
 	if not doc.customer:
 		return
 
-	overdue = frappe.db.sql(
+	inv = _get_overdue_invoice(doc.customer, doc.company)
+	if inv:
+		frappe.throw(
+			_(
+				"Cannot create a new credit invoice for {0}. "
+				"Invoice {1} dated {2} has an outstanding amount of {3} "
+				"that is overdue. Please settle the outstanding balance first."
+			).format(
+				doc.customer,
+				inv.name,
+				inv.posting_date,
+				frappe.utils.fmt_money(inv.outstanding_amount, currency=doc.currency),
+			)
+		)
+
+
+def _get_overdue_invoice(customer, company):
+	"""Return the oldest overdue credit invoice for the customer, or None.
+
+	Uses the Credit Days configured on the Customer Credit Limit row for the
+	given company. Returns None if no credit days are set (validation disabled).
+	"""
+	credit_days = frappe.db.get_value(
+		"Customer Credit Limit",
+		{"parent": customer, "company": company},
+		"custom_credit_days",
+	)
+	if not credit_days:
+		return None
+
+	rows = frappe.db.sql(
 		"""
 		SELECT name, posting_date, outstanding_amount
 		FROM `tabSales Invoice`
@@ -41,25 +73,17 @@ def validate(doc, _method=None):
 		  AND custom_payment_mode = 'Credit'
 		  AND docstatus = 1
 		  AND outstanding_amount > 0
-		  AND DATEDIFF(%s, posting_date) > 30
+		  AND DATEDIFF(%s, posting_date) > %s
+		ORDER BY posting_date ASC
 		LIMIT 1
 		""",
-		(doc.customer, doc.company, today()),
+		(customer, company, today(), frappe.utils.cint(credit_days)),
 		as_dict=True,
 	)
+	return rows[0] if rows else None
 
-	if overdue:
-		inv = overdue[0]
-		frappe.throw(
-			_(
-				"Cannot create a new credit invoice for {0}. "
-				"Invoice {1} dated {2} has an outstanding amount of {3} "
-				"that is more than 30 days overdue. "
-				"Please settle the outstanding balance first."
-			).format(
-				doc.customer,
-				inv.name,
-				inv.posting_date,
-				frappe.utils.fmt_money(inv.outstanding_amount, currency=doc.currency),
-			)
-		)
+
+@frappe.whitelist()
+def check_customer_credit_overdue(customer, company):
+	"""Client-side check: return the oldest overdue invoice dict or None."""
+	return _get_overdue_invoice(customer, company)

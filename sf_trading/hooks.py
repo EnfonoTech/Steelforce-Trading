@@ -278,6 +278,7 @@ fixtures = [
 				"name",
 				"in",
 				(
+					"Customer Credit Limit-custom_credit_days",
 					"Customer-custom_commercial_registration_number",
 					"Sales Invoice-inter_company_branch",
 					"Sales Invoice-custom_sale_type",
