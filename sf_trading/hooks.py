@@ -42,6 +42,7 @@ app_include_js = [
 	f"/assets/sf_trading/js/sales_invoice_item_search.js?{_v}",
 	f"/assets/sf_trading/js/purchase_invoice_cost_center.js?{_v}",
 	f"/assets/sf_trading/js/create_supplier.js?{_v}",
+	f"/assets/sf_trading/js/stock_entry.js?{_v}",
 ]
 
 # include js, css files in header of web template
@@ -483,6 +484,10 @@ fixtures = [
 			"Sales Order-sec_warehouse-collapsible",
 			"Sales Order-po_date-hidden",
 			"Sales Order-po_no-hidden",
+			"Stock Entry-from_warehouse-ignore_user_permissions",
+			"Stock Entry-to_warehouse-ignore_user_permissions",
+			"Stock Entry Detail-s_warehouse-ignore_user_permissions",
+			"Stock Entry Detail-t_warehouse-ignore_user_permissions",
 		)]]
 	}
 ]
