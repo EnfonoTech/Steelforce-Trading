@@ -6,7 +6,8 @@
  "engine": "InnoDB",
  "field_order": [
   "mode_of_payment",
-  "type"
+  "type",
+  "for_return"
  ],
  "fields": [
   {
@@ -25,12 +26,19 @@
    "in_list_view": 1,
    "label": "Type",
    "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "for_return",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "For Return"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-04 18:27:04.017025",
+ "modified": "2026-06-06 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "Branch Configuration Mode of Payment",

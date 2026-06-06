@@ -49,7 +49,7 @@ def get_available_credit(customer: str, company: str) -> float:
 
 
 @frappe.whitelist()
-def get_payment_modes_with_account(company: str, mode_list: str | list = None):
+def get_payment_modes_with_account(company: str, mode_list: str | list = None, is_return: int | str = 0):
 	"""
 	Return Mode of Payment names that are enabled and have a default Cash/Bank
 	account for the given company. Use this to avoid "Please set default Cash or
@@ -109,11 +109,11 @@ def get_payment_modes_with_account(company: str, mode_list: str | list = None):
 		order = {m: i for i, m in enumerate(names)}
 		valid.sort(key=lambda m: order.get(m, 999))
 
-	valid = _restrict_to_branch_allowlist(valid, company)
+	valid = _restrict_to_branch_allowlist(valid, company, is_return=frappe.utils.cint(is_return))
 	return valid
 
 
-def _restrict_to_branch_allowlist(modes: list, company: str) -> list:
+def _restrict_to_branch_allowlist(modes: list, company: str, is_return: int = 0) -> list:
 	"""For users in a Branch Configuration, filter Cash/Bank MoPs to the
 	branch's allowlist. Other types (General, Phone, etc.) pass through.
 	Bypassed for Administrator, Guest, System Manager, Sales Manager.
@@ -163,6 +163,20 @@ def _restrict_to_branch_allowlist(modes: list, company: str) -> list:
 				out.append(m)
 		else:
 			out.append(m)
+
+	if is_return and out:
+		return_allowed = set(
+			frappe.get_all(
+				"Branch Configuration Mode of Payment",
+				filters={"parent": branch, "parenttype": "Branch Configuration", "for_return": 1},
+				pluck="mode_of_payment",
+			)
+		)
+		# Only restrict if the branch has at least one for_return MoP configured.
+		# If none are configured, fall back to the full branch allowlist.
+		if return_allowed:
+			out = [m for m in out if m in return_allowed]
+
 	return out
 
 
@@ -285,16 +299,11 @@ def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list):
 
 		pe.insert()
 
-		# Bypass "Draft -> Pending" server script attachment requirement for
-		# auto-created Payment Entries from the Sales Invoice POS popup.
-		#
-		# Setting ignore_validate skips `validate` / `before_submit` for this submit,
-		# which is where such workflow attachment checks typically run.
+		# Bypass workflow state transition validation for auto-created PEs.
+		# ignore_workflow skips the "Draft -> Pending" transition check.
+		# ignore_validate skips before_submit hooks (e.g. attachment requirements).
+		pe.flags.ignore_workflow = True
 		pe.flags.ignore_validate = True
-
-		# Keep workflow_state consistent with the expected submitted state.
-		if hasattr(pe, "workflow_state"):
-			pe.workflow_state = "Pending"
 
 		pe.submit()
 		created.append(pe.name)

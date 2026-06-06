@@ -230,7 +230,7 @@ function sf_trading_show_pos_total_popup(frm) {
 						profile_payments.forEach(function (p) { default_by_mode[p.mode_of_payment] = p.default; });
 						frappe.call({
 							method: "sf_trading.api.sales_invoice_payment.get_payment_modes_with_account",
-							args: { company: frm.doc.company, mode_list: mode_list },
+							args: { company: frm.doc.company, mode_list: mode_list, is_return: frm.doc.is_return ? 1 : 0 },
 							callback: function (res) {
 								const valid_modes = res.message || [];
 								if (valid_modes.length === 0) {
@@ -277,7 +277,7 @@ function sf_trading_show_pos_total_popup(frm) {
 			// Non-credit without POS Profile: only enabled modes with default account
 			frappe.call({
 				method: "sf_trading.api.sales_invoice_payment.get_payment_modes_with_account",
-				args: { company: frm.doc.company },
+				args: { company: frm.doc.company, is_return: frm.doc.is_return ? 1 : 0 },
 				callback: function (r) {
 					const modes = r.message || [];
 					if (modes.length === 0) {
