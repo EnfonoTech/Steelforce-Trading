@@ -151,6 +151,8 @@ override_doctype_class = {
 # ---------------
 # Hook on document methods and events
 
+_CC_HOOK = "sf_trading.branch_defaults.override_cost_center_from_branch"
+
 doc_events = {
 	"Customer": {
 		"validate": "sf_trading.api.customer_override.validate",
@@ -158,16 +160,37 @@ doc_events = {
 	"Sales Invoice": {
 		"before_validate": [
 			"sf_trading.api.sales_invoice_override.before_validate",
-			"sf_trading.branch_defaults.override_cost_center_from_branch",
+			_CC_HOOK,
 			"sf_trading.branch_defaults.override_payment_accounts_from_branch",
 		],
 		"validate": "sf_trading.api.sales_invoice_override.validate",
 		"on_submit": "sf_trading.inter_company.sales_invoice_on_submit",
 	},
+	"Sales Order": {
+		"before_validate": _CC_HOOK,
+	},
+	"Quotation": {
+		"before_validate": _CC_HOOK,
+	},
+	"Delivery Note": {
+		"before_validate": _CC_HOOK,
+	},
 	"Purchase Invoice": {
-		"before_validate": "sf_trading.inter_company.purchase_invoice_before_validate",
+		"before_validate": [
+			"sf_trading.inter_company.purchase_invoice_before_validate",
+			_CC_HOOK,
+		],
 		"validate": "sf_trading.overrides.purchase_invoice.validate",
 		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
+	},
+	"Purchase Order": {
+		"before_validate": _CC_HOOK,
+	},
+	"Purchase Receipt": {
+		"before_validate": _CC_HOOK,
+	},
+	"Supplier Quotation": {
+		"before_validate": _CC_HOOK,
 	},
 }
 

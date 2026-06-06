@@ -26,112 +26,36 @@ function sf_trading_open_invoice_print(frm) {
 
 frappe.ui.form.on("Sales Invoice", {
 	refresh: function (frm) {
-		// Remove "Permanently Submit?" confirmation when clicking Submit
+		// Remove "Permanently Submit?" confirmation when clicking Submit.
+		// Popup/confirm logic is handled in before_submit below.
 		if (!frm._sf_savesubmit_wrapped) {
 			frm._sf_savesubmit_wrapped = true;
-			const orig_savesubmit = frm.savesubmit.bind(frm);
 			frm.savesubmit = function (btn, callback, on_error) {
 				var me = this;
-				// Submit without confirm: either show payment popup first or run submit directly
-				function do_submit_without_confirm() {
-					return new Promise(function (resolve) {
-						me.validate_form_action("Submit");
-						frappe.validated = true;
-						me.script_manager.trigger("before_submit").then(function () {
-							if (!frappe.validated) return me.handle_save_fail(btn, on_error);
-							me.save(
-								"Submit",
-								function (r) {
-									if (r.exc) me.handle_save_fail(btn, on_error);
-									else {
-										frappe.utils.play_sound("submit");
-										callback && callback();
-										me.script_manager.trigger("on_submit").then(function () {
-											resolve(me);
-										}).then(function () {
-											if (frappe.route_hooks.after_submit) {
-												var cb = frappe.route_hooks.after_submit;
-												delete frappe.route_hooks.after_submit;
-												cb(me);
-											}
-										});
+				me.validate_form_action("Submit");
+				frappe.validated = true;
+				me.script_manager.trigger("before_submit").then(function () {
+					if (!frappe.validated) return me.handle_save_fail(btn, on_error);
+					me.save(
+						"Submit",
+						function (r) {
+							if (r.exc) {
+								me.handle_save_fail(btn, on_error);
+							} else {
+								frappe.utils.play_sound("submit");
+								callback && callback();
+								me.script_manager.trigger("on_submit").then(function () {
+									if (frappe.route_hooks.after_submit) {
+										var cb = frappe.route_hooks.after_submit;
+										delete frappe.route_hooks.after_submit;
+										cb(me);
 									}
-								},
-								btn,
-								function () { me.handle_save_fail(btn, on_error); resolve(); }
-							);
-						});
-					});
-				}
-				// Show payment popup before submit when applicable (no confirm)
-				if (
-					!frappe.flags.sf_trading_skip_payment_popup &&
-					frm.doc.docstatus === 0 &&
-					frm.doc.name && !String(frm.doc.name).startsWith("new-") &&
-					frm.doc.custom_payment_mode !== "Credit" &&
-					Math.abs(flt(frm.doc.grand_total)) > 0
-				) {
-					// Save first so server-side validations run before popup shows
-					frappe.flags.sf_trading_skip_payment_popup = true;
-					return frm.save("Save").then(function () {
-						frappe.flags.sf_trading_skip_payment_popup = false;
-						if (frm.doc.docstatus !== 0) return;
-						if (frm.doc.pos_profile) {
-							return frappe.db.get_value(
-								"POS Profile",
-								frm.doc.pos_profile,
-								"disable_grand_total_to_default_mop"
-							).then(function (r) {
-								if (r && r.message === 1) return do_submit_without_confirm();
-								sf_trading_show_pos_total_popup(frm);
-							});
-						}
-						sf_trading_show_pos_total_popup(frm);
-					}).catch(function () {
-						frappe.flags.sf_trading_skip_payment_popup = false;
-					});
-				}
-				return do_submit_without_confirm();
-			};
-		}
-
-		// Capture save action so before_save knows if user clicked Submit (skip confirm)
-		if (!frm._sf_save_wrapped) {
-			frm._sf_save_wrapped = true;
-			const orig = frm.save.bind(frm);
-			frm.save = function (save_action, callback, btn, on_error) {
-				frappe.flags._sf_save_action = save_action || "Save";
-				// Show payment popup BEFORE submit (no confirmation); skip when submitting from popup
-				if (
-					save_action === "Submit" &&
-					!frappe.flags.sf_trading_skip_payment_popup &&
-					frm.doc.docstatus === 0 &&
-					frm.doc.name && !String(frm.doc.name).startsWith("new-") &&
-					frm.doc.custom_payment_mode !== "Credit" &&
-					Math.abs(flt(frm.doc.grand_total)) > 0
-				) {
-					// Save first so server-side validations run before popup shows
-					frappe.flags.sf_trading_skip_payment_popup = true;
-					return orig("Save").then(function () {
-						frappe.flags.sf_trading_skip_payment_popup = false;
-						if (frm.doc.docstatus !== 0) return;
-						if (frm.doc.pos_profile) {
-							return frappe.db.get_value(
-								"POS Profile",
-								frm.doc.pos_profile,
-								"disable_grand_total_to_default_mop"
-							).then(function (r) {
-								if (r && r.message === 1) return orig(save_action, callback, btn, on_error);
-								sf_trading_show_pos_total_popup(frm);
-							});
-						}
-						sf_trading_show_pos_total_popup(frm);
-					}).catch(function () {
-						frappe.flags.sf_trading_skip_payment_popup = false;
-					});
-				}
-				return orig(save_action, callback, btn, on_error).finally(function () {
-					delete frappe.flags._sf_save_action;
+								});
+							}
+						},
+						btn,
+						function () { me.handle_save_fail(btn, on_error); }
+					);
 				});
 			};
 		}
@@ -143,35 +67,32 @@ frappe.ui.form.on("Sales Invoice", {
 			});
 		}
 	},
-	before_save: function (frm) {
-		// Only show "Do you want to Submit?" for Credit sales
-		if (!frm.doc.custom_payment_mode || frm.doc.custom_payment_mode !== "Credit") return;
-		if (frm.doc.docstatus !== 0) return;
-		if (frappe.flags._sf_save_action === "Submit") return;
-		if (frm._asked_to_submit) return;
+	before_submit: function (frm) {
+		if (frm.doc.is_return) return;
 
-		frm._asked_to_submit = true;
+		// Cash: show payment popup — set frappe.validated=false to abort the submit,
+		// the popup's "Save & Submit" button calls frm.save("Submit") directly.
+		if (frm.doc.custom_payment_mode !== "Credit") {
+			if (Math.abs(flt(frm.doc.grand_total)) > 0) {
+				frappe.validated = false;
+				sf_trading_show_pos_total_popup(frm);
+			}
+			return;
+		}
+
+		// Credit: show confirm before submitting
 		frappe.validated = false;
-
 		frappe.confirm(
-			__("Do you want to Submit this Sales Invoice now?"),
+			__("Do you want to Submit this Sales Invoice?"),
 			function () {
+				frappe.flags.sf_trading_submitting_credit = true;
 				frm.save("Submit").then(function () {
-					frm._asked_to_submit = false;
-					// Only print if submission actually succeeded
-					if (
-						frm.doc.docstatus === 1 &&
-						frm.doc.name &&
-						!String(frm.doc.name).startsWith("new-")
-					) {
+					if (frm.doc.docstatus === 1) {
 						sf_trading_open_invoice_print(frm);
+						frm.reload_doc();
 					}
-					frm.reload_doc();
-				});
-			},
-			function () {
-				frm.save().then(function () {
-					frm._asked_to_submit = false;
+				}).finally(function () {
+					delete frappe.flags.sf_trading_submitting_credit;
 				});
 			}
 		);
@@ -179,17 +100,44 @@ frappe.ui.form.on("Sales Invoice", {
 	after_save: function (frm) {
 		if (frappe.flags.sf_trading_skip_payment_popup) return;
 		if (frappe.flags.sf_trading_popup_showing) return;
+		if (frm.doc.docstatus !== 0) return;
+		if (!frm.doc.name || frm.doc.name.startsWith("new-")) return;
+		if (frm.doc.is_return) return;
 
-		// Credit: no payment popup (only "Do you want to Submit?" in before_save)
-		if (frm.doc.custom_payment_mode && frm.doc.custom_payment_mode === "Credit") {
+		// Credit: ask "Do you want to Submit?" after saving
+		if (frm.doc.custom_payment_mode === "Credit") {
+			if (frappe.flags.sf_trading_credit_confirm_open) return;
+			frappe.flags.sf_trading_credit_confirm_open = true;
+			const d = frappe.confirm(
+				__("Do you want to Submit this Sales Invoice now?"),
+				function () {
+					frappe.flags.sf_trading_skip_payment_popup = true;
+					frappe.flags.sf_trading_submitting_credit = true;
+					frm.save("Submit").then(function () {
+						if (frm.doc.docstatus === 1) {
+							sf_trading_open_invoice_print(frm);
+							frm.reload_doc();
+						}
+					}).finally(function () {
+						delete frappe.flags.sf_trading_submitting_credit;
+						setTimeout(function () {
+							delete frappe.flags.sf_trading_skip_payment_popup;
+						}, 500);
+					});
+				},
+				function () { /* user chose No: invoice already saved, nothing to do */ }
+			);
+			// Always reset flag when dialog closes (Yes, No, or X button)
+			if (d) {
+				d.onhide = function () {
+					delete frappe.flags.sf_trading_credit_confirm_open;
+				};
+			}
 			return;
 		}
 
 		// Non-credit: show payment popup after save
 		if (!frm.doc.grand_total || Math.abs(flt(frm.doc.grand_total)) <= 0) return;
-		if (!frm.doc.name || frm.doc.name.startsWith("new-")) return;
-		if (frm.doc.docstatus !== 0) return;
-		if (frm.doc.custom_payment_mode === "Credit") return;
 
 		if (frm.doc.pos_profile) {
 			frappe.db.get_value(

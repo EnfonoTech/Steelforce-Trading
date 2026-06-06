@@ -23,7 +23,7 @@ function sf_get_customer_credit_limit(customer, company) {
 }
 
 function sf_check_overdue_on_customer(frm) {
-	if (frm.doc.custom_payment_mode !== "Credit" || !frm.doc.customer || !frm.doc.company) return;
+	if (frm.doc.is_return || frm.doc.custom_payment_mode !== "Credit" || !frm.doc.customer || !frm.doc.company) return;
 	frappe.call({
 		method: "sf_trading.api.sales_invoice_override.check_customer_credit_overdue",
 		args: { customer: frm.doc.customer, company: frm.doc.company },
