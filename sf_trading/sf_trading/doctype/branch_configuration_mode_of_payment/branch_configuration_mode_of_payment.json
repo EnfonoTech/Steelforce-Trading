@@ -7,7 +7,8 @@
  "field_order": [
   "mode_of_payment",
   "type",
-  "for_return"
+  "for_return",
+  "for_pdc"
  ],
  "fields": [
   {
@@ -33,12 +34,19 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "For Return"
+  },
+  {
+   "default": "0",
+   "fieldname": "for_pdc",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "For PDC"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-06-06 00:00:00.000000",
+ "modified": "2026-06-06 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "Branch Configuration Mode of Payment",

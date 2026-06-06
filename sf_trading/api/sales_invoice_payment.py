@@ -49,7 +49,7 @@ def get_available_credit(customer: str, company: str) -> float:
 
 
 @frappe.whitelist()
-def get_payment_modes_with_account(company: str, mode_list: str | list = None, is_return: int | str = 0):
+def get_payment_modes_with_account(company: str, mode_list: str | list = None, is_return: int | str = 0, is_pdc: int | str = 0):
 	"""
 	Return Mode of Payment names that are enabled and have a default Cash/Bank
 	account for the given company. Use this to avoid "Please set default Cash or
@@ -108,6 +108,22 @@ def get_payment_modes_with_account(company: str, mode_list: str | list = None, i
 	if mode_list is not None and names:
 		order = {m: i for i, m in enumerate(names)}
 		valid.sort(key=lambda m: order.get(m, 999))
+
+	# PDC filter: applied globally regardless of user/branch.
+	# for_pdc MoPs only appear in PDC mode; they are excluded from all other popups.
+	all_pdc_mops = set(
+		frappe.get_all(
+			"Branch Configuration Mode of Payment",
+			filters={"for_pdc": 1},
+			pluck="mode_of_payment",
+		)
+	)
+	if frappe.utils.cint(is_pdc):
+		if all_pdc_mops:
+			valid = [m for m in valid if m in all_pdc_mops]
+	else:
+		if all_pdc_mops:
+			valid = [m for m in valid if m not in all_pdc_mops]
 
 	valid = _restrict_to_branch_allowlist(valid, company, is_return=frappe.utils.cint(is_return))
 	return valid
@@ -172,8 +188,6 @@ def _restrict_to_branch_allowlist(modes: list, company: str, is_return: int = 0)
 				pluck="mode_of_payment",
 			)
 		)
-		# Only restrict if the branch has at least one for_return MoP configured.
-		# If none are configured, fall back to the full branch allowlist.
 		if return_allowed:
 			out = [m for m in out if m in return_allowed]
 
@@ -181,7 +195,7 @@ def _restrict_to_branch_allowlist(modes: list, company: str, is_return: int = 0)
 
 
 @frappe.whitelist()
-def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list):
+def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list, cheque_date: str = None, cheque_no: str = None):
 	"""
 	Create Payment Entry records for a submitted POS Sales Invoice, one per mode of payment.
 
@@ -288,14 +302,16 @@ def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list):
 			# For "Pay" type (return SI), allocated_amount must be negative
 			ref.allocated_amount = -amount if pe.payment_type == "Pay" else amount
 
-		# Posting date same as invoice if not set
-		if not pe.posting_date:
+		# PDC: posting date = invoice date; reference date = future cheque date
+		if cheque_date:
 			pe.posting_date = si.posting_date
-
-		# Reference No/Date: mandatory when payment account is Bank (PE validates on account type, not mode type).
-		# Set for all so Cash mode linked to a Bank account does not fail.
-		pe.reference_no = si.name
-		pe.reference_date = si.posting_date
+			pe.reference_no = cheque_no or si.name
+			pe.reference_date = cheque_date
+		else:
+			if not pe.posting_date:
+				pe.posting_date = si.posting_date
+			pe.reference_no = si.name
+			pe.reference_date = si.posting_date
 
 		pe.insert()
 
