@@ -40,6 +40,7 @@ app_include_js = [
 	f"/assets/sf_trading/js/workflow_approval_shortcut.js?{_v}",
 	f"/assets/sf_trading/js/item_search_cache_buster.js?{_v}",
 	f"/assets/sf_trading/js/sales_invoice_item_search.js?{_v}",
+	f"/assets/sf_trading/js/purchase_invoice_cost_center.js?{_v}",
 ]
 
 # include js, css files in header of web template

@@ -6,6 +6,7 @@
   "fieldtype": "Int",
   "label": "Credit Days",
   "insert_after": "credit_limit",
+  "in_list_view": 1,
   "default": "0",
   "description": "Number of days before an unpaid credit invoice blocks new credit invoices. Leave 0 to disable.",
   "modified": "2026-06-06 00:00:00.000000",
