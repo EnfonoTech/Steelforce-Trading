@@ -41,6 +41,7 @@ app_include_js = [
 	f"/assets/sf_trading/js/item_search_cache_buster.js?{_v}",
 	f"/assets/sf_trading/js/sales_invoice_item_search.js?{_v}",
 	f"/assets/sf_trading/js/purchase_invoice_cost_center.js?{_v}",
+	f"/assets/sf_trading/js/create_supplier.js?{_v}",
 ]
 
 # include js, css files in header of web template
@@ -295,6 +296,10 @@ before_request = ["sf_trading.api.item_search.redirect_item_query_before_request
 # Fixtures
 # --------
 fixtures = [
+	{
+		"doctype": "Role",
+		"filters": [["name", "in", ("B2B Creator",)]],
+	},
 	{
 		"doctype": "Custom Field",
 		"filters": [

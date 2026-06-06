@@ -1,6 +1,26 @@
 [
  {
   "doctype": "Custom Field",
+  "dt": "Address",
+  "fieldname": "custom_building_number",
+  "fieldtype": "Data",
+  "label": "Building Number",
+  "insert_after": "address_line2",
+  "modified": "2026-06-06 00:00:00.000000",
+  "name": "Address-custom_building_number"
+ },
+ {
+  "doctype": "Custom Field",
+  "dt": "Address",
+  "fieldname": "custom_area",
+  "fieldtype": "Data",
+  "label": "District / Area",
+  "insert_after": "custom_building_number",
+  "modified": "2026-06-06 00:00:00.000000",
+  "name": "Address-custom_area"
+ },
+ {
+  "doctype": "Custom Field",
   "dt": "Customer Credit Limit",
   "fieldname": "custom_credit_days",
   "fieldtype": "Int",
