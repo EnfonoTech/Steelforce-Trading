@@ -64,6 +64,9 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 		if not item_codes:
 			return []
 
+	# Sort by item_name (row[1]) so dropdown is alphabetical by name, not item code
+	base_rows = sorted(base_rows, key=lambda r: (r[1] or r[0] or "").lower())
+
 	# --- Resolve "the logged user's warehouse(s)" ---
 	# Priority:
 	#   1. User Permission on Warehouse (matches Quick Entry's behaviour).
@@ -165,3 +168,29 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 		results.append(tuple(new_row))
 
 	return results
+
+
+def redirect_item_query_before_request():
+	"""before_request hook: swap erpnext item_query for our sorted version.
+
+	search_link calls frappe.call(query, ...) directly, which bypasses
+	override_whitelisted_methods. Swapping the query string here, before
+	search_link executes, is the only reliable way to intercept it.
+	"""
+	if frappe.form_dict.get("query") == "erpnext.controllers.queries.item_query":
+		frappe.form_dict["query"] = "sf_trading.api.item_search.item_query"
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def item_query(doctype, txt, searchfield, start, page_len, filters, as_dict=False):
+	"""Global override of erpnext.controllers.queries.item_query.
+	Delegates entirely to ERPNext's standard search, then re-sorts results
+	by item_name so all item Link fields show items in alphabetical name order.
+	"""
+	from erpnext.controllers.queries import item_query as _erpnext_item_query
+
+	rows = _erpnext_item_query(doctype, txt, searchfield, start, page_len, filters, as_dict=as_dict) or []
+	if as_dict:
+		return sorted(rows, key=lambda r: (r.get("item_name") or r.get("name") or "").lower())
+	return sorted(rows, key=lambda r: (r[1] if len(r) > 1 else r[0] or "").lower())

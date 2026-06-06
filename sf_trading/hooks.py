@@ -38,6 +38,7 @@ app_include_js = [
 	f"/assets/sf_trading/js/sales_invoice_credit.js?{_v}",
 	f"/assets/sf_trading/js/work_flow_rejection.js?{_v}",
 	f"/assets/sf_trading/js/workflow_approval_shortcut.js?{_v}",
+	f"/assets/sf_trading/js/item_search_cache_buster.js?{_v}",
 	f"/assets/sf_trading/js/sales_invoice_item_search.js?{_v}",
 ]
 
@@ -199,9 +200,9 @@ doc_events = {
 # Overriding Methods
 # ------------------------------
 #
-# override_whitelisted_methods = {
-# 	"frappe.desk.doctype.event.event.get_events": "sf_trading.event.get_events"
-# }
+override_whitelisted_methods = {
+	"erpnext.controllers.queries.item_query": "sf_trading.api.item_search.item_query",
+}
 #
 # each overriding function accepts a `data` argument;
 # generated from the base implementation of the doctype dashboard,
@@ -221,7 +222,7 @@ doc_events = {
 
 # Request Events
 # ----------------
-# before_request = ["sf_trading.utils.before_request"]
+before_request = ["sf_trading.api.item_search.redirect_item_query_before_request"]
 # after_request = ["sf_trading.utils.after_request"]
 
 # Job Events
