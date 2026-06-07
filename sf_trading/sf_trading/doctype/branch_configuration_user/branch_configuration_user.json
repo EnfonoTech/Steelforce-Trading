@@ -6,7 +6,7 @@
  "engine": "InnoDB",
  "field_order": [
   "user",
-  "role"
+  "role_profile"
  ],
  "fields": [
   {
@@ -18,18 +18,18 @@
    "reqd": 1
   },
   {
-   "fieldname": "role",
+   "fieldname": "role_profile",
    "fieldtype": "Link",
    "in_list_view": 1,
-   "label": "Role",
-   "options": "Role"
+   "label": "Role Profile",
+   "options": "Role Profile"
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-05-04 18:40:57.963773",
+ "modified": "2026-06-07 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "Branch Configuration User",

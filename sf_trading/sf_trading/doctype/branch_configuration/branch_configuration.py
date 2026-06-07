@@ -1,19 +1,10 @@
-# User permissions are created for company, warehouse and cost center.
-# Company and first warehouse are set as is_default=1 so Frappe uses them as
-# the user's Session Defaults instead of falling back to global defaults.
-# The role assigned in the User child table is auto-assigned to the user.
-# A Module Profile matching the role is also applied automatically.
-
 import frappe
 from frappe.model.document import Document
-
-BRANCH_USER_ROLE = "Branch User"
 
 
 class BranchConfiguration(Document):
 
 	def validate(self):
-		# Ensure warehouse and cost center belong to the selected company
 		if self.company:
 			for w in self.warehouse:
 				if w.warehouse:
@@ -41,11 +32,9 @@ class BranchConfiguration(Document):
 
 		old_users = {d.user for d in old_doc.user}
 		new_users = {d.user for d in self.user}
-
 		removed_users = old_users - new_users
 
 		for user in removed_users:
-			# Delete company permission
 			if old_doc.get("company"):
 				delete_permission(user, "Company", old_doc.company)
 
@@ -58,25 +47,22 @@ class BranchConfiguration(Document):
 			for m in old_doc.mode_of_payment:
 				delete_permission(user, "Mode of Payment", m.mode_of_payment)
 
-			# Remove role if user is not in any other Branch Configuration
-			old_role = None
-			for old_u in old_doc.user:
-				if old_u.user == user:
-					old_role = old_u.get("role") or BRANCH_USER_ROLE
-					break
-			_maybe_remove_role(user, old_role or BRANCH_USER_ROLE, exclude_branch=self.name)
+			old_role_profile = next(
+				(u.get("role_profile") for u in old_doc.user if u.user == user), None
+			)
+			if old_role_profile:
+				_maybe_remove_role_profile(user, old_role_profile, exclude_branch=self.name)
 
-		# Handle mode of payment removals for remaining users
+		# Remove mode of payment permissions for retained users when MOPs are removed
 		old_mops = {m.mode_of_payment for m in old_doc.mode_of_payment if m.mode_of_payment}
 		new_mops = {m.mode_of_payment for m in self.mode_of_payment if m.mode_of_payment}
 		removed_mops = old_mops - new_mops
 		if removed_mops:
-			remaining_users = old_users & new_users
-			for user in remaining_users:
+			for user in old_users & new_users:
 				for mop in removed_mops:
 					delete_permission(user, "Mode of Payment", mop)
 
-		# Handle company change — remove old company permission for remaining users
+		# Remove old company permission for retained users when company changes
 		old_company = old_doc.get("company")
 		new_company = self.get("company")
 		if old_company and old_company != new_company:
@@ -88,38 +74,27 @@ class BranchConfiguration(Document):
 
 	def create_permissions(self):
 		for u in self.user:
-			# Create company permission (marked as default so Session Defaults picks it)
 			if self.company:
 				create_permission(u.user, "Company", self.company, is_default=1)
 
 			for idx, w in enumerate(self.warehouse):
-				# First warehouse is the default
 				create_permission(u.user, "Warehouse", w.warehouse, is_default=1 if idx == 0 else 0)
 
 			for idx, c in enumerate(self.cost_center):
-				# First cost center is the default
 				create_permission(u.user, "Cost Center", c.cost_center, is_default=1 if idx == 0 else 0)
 
 			for idx, m in enumerate(self.mode_of_payment):
-				# First mode of payment is the default
 				create_permission(u.user, "Mode of Payment", m.mode_of_payment, is_default=1 if idx == 0 else 0)
 
-			# Also grant access to the company's default cost center (used in tax templates)
-			# without marking it as default — the branch cost center stays as the user's default
+			# Grant access to the company's root cost center (used in tax templates) without making it default
 			if self.company:
 				company_default_cc = frappe.db.get_value("Company", self.company, "cost_center")
 				if company_default_cc:
 					create_permission(u.user, "Cost Center", company_default_cc, is_default=0)
 
-			# Auto-assign the selected role
-			selected_role = u.get("role") or BRANCH_USER_ROLE
-			_assign_role(u.user, selected_role)
-
-			# Auto-set Module Profile based on role
-			if selected_role == BRANCH_USER_ROLE:
-				_set_module_profile(u.user, "Branch User")
-			elif selected_role == "Damage User":
-				_set_module_profile(u.user, "Damage User")
+			role_profile = u.get("role_profile")
+			if role_profile:
+				_apply_role_profile(u.user, role_profile)
 
 
 def create_permission(user, allow, value, is_default=0):
@@ -133,11 +108,9 @@ def create_permission(user, allow, value, is_default=0):
 	})
 
 	if existing:
-		# Update is_default if needed — but only if no other default exists
 		if is_default and not _has_existing_default(user, allow, exclude_value=value):
 			frappe.db.set_value("User Permission", existing, "is_default", 1)
 	else:
-		# If we want to set default but one already exists, don't override it
 		if is_default and _has_existing_default(user, allow):
 			is_default = 0
 
@@ -151,15 +124,9 @@ def create_permission(user, allow, value, is_default=0):
 
 
 def _has_existing_default(user, allow, exclude_value=None):
-	"""Check if user already has a default User Permission for this allow type."""
-	filters = {
-		"user": user,
-		"allow": allow,
-		"is_default": 1,
-	}
+	filters = {"user": user, "allow": allow, "is_default": 1}
 	if exclude_value:
 		filters["for_value"] = ["!=", exclude_value]
-
 	return frappe.db.exists("User Permission", filters)
 
 
@@ -167,95 +134,56 @@ def delete_permission(user, allow, value):
 	if not value:
 		return
 
-	perms = frappe.get_all(
-		"User Permission",
-		filters={
-			"user": user,
-			"allow": allow,
-			"for_value": value
-		},
-		pluck="name"
-	)
-
-	for p in perms:
+	for p in frappe.get_all("User Permission", filters={"user": user, "allow": allow, "for_value": value}, pluck="name"):
 		frappe.delete_doc("User Permission", p, ignore_permissions=True)
 
 
 def _ensure_system_user(user):
-	"""Website Users cannot hold desk roles. Upgrade to System User so role takes effect."""
 	current_type = frappe.db.get_value("User", user, "user_type")
 	if current_type and current_type != "System User":
 		frappe.db.set_value("User", user, "user_type", "System User")
 
 
-def _assign_role(user, role):
-	"""Assign the specified role if not already assigned. Uses direct DB for reliability."""
-	if not role or not frappe.db.exists("Role", role):
+def _apply_role_profile(user, role_profile):
+	if not role_profile:
 		return
 
-	# Desk roles require System User user_type; Website Users silently lose role assignments.
-	_ensure_system_user(user)
-
-	# Check if role already assigned
-	if frappe.db.exists("Has Role", {"parent": user, "role": role}):
-		return
-
-	# Direct insert — more reliable than user_doc.add_roles() which can fail
-	# during Branch Configuration save context
-	frappe.get_doc({
-		"doctype": "Has Role",
-		"parent": user,
-		"parenttype": "User",
-		"parentfield": "roles",
-		"role": role,
-	}).insert(ignore_permissions=True)
-
-
-def _set_module_profile_for_role(user, role):
-	"""Set Module Profile based on assigned role."""
-	role_profile_map = {
-		"Branch User":   "Branch User",
-		"Damage User":   "Damage User",
-		"Sales Manager": "Sales Manager",
-		"Stock User":    "Stock User",
-	}
-
-	profile_name = role_profile_map.get(role)
-	if not profile_name:
-		return
-
-	if not frappe.db.exists("Module Profile", profile_name):
+	if not frappe.db.exists("Role Profile", role_profile):
 		frappe.msgprint(
-			f"Module Profile <b>{profile_name}</b> does not exist. "
-			f"Please create it in Setup > Module Profile.",
+			f"Role Profile <b>{role_profile}</b> does not exist. Please create it in Setup > Role Profile.",
 			indicator="orange",
-			alert=True
+			alert=True,
 		)
 		return
 
-	current = frappe.db.get_value("User", user, "module_profile")
-	if current != profile_name:
-		frappe.db.set_value("User", user, "module_profile", profile_name)
+	_ensure_system_user(user)
+
+	current = frappe.db.get_value("User", user, "role_profile")
+	if current == role_profile:
+		return
+
+	user_doc = frappe.get_doc("User", user)
+	user_doc.role_profile = role_profile
+	user_doc.save(ignore_permissions=True)
 
 
-def _maybe_remove_role(user, role, exclude_branch=None):
-	"""Remove role if user is not in any other Branch Configuration with the same role."""
-	if not role:
+def _maybe_remove_role_profile(user, role_profile, exclude_branch=None):
+	"""Clear role profile from user only if no other Branch Configuration assigns the same profile to this user."""
+	if not role_profile:
 		return
 
 	other_configs = frappe.get_all(
 		"Branch Configuration User",
-		filters={"user": user},
-		fields=["parent", "role"],
+		filters={"user": user, "role_profile": role_profile},
+		fields=["parent"],
 	)
 
-	# Check if user has this same role in any other Branch Configuration
-	has_role_elsewhere = any(
-		c.parent != exclude_branch and (c.get("role") or BRANCH_USER_ROLE) == role
-		for c in other_configs
-	)
+	has_profile_elsewhere = any(c.parent != exclude_branch for c in other_configs)
+	if has_profile_elsewhere:
+		return
 
-	if not has_role_elsewhere:
+	current = frappe.db.get_value("User", user, "role_profile")
+	if current == role_profile:
 		user_doc = frappe.get_doc("User", user)
-		if role in [r.role for r in user_doc.roles]:
-			user_doc.remove_roles(role)
+		user_doc.role_profile = None
+		user_doc.save(ignore_permissions=True)
