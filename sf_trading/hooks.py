@@ -248,7 +248,7 @@ override_whitelisted_methods = {
 
 # Request Events
 # ----------------
-before_request = ["sf_trading.api.item_search.redirect_item_query_before_request"]
+# before_request = ["sf_trading.api.item_search.redirect_item_query_before_request"]
 # after_request = ["sf_trading.utils.after_request"]
 
 # Job Events
