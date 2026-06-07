@@ -158,12 +158,12 @@ def _apply_role_profile(user, role_profile):
 
 	_ensure_system_user(user)
 
-	current = frappe.db.get_value("User", user, "role_profile")
+	current = frappe.db.get_value("User", user, "role_profile_name")
 	if current == role_profile:
 		return
 
 	user_doc = frappe.get_doc("User", user)
-	user_doc.role_profile = role_profile
+	user_doc.role_profile_name = role_profile
 	user_doc.save(ignore_permissions=True)
 
 
@@ -182,8 +182,8 @@ def _maybe_remove_role_profile(user, role_profile, exclude_branch=None):
 	if has_profile_elsewhere:
 		return
 
-	current = frappe.db.get_value("User", user, "role_profile")
+	current = frappe.db.get_value("User", user, "role_profile_name")
 	if current == role_profile:
 		user_doc = frappe.get_doc("User", user)
-		user_doc.role_profile = None
+		user_doc.role_profile_name = None
 		user_doc.save(ignore_permissions=True)
