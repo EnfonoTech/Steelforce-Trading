@@ -5,12 +5,10 @@ import frappe
 @frappe.validate_and_sanitize_search_inputs
 def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len, filters, as_dict=False, **kwargs):
 	"""
-	Item Link-field search used by the Sales Invoice items grid.
+	Global item Link-field search — used by ALL item_code fields across all doctypes.
 
-	Wraps ``erpnext.controllers.queries.item_query`` so all the standard
-	ERPNext behaviour is preserved (is_sales_item / customer / has_variants /
-	item-group filtering, search field configuration, ordering, etc.) and just
-	appends two extra columns to each row:
+	Wraps ``erpnext.controllers.queries.item_query`` (standard ERPNext behaviour
+	preserved) and appends two extra columns:
 
 		- Stock: <total qty across the user's permitted warehouses>
 		- Rate: <selling rate from the form's price list>
@@ -22,7 +20,7 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 		Item Name, Item Group, Brand, Stock: 12, Rate: SAR 100
 
 	Custom kwargs consumed by us (popped before delegating):
-		- company   : used for stock lookup
+		- company   : used for stock + company-default filtering; falls back to user default
 		- price_list: used for selling rate lookup
 	"""
 	from erpnext.controllers.queries import item_query
@@ -174,14 +172,36 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 
 
 def redirect_item_query_before_request():
-	"""before_request hook: swap erpnext item_query for our sorted version.
+	"""before_request hook: redirect every erpnext item_query call to our rich version.
 
-	search_link calls frappe.call(query, ...) directly, which bypasses
-	override_whitelisted_methods. Swapping the query string here, before
-	search_link executes, is the only reliable way to intercept it.
+	search_link POSTs query= directly, bypassing override_whitelisted_methods, so
+	swapping here is the only reliable server-side interception point.
+
+	We also inject company from user defaults when the caller hasn't supplied one so
+	that all item link fields (not just Sales Invoice) get the company-filtered,
+	stock/rate-enriched dropdown.
 	"""
-	if frappe.form_dict.get("query") == "erpnext.controllers.queries.item_query":
-		frappe.form_dict["query"] = "sf_trading.api.item_search.item_query"
+	if frappe.form_dict.get("query") != "erpnext.controllers.queries.item_query":
+		return
+
+	frappe.form_dict["query"] = "sf_trading.api.item_search.search_items_with_stock_and_rate"
+
+	# Inject company into filters when the calling form hasn't passed one.
+	try:
+		import json
+
+		raw = frappe.form_dict.get("filters") or {}
+		filters = json.loads(raw) if isinstance(raw, str) and raw else (raw if isinstance(raw, dict) else {})
+		if not filters.get("company"):
+			company = (
+				frappe.defaults.get_user_default("company")
+				or frappe.defaults.get_user_default("Company")
+			)
+			if company:
+				filters["company"] = company
+				frappe.form_dict["filters"] = json.dumps(filters)
+	except Exception:
+		pass
 
 
 @frappe.whitelist()

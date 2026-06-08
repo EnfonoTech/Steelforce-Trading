@@ -227,7 +227,7 @@ doc_events = {
 # ------------------------------
 #
 override_whitelisted_methods = {
-	"erpnext.controllers.queries.item_query": "sf_trading.api.item_search.item_query",
+	"erpnext.controllers.queries.item_query": "sf_trading.api.item_search.search_items_with_stock_and_rate",
 }
 #
 # each overriding function accepts a `data` argument;
