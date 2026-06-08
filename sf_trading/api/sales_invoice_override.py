@@ -11,6 +11,11 @@ from frappe.utils import today
 
 def before_validate(doc, _method=None):
 	"""Remove item rows that have no item_code (leftover scan row from barcode). Runs before validation."""
+	# Frappe v15 field_order Property Setter bug: is_pos can arrive as a list
+	# instead of a scalar. Coerce it before ERPNext's validation sees it.
+	if isinstance(doc.is_pos, list):
+		doc.is_pos = 1 if doc.is_pos else 0
+
 	if not doc.get("items"):
 		frappe.throw(_("Please add at least one item before saving."))
 

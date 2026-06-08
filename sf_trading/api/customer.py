@@ -57,8 +57,6 @@ def create_customer_with_address(
         frappe.throw(_("Customer Name is required"))
     if not mobile_no:
         frappe.throw(_("Mobile No is required"))
-    if len(re.sub(r"\D", "", str(mobile_no))) < 10:
-        frappe.throw(_("Mobile number must have at least 10 digits."))
 
     allow_duplicate_vat = int(allow_duplicate_vat or 0)
     is_b2b = (buyer_kind or "").startswith("B2B")
@@ -70,6 +68,9 @@ def create_customer_with_address(
         frappe.db.get_value("Company", company, "country") if company else ""
     ) or ""
     is_saudi = company_country.strip().lower() == "saudi arabia"
+
+    if is_saudi and len(re.sub(r"\D", "", str(mobile_no))) < 10:
+        frappe.throw(_("Mobile number must have at least 10 digits."))
 
     if not country:
         country = company_country

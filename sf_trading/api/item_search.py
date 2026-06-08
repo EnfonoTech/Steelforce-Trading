@@ -52,6 +52,9 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 		return list(base_rows)
 
 	# Filter: only show items that have an Item Default for the user's company
+	# Filter: only show items that have an Item Default for the user's company.
+	# (item_permission_query applies this globally to list views, but not to
+	#  direct function calls like this one, so we must enforce it here too.)
 	if company:
 		items_with_company_default = frappe.get_all(
 			"Item Default",

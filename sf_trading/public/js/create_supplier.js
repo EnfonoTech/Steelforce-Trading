@@ -214,7 +214,7 @@ function sf_open_create_supplier_dialog(frm) {
                 var dup_reason = (values.duplicate_vat_reason || "").trim();
                 var vat = (values.tax_id || "").trim();
 
-                if ((values.mobile_no || "").replace(/\D/g, "").length < 10) {
+                if (is_saudi && (values.mobile_no || "").replace(/\D/g, "").length < 10) {
                     frappe.msgprint(__("Mobile number must have at least 10 digits."));
                     return;
                 }
