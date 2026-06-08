@@ -256,7 +256,7 @@ def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list, ch
 		if amount <= 0:
 			continue
 
-		if amount - abs(outstanding) > 0.5:
+		if amount - abs(outstanding) > 0.0001:
 			frappe.throw(
 				_(
 					"Payment amount {0} is greater than outstanding amount {1} for invoice {2}."

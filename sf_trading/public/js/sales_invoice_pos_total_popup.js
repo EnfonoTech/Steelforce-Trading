@@ -297,9 +297,15 @@ function sf_trading_render_dialog(frm) {
 		return;
 	}
 
-	const invoice_total = Math.abs(flt(frm.doc.rounded_total || frm.doc.grand_total || 0));
+	// Use outstanding_amount when positive (handles advance payments reducing the payable amount).
+	// Fall back to rounded_total / grand_total for fresh invoices where outstanding may not yet differ.
+	const invoice_total = Math.abs(flt(
+		(frm.doc.outstanding_amount > 0 ? frm.doc.outstanding_amount : null) ||
+		frm.doc.rounded_total ||
+		frm.doc.grand_total || 0
+	));
 	const currency = frm.doc.currency || "";
-	
+
 	// Validate invoice total
 	if (invoice_total <= 0) {
 		frappe.flags.sf_trading_popup_showing = false;
@@ -311,7 +317,7 @@ function sf_trading_render_dialog(frm) {
 		{
 			fieldname: "invoice_total",
 			fieldtype: "Currency",
-			label: __("Invoice Total"),
+			label: __("Amount to Pay"),
 			default: invoice_total,
 			read_only: 1,
 			options: currency,
@@ -384,12 +390,12 @@ function sf_trading_render_dialog(frm) {
 			return;
 		}
 
-		// Prevent over-payment: do not allow total entered payments to exceed invoice total
-		if (total - invoice_total > 0.5) {
+		// Prevent over-payment
+		if (total - invoice_total > 0.0001) {
 			frappe.msgprint({
 				title: __("Error"),
 				message: __(
-					"Total payment amount {0} cannot be greater than invoice total {1}.",
+					"Total payment amount {0} cannot be greater than amount to pay {1}.",
 					[format_currency(total, currency), format_currency(invoice_total, currency)]
 				),
 				indicator: "red",
@@ -397,8 +403,8 @@ function sf_trading_render_dialog(frm) {
 			return;
 		}
 
-		// Optional: ensure we are not under-allocating
-		if (total < invoice_total) {
+		// Prevent under-allocation
+		if (invoice_total - total > 0.0001) {
 			frappe.msgprint({
 				title: __("Incomplete"),
 				message: __("{0} still to be allocated", [
@@ -409,12 +415,26 @@ function sf_trading_render_dialog(frm) {
 			return;
 		}
 
-		// Close dialog before creating Payment Entries
-		d.hide();
-		frappe.flags.sf_trading_popup_showing = false;
-
-		// Helper to call backend and create Payment Entries
-		const create_payments = () => {
+		// Check outstanding_amount (set after submission) then close dialog and create payments.
+		// Keeps dialog visible until we know it's safe — if outstanding < total (e.g. advances
+		// already applied), the error shows while the dialog is still on screen.
+		const finalize_payments = () => {
+			const actual_os = Math.abs(flt(frm.doc.outstanding_amount || 0));
+			if (actual_os > 0 && flt(total - actual_os) > 0.0001) {
+				frappe.msgprint({
+					title: __("Payment Error"),
+					message: __(
+						"Payment total ({0}) exceeds outstanding amount ({1}). " +
+						"The invoice may have advance payments already applied. " +
+						"Please create the payment manually for the correct outstanding amount.",
+						[format_currency(total, currency), format_currency(actual_os, currency)]
+					),
+					indicator: "red",
+				});
+				return;
+			}
+			d.hide();
+			frappe.flags.sf_trading_popup_showing = false;
 			frappe.call({
 				method: "sf_trading.api.sales_invoice_payment.create_pos_payments_for_invoice",
 				args: {
@@ -438,14 +458,6 @@ function sf_trading_render_dialog(frm) {
 						frm.reload_doc();
 					}
 				},
-				error: function (err) {
-					console.error("sf_trading: error creating Payment Entries", err);
-					frappe.msgprint({
-						title: __("Error"),
-						message: __("Could not create Payment Entries. Please try again."),
-						indicator: "red",
-					});
-				},
 			});
 		};
 
@@ -458,7 +470,7 @@ function sf_trading_render_dialog(frm) {
 					// Only print and create payments if submission actually succeeded
 					if (frm.doc.docstatus !== 1) return;
 					sf_trading_open_invoice_print(frm);
-					create_payments();
+					finalize_payments();
 				})
 				.finally(() => {
 					setTimeout(() => {
@@ -466,10 +478,12 @@ function sf_trading_render_dialog(frm) {
 					}, 500);
 				});
 		} else if (frm.doc.docstatus === 1) {
-			// Already submitted: just create payments
-			create_payments();
+			// Already submitted: validate outstanding then create payments
+			finalize_payments();
 		} else {
 			// Draft + user clicked Save: no payment creation; popup will show again when they Submit
+			d.hide();
+			frappe.flags.sf_trading_popup_showing = false;
 			frappe.show_alert({
 				message: __("Invoice saved. Submit the invoice when ready to add payments."),
 				indicator: "blue",
@@ -526,7 +540,7 @@ function sf_trading_render_dialog(frm) {
 				payments.forEach(function (__, i) {
 					if (i !== idx) other += flt(d.get_value("pay_" + i)) || 0;
 				});
-				d.set_value("pay_" + idx, Math.max(0, flt(invoice_total - other, 2)));
+				d.set_value("pay_" + idx, Math.max(0, flt(invoice_total - other)));
 			});
 		});
 	});
@@ -543,7 +557,11 @@ function sf_trading_show_pdc_popup(frm) {
 
 	frappe.flags.sf_trading_popup_showing = true;
 
-	const invoice_total = Math.abs(flt(frm.doc.rounded_total || frm.doc.grand_total || 0));
+	const invoice_total = Math.abs(flt(
+		(frm.doc.outstanding_amount > 0 ? frm.doc.outstanding_amount : null) ||
+		frm.doc.rounded_total ||
+		frm.doc.grand_total || 0
+	));
 	const currency = frm.doc.currency || "";
 
 	function load_pdc_modes_then_show() {
@@ -571,7 +589,7 @@ function sf_trading_show_pdc_popup(frm) {
 			{
 				fieldname: "invoice_total",
 				fieldtype: "Currency",
-				label: __("Invoice Total"),
+				label: __("Amount to Pay"),
 				default: invoice_total,
 				read_only: 1,
 				options: currency,
@@ -645,19 +663,32 @@ function sf_trading_show_pdc_popup(frm) {
 				frappe.msgprint({ title: __("Error"), message: __("Please enter at least one payment amount."), indicator: "red" });
 				return;
 			}
-			if (total - invoice_total > 0.5) {
-				frappe.msgprint({ title: __("Error"), message: __("Total payment {0} exceeds invoice total {1}.", [format_currency(total, currency), format_currency(invoice_total, currency)]), indicator: "red" });
+			if (total - invoice_total > 0.0001) {
+				frappe.msgprint({ title: __("Error"), message: __("Total payment {0} exceeds amount to pay {1}.", [format_currency(total, currency), format_currency(invoice_total, currency)]), indicator: "red" });
 				return;
 			}
-			if (total < invoice_total) {
+			if (invoice_total - total > 0.0001) {
 				frappe.msgprint({ title: __("Incomplete"), message: __("{0} still to be allocated.", [format_currency(invoice_total - total, currency)]), indicator: "red" });
 				return;
 			}
 
-			d.hide();
-			frappe.flags.sf_trading_popup_showing = false;
-
-			const create_payments = function () {
+			const finalize_pdc_payments = function () {
+				const actual_os = Math.abs(flt(frm.doc.outstanding_amount || 0));
+				if (actual_os > 0 && flt(total - actual_os) > 0.0001) {
+					frappe.msgprint({
+						title: __("Payment Error"),
+						message: __(
+							"Payment total ({0}) exceeds outstanding amount ({1}). " +
+							"The invoice may have advance payments already applied. " +
+							"Please create the payment manually for the correct outstanding amount.",
+							[format_currency(total, currency), format_currency(actual_os, currency)]
+						),
+						indicator: "red",
+					});
+					return;
+				}
+				d.hide();
+				frappe.flags.sf_trading_popup_showing = false;
 				frappe.call({
 					method: "sf_trading.api.sales_invoice_payment.create_pos_payments_for_invoice",
 					args: {
@@ -674,9 +705,6 @@ function sf_trading_show_pdc_popup(frm) {
 							frm.reload_doc();
 						}
 					},
-					error: function () {
-						frappe.msgprint({ title: __("Error"), message: __("Could not create PDC Payment Entry. Please try again."), indicator: "red" });
-					},
 				});
 			};
 
@@ -685,12 +713,12 @@ function sf_trading_show_pdc_popup(frm) {
 				frm.save("Submit").then(function () {
 					if (frm.doc.docstatus !== 1) return;
 					sf_trading_open_invoice_print(frm);
-					create_payments();
+					finalize_pdc_payments();
 				}).finally(function () {
 					setTimeout(function () { delete frappe.flags.sf_trading_skip_payment_popup; }, 500);
 				});
 			} else if (frm.doc.docstatus === 1) {
-				create_payments();
+				finalize_pdc_payments();
 			} else {
 				frappe.show_alert({ message: __("Invoice saved. Submit when ready to record the PDC payment."), indicator: "blue" }, 4);
 			}
@@ -731,7 +759,7 @@ function sf_trading_show_pdc_popup(frm) {
 					modes.forEach(function (__, i) {
 						if (i !== idx) other += flt(d.get_value("pay_" + i)) || 0;
 					});
-					d.set_value("pay_" + idx, Math.max(0, flt(invoice_total - other, 2)));
+					d.set_value("pay_" + idx, Math.max(0, flt(invoice_total - other)));
 				});
 			});
 		});
