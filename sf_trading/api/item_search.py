@@ -1,4 +1,22 @@
+import re
+
 import frappe
+
+
+def _natural_key(s):
+	"""Sort key that treats embedded decimal numbers as floats.
+
+	Plain alphabetical sort puts '2.6MM' before '2MM' because '.' < 'M' in ASCII.
+	This key compares the numeric parts as floats so 2 < 2.6 gives the right order.
+	"""
+	parts = re.split(r"(\d+(?:\.\d+)?)", s or "")
+	result = []
+	for part in parts:
+		try:
+			result.append(float(part))
+		except ValueError:
+			result.append(part.lower())
+	return result
 
 
 @frappe.whitelist()
@@ -65,8 +83,9 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 		if not item_codes:
 			return []
 
-	# Sort by item_name (row[1]) so dropdown is alphabetical by name, not item code
-	base_rows = sorted(base_rows, key=lambda r: (r[1] or r[0] or "").lower())
+	# Natural sort by item_name: numeric parts compared as floats so
+	# "2MM" (2.0) sorts before "2.6MM" (2.6), not after it.
+	base_rows = sorted(base_rows, key=lambda r: _natural_key(r[1] or r[0] or ""))
 
 	# --- Resolve "the logged user's warehouse(s)" ---
 	# Priority:
@@ -215,5 +234,5 @@ def item_query(doctype, txt, searchfield, start, page_len, filters, as_dict=Fals
 
 	rows = _erpnext_item_query(doctype, txt, searchfield, start, page_len, filters, as_dict=as_dict) or []
 	if as_dict:
-		return sorted(rows, key=lambda r: (r.get("item_name") or r.get("name") or "").lower())
-	return sorted(rows, key=lambda r: (r[1] if len(r) > 1 else r[0] or "").lower())
+		return sorted(rows, key=lambda r: _natural_key(r.get("item_name") or r.get("name") or ""))
+	return sorted(rows, key=lambda r: _natural_key(r[1] if len(r) > 1 else r[0] or ""))
