@@ -47,31 +47,6 @@ console.log("[sf_trading] sales_invoice_item_search.js loaded");
 			};
 		}
 
-		attach_cache_buster(frm);
-	}
-
-	// Frappe's Link control caches autocomplete results per (doctype, term) on
-	// the input element so re-searches show instantly. That means stock numbers
-	// in the dropdown can be stale on the first paint after a stock movement.
-	// Wipe that cache on focus so the next search always hits the API fresh.
-	function attach_cache_buster(frm) {
-		const grid = frm.fields_dict.items && frm.fields_dict.items.grid;
-		if (!grid || !grid.wrapper) return;
-
-		grid.wrapper
-			.off("focusin.sf_item_search_cache")
-			.on(
-				"focusin.sf_item_search_cache",
-				"[data-fieldname='item_code'] input",
-				function () {
-					(grid.grid_rows || []).forEach(function (gr) {
-						const ctrl = gr && gr.columns && gr.columns.item_code;
-						if (ctrl && ctrl.$input) {
-							ctrl.$input.cache = {};
-						}
-					});
-				}
-			);
 	}
 
 	frappe.ui.form.on("Sales Invoice", {
