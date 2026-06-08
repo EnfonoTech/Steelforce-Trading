@@ -1,26 +1,44 @@
-// Override the item_code autocomplete in the Sales Invoice items grid so each
-// suggestion in the dropdown shows the user's stock and the price-list selling
-// rate next to the item name — same data Quick Entry shows.
+// Override item_code autocomplete on all major transaction doctypes so every
+// item dropdown shows stock, rate, and is filtered by the form's company.
 //
-// ERPNext's sales controller (sales_common.js) registers
-// erpnext.controllers.queries.item_query for the same field via its
-// setup_queries() method, so we override in multiple lifecycle events AND
-// patch the field's get_query directly to be sure we win the race.
+// ERPNext registers erpnext.controllers.queries.item_query via setup_queries()
+// in its controller lifecycle. We patch in multiple lifecycle events AND set
+// df.get_query directly to reliably win that race in both dev and production.
 
-console.log("[sf_trading] sales_invoice_item_search.js loaded");
+console.log("[sf_trading] item_search.js loaded");
 
 (function () {
 	const CUSTOM_QUERY = "sf_trading.api.item_search.search_items_with_stock_and_rate";
 
+	const SELLING_DOCTYPES = [
+		"Sales Invoice", "Sales Order", "Quotation", "Delivery Note",
+	];
+	const BUYING_DOCTYPES = [
+		"Purchase Invoice", "Purchase Order", "Purchase Receipt",
+	];
+
 	function build_filters(frm) {
-		return {
-			is_sales_item: 1,
+		const is_buying = BUYING_DOCTYPES.indexOf(frm.doctype) !== -1;
+		const filters = {
 			has_variants: 0,
 			disabled: 0,
-			customer: frm.doc.customer,
-			company: frm.doc.company,
-			price_list: frm.doc.selling_price_list,
+			company: frm.doc.company || frappe.defaults.get_default("company"),
 		};
+		if (is_buying) {
+			filters.is_purchase_item = 1;
+			if (frm.doc.buying_price_list) {
+				filters.price_list = frm.doc.buying_price_list;
+			}
+		} else {
+			filters.is_sales_item = 1;
+			if (frm.doc.selling_price_list) {
+				filters.price_list = frm.doc.selling_price_list;
+			}
+			if (frm.doc.customer) {
+				filters.customer = frm.doc.customer;
+			}
+		}
+		return filters;
 	}
 
 	function apply_override(frm) {
@@ -28,47 +46,36 @@ console.log("[sf_trading] sales_invoice_item_search.js loaded");
 		const grid = frm.fields_dict.items.grid;
 		if (!grid) return;
 
-		// 1) Standard set_query — registers our query at the form level.
-		frm.set_query("item_code", "items", function (doc) {
-			return {
-				query: CUSTOM_QUERY,
-				filters: build_filters(frm),
-			};
+		frm.set_query("item_code", "items", function () {
+			return { query: CUSTOM_QUERY, filters: build_filters(frm) };
 		});
 
-		// 2) Direct df.get_query patch — wins regardless of who registered last.
+		// Direct df.get_query patch — wins regardless of who registered last.
 		const field = grid.get_field && grid.get_field("item_code");
 		if (field && field.df) {
 			field.df.get_query = function () {
-				return {
-					query: CUSTOM_QUERY,
-					filters: build_filters(frm),
-				};
+				return { query: CUSTOM_QUERY, filters: build_filters(frm) };
 			};
 		}
-
 	}
 
-	frappe.ui.form.on("Sales Invoice", {
-		setup: function (frm) {
-			apply_override(frm);
-		},
-		onload: function (frm) {
-			apply_override(frm);
-		},
-		refresh: function (frm) {
-			apply_override(frm);
-		},
-		// Re-apply when these change so the next dropdown opens reflect the
-		// current form state (different price list / customer / company).
-		customer: function (frm) {
-			apply_override(frm);
-		},
-		company: function (frm) {
-			apply_override(frm);
-		},
-		selling_price_list: function (frm) {
-			apply_override(frm);
-		},
+	function register(doctype, extra_triggers) {
+		const handlers = {
+			setup:   function (frm) { apply_override(frm); },
+			onload:  function (frm) { apply_override(frm); },
+			refresh: function (frm) { apply_override(frm); },
+			company: function (frm) { apply_override(frm); },
+		};
+		(extra_triggers || []).forEach(function (f) {
+			handlers[f] = function (frm) { apply_override(frm); };
+		});
+		frappe.ui.form.on(doctype, handlers);
+	}
+
+	SELLING_DOCTYPES.forEach(function (dt) {
+		register(dt, ["customer", "selling_price_list"]);
+	});
+	BUYING_DOCTYPES.forEach(function (dt) {
+		register(dt, ["supplier", "buying_price_list"]);
 	});
 })();
