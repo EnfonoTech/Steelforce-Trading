@@ -94,12 +94,14 @@ def get_payment_modes_with_account(company: str, mode_list: str | list = None, i
 			"Mode of Payment",
 			filters={"name": ["in", names], "enabled": 1},
 			pluck="name",
+			ignore_permissions=True,
 		)
 	else:
 		enabled = frappe.get_all(
 			"Mode of Payment",
 			filters={"enabled": 1},
 			pluck="name",
+			ignore_permissions=True,
 		)
 
 	# Intersection: enabled and has default account for company
@@ -116,6 +118,7 @@ def get_payment_modes_with_account(company: str, mode_list: str | list = None, i
 			"Branch Configuration Mode of Payment",
 			filters={"for_pdc": 1},
 			pluck="mode_of_payment",
+			ignore_permissions=True,
 		)
 	)
 	if frappe.utils.cint(is_pdc):
@@ -165,6 +168,7 @@ def _restrict_to_branch_allowlist(modes: list, company: str, is_return: int = 0)
 			"Mode of Payment",
 			filters={"name": ["in", modes]},
 			fields=["name", "type"],
+			ignore_permissions=True,
 		)
 	}
 
@@ -186,6 +190,7 @@ def _restrict_to_branch_allowlist(modes: list, company: str, is_return: int = 0)
 				"Branch Configuration Mode of Payment",
 				filters={"parent": branch, "parenttype": "Branch Configuration", "for_return": 1},
 				pluck="mode_of_payment",
+				ignore_permissions=True,
 			)
 		)
 		if return_allowed:

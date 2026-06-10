@@ -57,6 +57,7 @@ def _resolve_user_branch(user, company=None):
 		"Branch Configuration User",
 		filters={"user": user},
 		pluck="parent",
+		ignore_permissions=True,
 	)
 	if not branches:
 		return None
@@ -66,6 +67,7 @@ def _resolve_user_branch(user, company=None):
 			"Branch Configuration",
 			filters={"name": ["in", branches], "company": company},
 			pluck="name",
+			ignore_permissions=True,
 		)
 		if same_company:
 			return same_company[0]
@@ -84,6 +86,7 @@ def _branch_mops_by_type(branch_name):
 		filters={"parent": branch_name, "parenttype": "Branch Configuration"},
 		fields=["mode_of_payment"],
 		order_by="idx asc",
+		ignore_permissions=True,
 	)
 	if not rows:
 		return cash, bank
@@ -98,6 +101,7 @@ def _branch_mops_by_type(branch_name):
 			"Mode of Payment",
 			filters={"name": ["in", mop_names]},
 			fields=["name", "type"],
+			ignore_permissions=True,
 		)
 	}
 	for r in rows:
