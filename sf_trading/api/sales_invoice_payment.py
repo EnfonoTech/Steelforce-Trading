@@ -200,6 +200,32 @@ def _restrict_to_branch_allowlist(modes: list, company: str, is_return: int = 0)
 
 
 @frappe.whitelist()
+def get_accounts_for_modes(company: str, modes: str | list):
+	"""Return {mode_of_payment: account} for each mode in the list.
+
+	Uses the same logic as Sales Invoice.set_account_for_mode_of_payment but
+	doesn't require write permission on the document.
+	"""
+	if not company:
+		return {}
+	if isinstance(modes, str):
+		try:
+			modes = json.loads(modes) if modes else []
+		except Exception:
+			modes = []
+	if not modes:
+		return {}
+
+	from erpnext.accounts.doctype.sales_invoice.sales_invoice import get_bank_cash_account
+
+	result = {}
+	for mode in modes:
+		if mode:
+			result[mode] = (get_bank_cash_account(mode, company) or {}).get("account") or ""
+	return result
+
+
+@frappe.whitelist()
 def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list, cheque_date: str = None, cheque_no: str = None):
 	"""
 	Create Payment Entry records for a submitted POS Sales Invoice, one per mode of payment.

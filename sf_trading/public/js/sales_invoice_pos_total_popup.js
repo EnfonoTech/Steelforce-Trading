@@ -215,9 +215,11 @@ function sf_trading_show_pos_total_popup(frm) {
 								});
 								frm.refresh_field("payments");
 								frappe.call({
-									doc: frm.doc,
-									method: "set_account_for_mode_of_payment",
-									callback: function () {
+									method: "sf_trading.api.sales_invoice_payment.get_accounts_for_modes",
+									args: { company: frm.doc.company, modes: JSON.stringify(valid_modes) },
+									callback: function (ar) {
+										const accounts = ar.message || {};
+										(frm.doc.payments || []).forEach(function (p) { p.account = accounts[p.mode_of_payment] || ""; });
 										frm.refresh_field("payments");
 										sf_trading_render_dialog(frm);
 									},
@@ -261,9 +263,11 @@ function sf_trading_show_pos_total_popup(frm) {
 					});
 					frm.refresh_field("payments");
 					frappe.call({
-						doc: frm.doc,
-						method: "set_account_for_mode_of_payment",
-						callback: function () {
+						method: "sf_trading.api.sales_invoice_payment.get_accounts_for_modes",
+						args: { company: frm.doc.company, modes: JSON.stringify(modes) },
+						callback: function (ar) {
+							const accounts = ar.message || {};
+							(frm.doc.payments || []).forEach(function (p) { p.account = accounts[p.mode_of_payment] || ""; });
 							frm.refresh_field("payments");
 							sf_trading_render_dialog(frm);
 						},
