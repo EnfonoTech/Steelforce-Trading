@@ -1,8 +1,8 @@
 {
  "actions": [],
  "allow_rename": 1,
- "creation": "2026-05-04 18:33:59.085305",
  "autoname": "field:branch",
+ "creation": "2026-05-04 18:33:59.085305",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
@@ -22,7 +22,8 @@
    "in_list_view": 1,
    "label": "Branch",
    "options": "Branch",
-   "reqd": 1
+   "reqd": 1,
+   "unique": 1
   },
   {
    "fieldname": "column_break_jvyk",
@@ -31,6 +32,7 @@
   {
    "fieldname": "company",
    "fieldtype": "Link",
+   "in_list_view": 1,
    "label": "Company",
    "options": "Company"
   },
@@ -67,7 +69,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-05-04 18:42:48.031006",
+ "modified": "2026-06-11 16:50:45.609542",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "Branch Configuration",
@@ -87,7 +89,6 @@
   }
  ],
  "row_format": "Dynamic",
- "rows_threshold_for_grid_search": 20,
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": []
