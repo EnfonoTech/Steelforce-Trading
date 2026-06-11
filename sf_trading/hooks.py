@@ -36,7 +36,6 @@ app_include_js = [
 	f"/assets/sf_trading/js/sales_invoice_inter_company.js?{_v}",
 	f"/assets/sf_trading/js/sales_invoice_pos_total_popup.js?{_v}",
 	f"/assets/sf_trading/js/sales_invoice_credit.js?{_v}",
-	f"/assets/sf_trading/js/work_flow_rejection.js?{_v}",
 	f"/assets/sf_trading/js/workflow_approval_shortcut.js?{_v}",
 	f"/assets/sf_trading/js/item_search_cache_buster.js?{_v}",
 	f"/assets/sf_trading/js/sales_invoice_item_search.js?{_v}",
