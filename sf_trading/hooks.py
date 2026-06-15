@@ -35,6 +35,7 @@ app_include_js = [
 	f"/assets/sf_trading/js/sales_invoice_barcode.js?{_v}",
 	f"/assets/sf_trading/js/sales_invoice_inter_company.js?{_v}",
 	f"/assets/sf_trading/js/sales_invoice_pos_total_popup.js?{_v}",
+	f"/assets/sf_trading/js/accounting_dimension_sync.js?{_v}",
 	f"/assets/sf_trading/js/sales_invoice_credit.js?{_v}",
 	f"/assets/sf_trading/js/workflow_approval_shortcut.js?{_v}",
 	f"/assets/sf_trading/js/item_search_cache_buster.js?{_v}",
@@ -155,7 +156,9 @@ override_doctype_class = {
 # ---------------
 # Hook on document methods and events
 
-_CC_HOOK = "sf_trading.branch_defaults.override_cost_center_from_branch"
+# Pushes header accounting dimensions (branch, cost_center, project) down to
+# item rows (and cost_center to taxes) on every transaction doctype.
+_CC_HOOK = "sf_trading.branch_defaults.propagate_dimensions_to_items"
 _BRANCH_HOOK = "sf_trading.inter_branch.auto_set_branch_from_warehouse"
 
 doc_events = {

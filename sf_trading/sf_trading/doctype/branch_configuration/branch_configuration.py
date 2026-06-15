@@ -82,28 +82,39 @@ class BranchConfiguration(Document):
 	def on_update(self):
 		self.create_permissions()
 
+		# Enforce a single default branch per user: if a user is marked default
+		# here, clear that flag on the same user in every other Branch Config.
+		for u in self.user:
+			if u.get("is_default_branch"):
+				_clear_default_branch_elsewhere(u.user, keep_branch=self.name)
+
+		# Recompute User Permission defaults so every default value for a user
+		# (branch, company, warehouse, cost center, MoP) comes from ONE config.
+		for user in {u.user for u in self.user}:
+			_normalize_user_defaults(user)
+
 	def create_permissions(self):
 		for u in self.user:
 			if self.branch:
-				create_permission(u.user, "Branch", self.branch, is_default=1)
+				create_permission(u.user, "Branch", self.branch)
 
 			if self.company:
-				create_permission(u.user, "Company", self.company, is_default=1)
+				create_permission(u.user, "Company", self.company)
 
-			for idx, w in enumerate(self.warehouse):
-				create_permission(u.user, "Warehouse", w.warehouse, is_default=1 if idx == 0 else 0)
+			for w in self.warehouse:
+				create_permission(u.user, "Warehouse", w.warehouse)
 
-			for idx, c in enumerate(self.cost_center):
-				create_permission(u.user, "Cost Center", c.cost_center, is_default=1 if idx == 0 else 0)
+			for c in self.cost_center:
+				create_permission(u.user, "Cost Center", c.cost_center)
 
-			for idx, m in enumerate(self.mode_of_payment):
-				create_permission(u.user, "Mode of Payment", m.mode_of_payment, is_default=1 if idx == 0 else 0)
+			for m in self.mode_of_payment:
+				create_permission(u.user, "Mode of Payment", m.mode_of_payment)
 
-			# Grant access to the company's root cost center (used in tax templates) without making it default
+			# Grant access to the company's root cost center (used in tax templates)
 			if self.company:
 				company_default_cc = frappe.db.get_value("Company", self.company, "cost_center")
 				if company_default_cc:
-					create_permission(u.user, "Cost Center", company_default_cc, is_default=0)
+					create_permission(u.user, "Cost Center", company_default_cc)
 
 			role_profile = u.get("role_profile")
 			if role_profile:
@@ -114,30 +125,21 @@ class BranchConfiguration(Document):
 # User Permission helpers
 # ---------------------------------------------------------------------------
 
-def create_permission(user, allow, value, is_default=0):
+def create_permission(user, allow, value):
+	"""Create a non-default User Permission. Defaults are assigned afterwards
+	by _normalize_user_defaults so they all come from one branch config."""
 	if not value:
 		return
 
-	existing = frappe.db.exists("User Permission", {
-		"user": user,
-		"allow": allow,
-		"for_value": value,
-	})
-
-	if existing:
-		if is_default and not _has_existing_default(user, allow, exclude_value=value):
-			frappe.db.set_value("User Permission", existing, "is_default", 1)
+	if frappe.db.exists("User Permission", {"user": user, "allow": allow, "for_value": value}):
 		return
-
-	if is_default and _has_existing_default(user, allow):
-		is_default = 0
 
 	try:
 		doc = frappe.new_doc("User Permission")
 		doc.user = user
 		doc.allow = allow
 		doc.for_value = value
-		doc.is_default = is_default
+		doc.is_default = 0
 		doc.apply_to_all_doctypes = 1
 		doc.insert(ignore_permissions=True)
 	except frappe.exceptions.DuplicateEntryError:
@@ -146,11 +148,91 @@ def create_permission(user, allow, value, is_default=0):
 		frappe.log_error(frappe.get_traceback(), f"BranchConfig: create {allow} for {user}")
 
 
-def _has_existing_default(user, allow, exclude_value=None):
-	filters = {"user": user, "allow": allow, "is_default": 1}
-	if exclude_value:
-		filters["for_value"] = ["!=", exclude_value]
-	return frappe.db.exists("User Permission", filters)
+# Allow types managed by Branch Configuration — only these are touched when
+# normalizing User Permission defaults (leaves permissions from other apps alone).
+_MANAGED_ALLOWS = ("Branch", "Company", "Warehouse", "Cost Center", "Mode of Payment")
+
+
+def _clear_default_branch_elsewhere(user, keep_branch):
+	"""Untick is_default_branch for this user in every Branch Config except keep_branch."""
+	frappe.db.sql(
+		"""
+		UPDATE `tabBranch Configuration User`
+		SET is_default_branch = 0
+		WHERE user = %s
+		  AND parenttype = 'Branch Configuration'
+		  AND parent != %s
+		  AND is_default_branch = 1
+		""",
+		(user, keep_branch),
+	)
+
+
+def _get_primary_branch_config(user):
+	"""Return the Branch Configuration that provides this user's default values.
+
+	Prefers the config where the user's row has is_default_branch ticked;
+	falls back to the earliest-created config the user belongs to.
+	"""
+	rows = frappe.get_all(
+		"Branch Configuration User",
+		filters={"user": user, "parenttype": "Branch Configuration"},
+		fields=["parent", "is_default_branch"],
+		ignore_permissions=True,
+	)
+	if not rows:
+		return None
+
+	marked = [r.parent for r in rows if r.is_default_branch]
+	candidates = marked or [r.parent for r in rows]
+
+	configs = frappe.get_all(
+		"Branch Configuration",
+		filters={"name": ["in", candidates]},
+		pluck="name",
+		order_by="creation asc",
+		ignore_permissions=True,
+	)
+	return configs[0] if configs else candidates[0]
+
+
+def _normalize_user_defaults(user):
+	"""Make every default User Permission for the user come from one branch config.
+
+	The primary config's branch, company, first warehouse, first cost center and
+	first MoP become is_default=1; all other managed permissions become is_default=0.
+	This prevents defaults being split across different branches.
+	"""
+	primary = _get_primary_branch_config(user)
+	if not primary:
+		return
+
+	cfg = frappe.get_doc("Branch Configuration", primary)
+
+	default_pairs = set()
+	if cfg.get("branch"):
+		default_pairs.add(("Branch", cfg.branch))
+	if cfg.get("company"):
+		default_pairs.add(("Company", cfg.company))
+	if cfg.warehouse:
+		default_pairs.add(("Warehouse", cfg.warehouse[0].warehouse))
+	if cfg.cost_center:
+		default_pairs.add(("Cost Center", cfg.cost_center[0].cost_center))
+	if cfg.mode_of_payment:
+		default_pairs.add(("Mode of Payment", cfg.mode_of_payment[0].mode_of_payment))
+
+	perms = frappe.get_all(
+		"User Permission",
+		filters={"user": user, "allow": ["in", _MANAGED_ALLOWS]},
+		fields=["name", "allow", "for_value", "is_default"],
+		ignore_permissions=True,
+	)
+	for p in perms:
+		should = 1 if (p.allow, p.for_value) in default_pairs else 0
+		if p.is_default != should:
+			frappe.db.set_value("User Permission", p.name, "is_default", should, update_modified=False)
+
+	frappe.clear_cache(user=user)
 
 
 def delete_permission(user, allow, value):

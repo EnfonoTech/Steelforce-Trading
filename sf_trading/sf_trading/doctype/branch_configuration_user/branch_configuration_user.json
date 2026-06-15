@@ -6,7 +6,8 @@
  "engine": "InnoDB",
  "field_order": [
   "user",
-  "role_profile"
+  "role_profile",
+  "is_default_branch"
  ],
  "fields": [
   {
@@ -23,6 +24,14 @@
    "in_list_view": 1,
    "label": "Role Profile",
    "options": "Role Profile"
+  },
+  {
+   "default": "0",
+   "description": "When ticked, this branch provides the user's default values (default branch, cost center, warehouse, company). Only one branch per user should be ticked.",
+   "fieldname": "is_default_branch",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Is Default Branch"
   }
  ],
  "grid_page_length": 50,

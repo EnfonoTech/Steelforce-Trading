@@ -45,6 +45,61 @@ def override_cost_center_from_branch(doc, method=None):
 			tax.cost_center = doc_cc
 
 
+# Accounting dimensions pushed from the document header down to each item row.
+# cost_center is also pushed to tax rows (handled separately below).
+_ITEM_DIMENSIONS = ("branch", "cost_center", "project")
+
+
+def propagate_dimensions_to_items(doc, method=None):
+	"""before_validate: push every accounting dimension set on the header
+	(branch, cost_center, project) down to each item row, and cost_center to
+	tax rows. Blank header dimensions are left untouched so nothing is wiped.
+	"""
+	for field in _ITEM_DIMENSIONS:
+		val = doc.get(field)
+		if not val:
+			continue
+		for item in doc.get("items") or []:
+			if hasattr(item, field):
+				item.set(field, val)
+
+	doc_cc = doc.get("cost_center")
+	if doc_cc:
+		for tax in doc.get("taxes") or []:
+			if hasattr(tax, "cost_center"):
+				tax.cost_center = doc_cc
+
+
+@frappe.whitelist()
+def get_branch_dimension_defaults(branch: str):
+	"""Return the default cost center and warehouse for a Branch.
+
+	Looks up the Branch Configuration linked to this Branch and returns its
+	first cost center and first warehouse. Used by the form to refill
+	accounting dimensions when the branch changes.
+	"""
+	if not branch:
+		return {}
+
+	cfg = frappe.db.get_value("Branch Configuration", {"branch": branch}, "name")
+	if not cfg:
+		return {}
+
+	cost_center = frappe.db.get_value(
+		"Branch Configuration Cost Center",
+		{"parent": cfg, "parenttype": "Branch Configuration"},
+		"cost_center",
+		order_by="idx asc",
+	)
+	warehouse = frappe.db.get_value(
+		"Branch Configuration Warehouse",
+		{"parent": cfg, "parenttype": "Branch Configuration"},
+		"warehouse",
+		order_by="idx asc",
+	)
+	return {"cost_center": cost_center, "set_warehouse": warehouse}
+
+
 
 def _resolve_user_branch(user, company=None):
 	"""Return the most relevant Branch Configuration name for the user.
