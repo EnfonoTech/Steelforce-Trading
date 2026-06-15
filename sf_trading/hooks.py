@@ -30,6 +30,7 @@ from sf_trading import __version__ as _v
 app_include_js = [
 	f"/assets/sf_trading/js/warehouse_stock_popup.js?{_v}",
 	f"/assets/sf_trading/js/last_selling_rate.js?{_v}",
+	f"/assets/sf_trading/js/last_purchase_rate.js?{_v}",
 	f"/assets/sf_trading/js/quick_entry.js?{_v}",
 	f"/assets/sf_trading/js/create_customer.js?{_v}",
 	f"/assets/sf_trading/js/sales_invoice_barcode.js?{_v}",
