@@ -45,27 +45,31 @@ def get_item_warehouse_stock(item_code, company=None, limit=None, target_warehou
 	
 	# Optimize: Use Bin table for faster stock queries (bulk query)
 	warehouse_names = [w.name for w in warehouses]
-	
+
+	# Fetch stock UOM for the item
+	stock_uom = frappe.db.get_value("Item", item_code, "stock_uom") or ""
+
 	# Use Bin table for faster bulk query
 	bin_data = frappe.db.sql("""
 		SELECT warehouse, actual_qty
 		FROM `tabBin`
 		WHERE item_code = %s AND warehouse IN %s
 	""", (item_code, warehouse_names), as_dict=True)
-	
+
 	# Create a dict for quick lookup
 	bin_dict = {d.warehouse: (d.actual_qty or 0.0) for d in bin_data}
-	
+
 	# Build stock data list
 	stock_data = []
 	for warehouse in warehouses:
 		# Get stock from bin_dict (faster than individual get_stock_balance calls)
 		stock_qty = bin_dict.get(warehouse.name, 0.0)
-		
+
 		stock_data.append({
 			"warehouse": warehouse.name,
 			"warehouse_name": warehouse.warehouse_name or warehouse.name,
-			"stock_qty": stock_qty
+			"stock_qty": stock_qty,
+			"uom": stock_uom,
 		})
 	
 	# Filter: Only show warehouses with stock > 0 (or target warehouse even if 0)

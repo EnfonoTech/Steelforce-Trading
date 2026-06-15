@@ -12,35 +12,35 @@ sf_trading.show_warehouse_stock = function(frm, item_row, load_all = false) {
 		sf_trading.hide_stock_display(frm);
 		return;
 	}
-	
+
 	// Check if warehouse field exists
 	if (!frappe.meta.has_field(item_row.doctype, "warehouse")) {
 		sf_trading.hide_stock_display(frm);
 		return;
 	}
-	
+
 	// Get company from form
 	let company = frm.doc.company;
 	if (!company) {
 		sf_trading.hide_stock_display(frm);
 		return;
 	}
-	
+
 	// Get current warehouse if set
 	let current_row = locals[item_row.doctype][item_row.name];
 	let warehouse = current_row ? (current_row.warehouse || "") : "";
-	
+
 	// Prepare API args - limit to 5 if not loading all
 	let api_args = {
 		item_code: item_row.item_code,
 		company: company,
 		target_warehouse: warehouse || null
 	};
-	
+
 	if (!load_all) {
 		api_args.limit = 5;
 	}
-	
+
 	// Fetch warehouse stock data
 	frappe.call({
 		method: "sf_trading.api.warehouse_stock.get_item_warehouse_stock",
@@ -63,13 +63,13 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 	if (!frm.fields_dict.items || !frm.fields_dict.items.grid) {
 		return;
 	}
-	
+
 	const grid = frm.fields_dict.items.grid;
 	const grid_wrapper = grid.wrapper;
-	
+
 	// Remove existing stock display if any
 	sf_trading.hide_stock_display(frm);
-	
+
 	// Find the grid footer or create container after grid
 	let $container = grid_wrapper.find(".sf-trading-stock-display");
 	if (!$container.length) {
@@ -77,7 +77,7 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 		$container = $('<div class="sf-trading-stock-display" style="margin-top: 8px; padding: 8px; background-color: #f9f9f9; border: 1px solid #d1d8dd; border-radius: 4px;"></div>');
 		grid_wrapper.append($container);
 	}
-	
+
 	// Data is already filtered and sorted by backend
 	// Get target warehouse name
 	let target_warehouse_name = "";
@@ -87,11 +87,11 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 		});
 		target_warehouse_name = target_wh ? (target_wh.warehouse_name || target_warehouse) : target_warehouse;
 	}
-	
+
 	// If all data is loaded, show all; otherwise only show loaded data (max 5)
 	let sorted_stock_data = stock_data;
 	let visible_data, hidden_data, has_more;
-	
+
 	if (is_all_loaded) {
 		// All data loaded - split into visible (first 5) and hidden (rest) for collapse functionality
 		visible_data = sorted_stock_data.slice(0, 5);
@@ -104,16 +104,16 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 		// If we got exactly 5 items, there might be more to load
 		has_more = sorted_stock_data.length >= 5;
 	}
-	
+
 	// Generate unique ID for this display
 	let display_id = "sf_stock_" + Date.now() + "_" + Math.random().toString(36).substr(2, 9);
-	
+
 	// Determine button text and visibility
 	let show_toggle_button = false;
 	let button_text = "";
 	let button_action = ""; // "load_all" or "toggle_view"
 	let initial_collapsed = false; // Start collapsed (show only 5) when all loaded
-	
+
 	if (has_more && !is_all_loaded) {
 		// Not all loaded - show "Show All" button to fetch more
 		show_toggle_button = true;
@@ -126,7 +126,7 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 		button_action = "toggle_view";
 		initial_collapsed = false; // Start expanded (show all)
 	}
-	
+
 	let html = `
 		<div style="margin-bottom: 6px; display: flex; justify-content: space-between; align-items: center;">
 			<div>
@@ -134,7 +134,7 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 				${target_warehouse ? `<span style="font-size: 12px; color: #666; margin-left: 8px;">→ ${target_warehouse_name}</span>` : ''}
 			</div>
 			${show_toggle_button ? `
-			<button class="btn btn-xs btn-link ${display_id}_toggle_btn" 
+			<button class="btn btn-xs btn-link ${display_id}_toggle_btn"
 				data-action="${button_action}"
 				style="padding: 2px 6px; font-size: 12px; color: #007bff; text-decoration: none; margin-left: auto;">
 				${button_text}
@@ -152,7 +152,7 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 				</thead>
 				<tbody id="${display_id}_tbody">
 	`;
-	
+
 	if (sorted_stock_data.length === 0) {
 		html += `
 			<tr>
@@ -169,7 +169,7 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 			let is_target = item.warehouse === target_warehouse;
 			let row_bg = is_target ? "#e3f2fd" : "white";
 			let row_class = `${display_id}_row`;
-			
+
 			html += `
 				<tr class="${row_class}" style="background-color: ${row_bg};">
 					<td style="padding: 6px 8px;">
@@ -184,8 +184,8 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 					</td>
 					<td style="padding: 6px 8px; text-align: center;">
 						${is_target ? '<span style="color: #999; font-size: 12px;">-</span>' : `
-						<button class="btn btn-xs btn-primary request-item-btn" 
-							data-item-code="${item_code.replace(/"/g, '&quot;')}" 
+						<button class="btn btn-xs btn-primary request-item-btn"
+							data-item-code="${item_code.replace(/"/g, '&quot;')}"
 							data-from-warehouse="${item.warehouse.replace(/"/g, '&quot;')}"
 							data-from-warehouse-name="${(item.warehouse_name || item.warehouse).replace(/"/g, '&quot;')}"
 							data-to-warehouse="${target_warehouse.replace(/"/g, '&quot;')}"
@@ -199,7 +199,7 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 				</tr>
 			`;
 		});
-		
+
 		// Render hidden rows (rest, initially hidden) - only if all data is loaded
 		if (has_more && is_all_loaded && hidden_data.length > 0) {
 			hidden_data.forEach(function(item, index) {
@@ -208,7 +208,7 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 				let is_target = item.warehouse === target_warehouse;
 				let row_bg = is_target ? "#e3f2fd" : "white";
 				let row_class = `${display_id}_row ${display_id}_hidden_row`;
-				
+
 				html += `
 					<tr class="${row_class}" style="display: table-row; background-color: ${row_bg};">
 						<td style="padding: 6px 8px;">
@@ -223,8 +223,8 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 						</td>
 						<td style="padding: 6px 8px; text-align: center;">
 							${is_target ? '<span style="color: #999; font-size: 12px;">-</span>' : `
-							<button class="btn btn-xs btn-primary request-item-btn" 
-								data-item-code="${item_code.replace(/"/g, '&quot;')}" 
+							<button class="btn btn-xs btn-primary request-item-btn"
+								data-item-code="${item_code.replace(/"/g, '&quot;')}"
 								data-from-warehouse="${item.warehouse.replace(/"/g, '&quot;')}"
 								data-from-warehouse-name="${(item.warehouse_name || item.warehouse).replace(/"/g, '&quot;')}"
 								data-to-warehouse="${target_warehouse.replace(/"/g, '&quot;')}"
@@ -240,42 +240,42 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 			});
 		}
 	}
-	
+
 	html += `
 				</tbody>
 			</table>
 		</div>
 	`;
-	
+
 	$container.html(html);
 	$container.show();
-	
+
 	// Store reference
 	sf_trading.stock_displays[frm.doctype + "_" + frm.docname] = $container;
-	
+
 	// Add toggle button handler
 	let $toggle_btn = $container.find(`.${display_id}_toggle_btn`);
 	if ($toggle_btn.length) {
 		let button_action = $toggle_btn.data("action");
 		// Store expanded state - start expanded (show all) when all data is loaded
 		let is_expanded = (button_action === "toggle_view");
-		
+
 		$toggle_btn.on("click", function() {
 			if (button_action === "load_all") {
 				// Fetch all warehouses when "Show All" is clicked
-				let item_doctype = "Sales Invoice Item"; // Default, can be extended for other doctypes
+				let item_doctype = "Sales Invoice Item";
 				let item_row = locals[item_doctype] && locals[item_doctype][item_row_name];
 				if (item_row && item_row.item_code) {
 					// Show loading state
 					$toggle_btn.prop("disabled", true).html(__("Loading..."));
-					
+
 					// Fetch all warehouses (load_all = true)
 					sf_trading.show_warehouse_stock(frm, item_row, true);
 				}
 			} else if (button_action === "toggle_view") {
 				// Toggle between showing 5 and showing all
 				let $hidden_rows = $container.find(`.${display_id}_hidden_row`);
-				
+
 				if (is_expanded) {
 					// Collapse: hide rows beyond first 5
 					$hidden_rows.hide();
@@ -290,7 +290,7 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 			}
 		});
 	}
-	
+
 	// Add click handlers for request buttons
 	$container.find(".request-item-btn").on("click", function() {
 		let $btn = $(this);
@@ -299,7 +299,7 @@ sf_trading.render_stock_display = function(frm, item_code, stock_data, target_wa
 		let from_warehouse_name = $btn.data("from-warehouse-name");
 		let to_warehouse = $btn.data("to-warehouse");
 		let to_warehouse_name = $btn.data("to-warehouse-name");
-		
+
 		sf_trading.create_material_request(frm, item_code, from_warehouse, from_warehouse_name, to_warehouse, to_warehouse_name);
 	});
 };
@@ -359,7 +359,7 @@ sf_trading.create_material_request = function(frm, item_code, from_warehouse, fr
 			if (!values) {
 				return;
 			}
-			
+
 			// Create Material Request (always Material Transfer)
 			frappe.call({
 				method: "sf_trading.api.material_request.create_material_request",
@@ -394,12 +394,11 @@ sf_trading.create_material_request = function(frm, item_code, from_warehouse, fr
 			});
 		}
 	});
-	
+
 	dialog.show();
 };
 
-// Hook into item_code and warehouse onchange - Only for Sales Invoice for now
-// Can be extended to other doctypes in future by adding them to this array
+// Hook into item_code and warehouse onchange - Only for Sales Invoice
 let item_doctypes = [
 	"Sales Invoice Item"
 ];
@@ -411,15 +410,14 @@ item_doctypes.forEach(function(child_doctype) {
 	frappe.ui.form.on(child_doctype, {
 		item_code: function(frm, cdt, cdn) {
 			let item_row = locals[cdt][cdn];
-			
+
 			// Track selected row
 			sf_trading.current_selected_row = item_row;
-			
-			if (item_row.item_code && 
+
+			if (item_row.item_code &&
 				frappe.meta.has_field(item_row.doctype, "warehouse") &&
 				frm.doc.company) {
-				
-				// Show stock immediately when item_code changes
+
 				clearTimeout(item_row._sf_trading_stock_timeout);
 				item_row._sf_trading_stock_timeout = setTimeout(function() {
 					sf_trading.show_warehouse_stock(frm, item_row);
@@ -428,11 +426,27 @@ item_doctypes.forEach(function(child_doctype) {
 				sf_trading.hide_stock_display(frm);
 			}
 		},
-		
+
+		// ERPNext calls refresh_field("items") after fetching item details, which
+		// removes our appended stock display div. Re-show once item_name is set
+		// (that event fires after the item fetch + grid refresh completes).
+		item_name: function(frm, cdt, cdn) {
+			let item_row = locals[cdt][cdn];
+			sf_trading.current_selected_row = item_row;
+			if (item_row.item_code &&
+				frappe.meta.has_field(item_row.doctype, "warehouse") &&
+				frm.doc.company) {
+				clearTimeout(item_row._sf_trading_stock_timeout);
+				item_row._sf_trading_stock_timeout = setTimeout(function() {
+					sf_trading.show_warehouse_stock(frm, item_row);
+				}, 100);
+			}
+		},
+
 		item_code_focus: function(frm, cdt, cdn) {
 			// When item_code field is focused/clicked, show stock for that row
 			let item_row = locals[cdt][cdn];
-			if (item_row && item_row.item_code && 
+			if (item_row && item_row.item_code &&
 				frappe.meta.has_field(item_row.doctype, "warehouse") &&
 				frm.doc.company) {
 				sf_trading.current_selected_row = item_row;
@@ -442,17 +456,17 @@ item_doctypes.forEach(function(child_doctype) {
 				}, 100);
 			}
 		},
-		
+
 		warehouse: function(frm, cdt, cdn) {
 			let item_row = locals[cdt][cdn];
-			
+
 			// Track selected row
 			sf_trading.current_selected_row = item_row;
-			
-			if (item_row.item_code && 
+
+			if (item_row.item_code &&
 				frappe.meta.has_field(item_row.doctype, "warehouse") &&
 				frm.doc.company) {
-				
+
 				// Update stock display when warehouse changes
 				clearTimeout(item_row._sf_trading_stock_timeout);
 				item_row._sf_trading_stock_timeout = setTimeout(function() {
@@ -460,7 +474,7 @@ item_doctypes.forEach(function(child_doctype) {
 				}, 300);
 			}
 		},
-		
+
 		// Detect when row is selected/clicked
 		form_render: function(frm, cdt, cdn) {
 			let item_row = locals[cdt][cdn];
@@ -544,8 +558,7 @@ function setup_hide_stock_on_click_outside(frm) {
 	}
 }
 
-// Only enable for Sales Invoice for now
-// Can be extended to other doctypes in future by adding them here
+// Sales Invoice only
 frappe.ui.form.on("Sales Invoice", {
 	refresh: function(frm) {
 		setup_item_code_field_listeners(frm);
@@ -556,4 +569,3 @@ frappe.ui.form.on("Sales Invoice", {
 		setup_hide_stock_on_click_outside(frm);
 	}
 });
-
