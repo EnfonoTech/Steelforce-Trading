@@ -40,6 +40,9 @@ function sf_apply_branch_defaults(frm) {
 		args: { branch: frm.doc.branch },
 		callback: function (r) {
 			const d = r.message || {};
+			if (d.letter_head && frm.fields_dict.letter_head) {
+				frm.set_value("letter_head", d.letter_head);
+			}
 			if (d.cost_center && frm.fields_dict.cost_center) {
 				frm.set_value("cost_center", d.cost_center);
 			}

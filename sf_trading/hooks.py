@@ -160,6 +160,9 @@ override_doctype_class = {
 # item rows (and cost_center to taxes) on every transaction doctype.
 _CC_HOOK = "sf_trading.branch_defaults.propagate_dimensions_to_items"
 _BRANCH_HOOK = "sf_trading.inter_branch.auto_set_branch_from_warehouse"
+# Applies the branch's letter head to the document. Runs on validate, after
+# _BRANCH_HOOK so an auto-resolved branch is honoured.
+_LH_HOOK = "sf_trading.branch_defaults.set_letter_head_from_branch"
 
 doc_events = {
 	"Customer": {
@@ -174,18 +177,21 @@ doc_events = {
 		"validate": [
 			"sf_trading.api.sales_invoice_override.validate",
 			_BRANCH_HOOK,
+			_LH_HOOK,
 		],
 		"on_submit": "sf_trading.inter_company.sales_invoice_on_submit",
 	},
 	"Sales Order": {
 		"before_validate": _CC_HOOK,
+		"validate": _LH_HOOK,
 	},
 	"Quotation": {
 		"before_validate": _CC_HOOK,
+		"validate": _LH_HOOK,
 	},
 	"Delivery Note": {
 		"before_validate": _CC_HOOK,
-		"validate": _BRANCH_HOOK,
+		"validate": [_BRANCH_HOOK, _LH_HOOK],
 	},
 	"Purchase Invoice": {
 		"before_validate": [
@@ -195,18 +201,21 @@ doc_events = {
 		"validate": [
 			"sf_trading.overrides.purchase_invoice.validate",
 			_BRANCH_HOOK,
+			_LH_HOOK,
 		],
 		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
 	},
 	"Purchase Order": {
 		"before_validate": _CC_HOOK,
+		"validate": _LH_HOOK,
 	},
 	"Purchase Receipt": {
 		"before_validate": _CC_HOOK,
-		"validate": _BRANCH_HOOK,
+		"validate": [_BRANCH_HOOK, _LH_HOOK],
 	},
 	"Supplier Quotation": {
 		"before_validate": _CC_HOOK,
+		"validate": _LH_HOOK,
 	},
 }
 
@@ -331,6 +340,7 @@ fixtures = [
 					"Sales Invoice-custom_contact_expairy_date",
 					"Sales Invoice-custom_vat__expairy_date",
 					"Sales Invoice-custom_payment_mode",
+					"Branch-custom_letter_head",
 				)
 			]
 		]

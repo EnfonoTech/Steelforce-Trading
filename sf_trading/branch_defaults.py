@@ -70,34 +70,70 @@ def propagate_dimensions_to_items(doc, method=None):
 				tax.cost_center = doc_cc
 
 
+def _branch_letter_head(branch):
+	"""Return the custom letter head defined on a Branch, or None.
+
+	Guards against the custom_letter_head column not existing yet (fixture
+	not migrated) so callers never hit a SQL 'Unknown column' error.
+	"""
+	if not branch:
+		return None
+	if not frappe.db.has_column("Branch", "custom_letter_head"):
+		return None
+	return frappe.db.get_value("Branch", branch, "custom_letter_head")
+
+
+def set_letter_head_from_branch(doc, method=None):
+	"""before_validate: set the document's letter head from its Branch.
+
+	When the document has a branch whose Branch master defines a custom
+	letter head, apply it. Blank branch / blank branch letter head leaves
+	the document's own letter head untouched.
+	"""
+	if not doc.get("branch"):
+		return
+	if not doc.meta.has_field("letter_head"):
+		return
+
+	letter_head = _branch_letter_head(doc.branch)
+	if letter_head:
+		doc.letter_head = letter_head
+
+
 @frappe.whitelist()
 def get_branch_dimension_defaults(branch: str):
-	"""Return the default cost center and warehouse for a Branch.
+	"""Return the form defaults driven by a Branch.
 
-	Looks up the Branch Configuration linked to this Branch and returns its
-	first cost center and first warehouse. Used by the form to refill
-	accounting dimensions when the branch changes.
+	- letter_head: from the Branch master's custom_letter_head
+	- cost_center / set_warehouse: first row of the linked Branch Configuration
+
+	Used by the form to refill values when the branch changes.
 	"""
 	if not branch:
 		return {}
 
-	cfg = frappe.db.get_value("Branch Configuration", {"branch": branch}, "name")
-	if not cfg:
-		return {}
+	result = {}
 
-	cost_center = frappe.db.get_value(
-		"Branch Configuration Cost Center",
-		{"parent": cfg, "parenttype": "Branch Configuration"},
-		"cost_center",
-		order_by="idx asc",
-	)
-	warehouse = frappe.db.get_value(
-		"Branch Configuration Warehouse",
-		{"parent": cfg, "parenttype": "Branch Configuration"},
-		"warehouse",
-		order_by="idx asc",
-	)
-	return {"cost_center": cost_center, "set_warehouse": warehouse}
+	letter_head = _branch_letter_head(branch)
+	if letter_head:
+		result["letter_head"] = letter_head
+
+	cfg = frappe.db.get_value("Branch Configuration", {"branch": branch}, "name")
+	if cfg:
+		result["cost_center"] = frappe.db.get_value(
+			"Branch Configuration Cost Center",
+			{"parent": cfg, "parenttype": "Branch Configuration"},
+			"cost_center",
+			order_by="idx asc",
+		)
+		result["set_warehouse"] = frappe.db.get_value(
+			"Branch Configuration Warehouse",
+			{"parent": cfg, "parenttype": "Branch Configuration"},
+			"warehouse",
+			order_by="idx asc",
+		)
+
+	return result
 
 
 

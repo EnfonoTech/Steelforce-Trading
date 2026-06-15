@@ -46,32 +46,32 @@ def _ensure_branch_read_permission() -> None:
     "does not have doctype access via role permission for document Branch"
     whenever Frappe validates the branch Link field on a transaction doc.
     Branch is a reference/lookup table so read-only for everyone is safe.
-    Idempotent.
+
+    Uses frappe.permissions.add_permission, which first copies the standard
+    role permissions into Custom DocPerm (via setup_custom_perms) so they are
+    preserved — inserting a Custom DocPerm directly would REPLACE every
+    standard Branch permission and leave only this one. Idempotent.
     """
+    from frappe.permissions import add_permission, reset_perms, update_permission_property
+
+    custom_roles = set(
+        frappe.get_all("Custom DocPerm", filters={"parent": "Branch"}, pluck="role")
+    )
+
+    # Recover from the earlier destructive version: if the only Custom DocPerm
+    # left is our injected "All" row, the standard Branch permissions were wiped.
+    # reset_perms deletes all Custom DocPerm so Branch falls back to its standard
+    # (doctype JSON) permissions, then we re-add read-for-all the safe way.
+    if custom_roles and custom_roles == {"All"}:
+        reset_perms("Branch")
+        custom_roles = set()
+
     if frappe.db.exists("Custom DocPerm", {"parent": "Branch", "role": "All", "read": 1}):
         return
 
-    frappe.get_doc({
-        "doctype": "Custom DocPerm",
-        "parent": "Branch",
-        "parenttype": "DocType",
-        "parentfield": "permissions",
-        "role": "All",
-        "permlevel": 0,
-        "read": 1,
-        "write": 0,
-        "create": 0,
-        "delete": 0,
-        "submit": 0,
-        "cancel": 0,
-        "amend": 0,
-        "report": 0,
-        "export": 0,
-        "import_": 0,
-        "print": 0,
-        "email": 0,
-        "share": 0,
-    }).insert(ignore_permissions=True)
+    add_permission("Branch", "All", 0)
+    update_permission_property("Branch", "All", 0, "read", 1)
+    frappe.clear_cache(doctype="Branch")
     frappe.db.commit()
 
 

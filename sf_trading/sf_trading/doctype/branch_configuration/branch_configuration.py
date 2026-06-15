@@ -34,9 +34,14 @@ class BranchConfiguration(Document):
 		new_users = {d.user for d in self.user}
 		removed_users = old_users - new_users
 
+		old_letter_head = _branch_letter_head(old_doc.get("branch"))
+
 		for user in removed_users:
 			if old_doc.get("branch"):
 				_safe_delete_permission(user, "Branch", old_doc.branch, exclude_branch=self.name)
+
+			if old_letter_head:
+				_safe_delete_permission(user, "Letter Head", old_letter_head, exclude_branch=self.name)
 
 			if old_doc.get("company"):
 				_safe_delete_permission(user, "Company", old_doc.company, exclude_branch=self.name)
@@ -72,12 +77,14 @@ class BranchConfiguration(Document):
 			for u in self.user:
 				_safe_delete_permission(u.user, "Company", old_company, exclude_branch=self.name)
 
-		# Remove old branch permission for retained users when branch changes
+		# Remove old branch + letter head permissions for retained users when branch changes
 		old_branch = old_doc.get("branch")
 		new_branch = self.get("branch")
 		if old_branch and old_branch != new_branch:
 			for u in self.user:
 				_safe_delete_permission(u.user, "Branch", old_branch, exclude_branch=self.name)
+				if old_letter_head:
+					_safe_delete_permission(u.user, "Letter Head", old_letter_head, exclude_branch=self.name)
 
 	def on_update(self):
 		self.create_permissions()
@@ -94,9 +101,16 @@ class BranchConfiguration(Document):
 			_normalize_user_defaults(user)
 
 	def create_permissions(self):
+		branch_letter_head = _branch_letter_head(self.branch) if self.branch else None
+
 		for u in self.user:
 			if self.branch:
 				create_permission(u.user, "Branch", self.branch)
+
+			# Restrict the user to this branch's letter head (accumulates across
+			# multiple branch configs; default follows the primary branch).
+			if branch_letter_head:
+				create_permission(u.user, "Letter Head", branch_letter_head)
 
 			if self.company:
 				create_permission(u.user, "Company", self.company)
@@ -150,7 +164,20 @@ def create_permission(user, allow, value):
 
 # Allow types managed by Branch Configuration — only these are touched when
 # normalizing User Permission defaults (leaves permissions from other apps alone).
-_MANAGED_ALLOWS = ("Branch", "Company", "Warehouse", "Cost Center", "Mode of Payment")
+_MANAGED_ALLOWS = ("Branch", "Company", "Warehouse", "Cost Center", "Mode of Payment", "Letter Head")
+
+
+def _branch_letter_head(branch):
+	"""Return the custom letter head defined on a Branch, or None.
+
+	Guards against the custom_letter_head column not existing yet (fixture not
+	migrated) so this never raises an 'Unknown column' SQL error.
+	"""
+	if not branch:
+		return None
+	if not frappe.db.has_column("Branch", "custom_letter_head"):
+		return None
+	return frappe.db.get_value("Branch", branch, "custom_letter_head")
 
 
 def _clear_default_branch_elsewhere(user, keep_branch):
@@ -212,6 +239,9 @@ def _normalize_user_defaults(user):
 	default_pairs = set()
 	if cfg.get("branch"):
 		default_pairs.add(("Branch", cfg.branch))
+		lh = _branch_letter_head(cfg.branch)
+		if lh:
+			default_pairs.add(("Letter Head", lh))
 	if cfg.get("company"):
 		default_pairs.add(("Company", cfg.company))
 	if cfg.warehouse:
@@ -283,6 +313,17 @@ def _safe_delete_permission(user, allow, value, exclude_branch=None):
 			still_granted = frappe.db.exists(
 				"Branch Configuration",
 				{"name": ["in", other_branches], "company": value},
+			)
+		elif allow == "Letter Head":
+			# Granted if any other config's branch resolves to the same letter head.
+			other_branch_values = frappe.get_all(
+				"Branch Configuration",
+				filters={"name": ["in", other_branches]},
+				pluck="branch",
+				ignore_permissions=True,
+			)
+			still_granted = any(
+				_branch_letter_head(b) == value for b in other_branch_values if b
 			)
 
 		if still_granted:
