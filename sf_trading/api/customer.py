@@ -135,6 +135,7 @@ def create_customer_with_address(
         "tax_id": tax_id or None,
         "mobile_no": mobile_no,
         "email_id": email_id or None,
+        "custom_company": company or None,
         "custom_vat_registration_number": tax_id or None,
         "custom_commercial_registration_number": commercial_registration_number or None,
     })

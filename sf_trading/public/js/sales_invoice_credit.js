@@ -67,7 +67,7 @@ frappe.ui.form.on("Sales Invoice", {
 						message: __("Customer {0} has no credit limit set for this company. Set a credit limit or use Cash payment mode.", [frm.doc.customer]),
 						indicator: "red",
 					});
-					frm.set_value("customer", "");
+					frm.set_value("custom_payment_mode", "Cash");
 					return;
 				}
 				sf_check_overdue_on_customer(frm);

@@ -46,6 +46,7 @@ app_include_js = [
 	f"/assets/sf_trading/js/create_supplier.js?{_v}",
 	f"/assets/sf_trading/js/stock_entry.js?{_v}",
 	f"/assets/sf_trading/js/material_request.js?{_v}",
+	f"/assets/sf_trading/js/customer_company.js?{_v}",
 ]
 
 # include js, css files in header of web template
@@ -141,6 +142,7 @@ after_migrate = ["sf_trading.inter_branch.ensure_branch_accounting_dimension"]
 
 permission_query_conditions = {
 	"Item": "sf_trading.branch_defaults.item_permission_query",
+	"Customer": "sf_trading.customer_permission.permission_query_conditions_for_customer",
 }
 #
 # has_permission = {
@@ -170,6 +172,7 @@ _LH_HOOK = "sf_trading.branch_defaults.set_letter_head_from_branch"
 doc_events = {
 	"Customer": {
 		"validate": "sf_trading.api.customer_override.validate",
+		"before_save": "sf_trading.customer_permission.auto_add_branch_on_credit_limit",
 	},
 	"Sales Invoice": {
 		"before_validate": [
@@ -344,6 +347,9 @@ fixtures = [
 					"Sales Invoice-custom_vat__expairy_date",
 					"Sales Invoice-custom_payment_mode",
 					"Branch-custom_letter_head",
+					"Material Request-custom_priority",
+					"Customer-custom_company",
+					"Customer-custom_branch_access",
 				)
 			]
 		]
