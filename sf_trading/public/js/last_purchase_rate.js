@@ -260,7 +260,6 @@ const purchase_rate_doctypes = [
 	"Purchase Invoice",
 	"Purchase Receipt",
 	"Supplier Quotation",
-	"Material Request",
 ];
 
 purchase_rate_doctypes.forEach(function (doctype) {
