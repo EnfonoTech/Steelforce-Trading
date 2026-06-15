@@ -160,19 +160,7 @@ frappe.ui.form.on("Sales Invoice", {
 		// Non-credit: show Cash payment popup after save
 		if (!frm.doc.grand_total || Math.abs(flt(frm.doc.grand_total)) <= 0) return;
 
-		if (frm.doc.pos_profile) {
-			frappe.db.get_value(
-				"POS Profile",
-				frm.doc.pos_profile,
-				"disable_grand_total_to_default_mop",
-				function (r) {
-					if (r && r.message === 1) return;
-					sf_trading_show_pos_total_popup(frm);
-				}
-			);
-		} else {
-			sf_trading_show_pos_total_popup(frm);
-		}
+		sf_trading_show_pos_total_popup(frm);
 	},
 });
 
@@ -187,102 +175,43 @@ function sf_trading_show_pos_total_popup(frm) {
 			sf_trading_render_dialog(frm);
 			return;
 		}
-		if (frm.doc.pos_profile) {
-			frappe.call({
-				method: "frappe.client.get",
-				args: { doctype: "POS Profile", name: frm.doc.pos_profile },
-				callback: function (r) {
-					if (r.message && r.message.payments && r.message.payments.length > 0) {
-						const profile_payments = r.message.payments;
-						const mode_list = profile_payments.map(function (p) { return p.mode_of_payment; });
-						const default_by_mode = {};
-						profile_payments.forEach(function (p) { default_by_mode[p.mode_of_payment] = p.default; });
-						frappe.call({
-							method: "sf_trading.api.sales_invoice_payment.get_payment_modes_with_account",
-							args: { company: frm.doc.company, mode_list: mode_list, is_return: frm.doc.is_return ? 1 : 0 },
-							callback: function (res) {
-								const valid_modes = res.message || [];
-								if (valid_modes.length === 0) {
-									frappe.flags.sf_trading_popup_showing = false;
-									frappe.msgprint(__("No enabled payment modes with a default account for this company. Please set default Cash or Bank account in Mode of Payment or enable the mode."));
-									return;
-								}
-								frm.clear_table("payments");
-								valid_modes.forEach(function (mode) {
-									const row = frm.add_child("payments");
-									row.mode_of_payment = mode;
-									row.default = default_by_mode[mode] || 0;
-								});
-								frm.refresh_field("payments");
-								frappe.call({
-									method: "sf_trading.api.sales_invoice_payment.get_accounts_for_modes",
-									args: { company: frm.doc.company, modes: JSON.stringify(valid_modes) },
-									callback: function (ar) {
-										const accounts = ar.message || {};
-										(frm.doc.payments || []).forEach(function (p) { p.account = accounts[p.mode_of_payment] || ""; });
-										frm.refresh_field("payments");
-										sf_trading_render_dialog(frm);
-									},
-									error: function () {
-										frappe.flags.sf_trading_popup_showing = false;
-										frappe.msgprint(__("Error loading payment accounts. Please try again."));
-									}
-								});
-							},
-							error: function () {
-								frappe.flags.sf_trading_popup_showing = false;
-								frappe.msgprint(__("Error loading payment modes. Please try again."));
-							}
-						});
-					} else {
-						frappe.flags.sf_trading_popup_showing = false;
-						frappe.msgprint(__("Add payment modes in POS Profile first"));
-					}
-				},
-				error: function () {
+		// Payment modes come from the branch/company allowlist only — POS Profile is not used.
+		frappe.call({
+			method: "sf_trading.api.sales_invoice_payment.get_payment_modes_with_account",
+			args: { company: frm.doc.company, is_return: frm.doc.is_return ? 1 : 0, branch: frm.doc.branch || undefined },
+			callback: function (r) {
+				const modes = r.message || [];
+				if (modes.length === 0) {
 					frappe.flags.sf_trading_popup_showing = false;
-					frappe.msgprint(__("No enabled payment modes with a default account for this company."));
+					frappe.msgprint(__("No enabled Mode of Payment with default Cash or Bank account for this company. Please set default account in Mode of Payment."));
+					return;
 				}
-			});
-		} else {
-			// Non-credit without POS Profile: only enabled modes with default account
-			frappe.call({
-				method: "sf_trading.api.sales_invoice_payment.get_payment_modes_with_account",
-				args: { company: frm.doc.company, is_return: frm.doc.is_return ? 1 : 0 },
-				callback: function (r) {
-					const modes = r.message || [];
-					if (modes.length === 0) {
+				frm.clear_table("payments");
+				modes.forEach(function (name) {
+					const row = frm.add_child("payments");
+					row.mode_of_payment = name;
+				});
+				frm.refresh_field("payments");
+				frappe.call({
+					method: "sf_trading.api.sales_invoice_payment.get_accounts_for_modes",
+					args: { company: frm.doc.company, modes: JSON.stringify(modes) },
+					callback: function (ar) {
+						const accounts = ar.message || {};
+						(frm.doc.payments || []).forEach(function (p) { p.account = accounts[p.mode_of_payment] || ""; });
+						frm.refresh_field("payments");
+						sf_trading_render_dialog(frm);
+					},
+					error: function () {
 						frappe.flags.sf_trading_popup_showing = false;
-						frappe.msgprint(__("No enabled Mode of Payment with default Cash or Bank account for this company. Please set default account in Mode of Payment."));
-						return;
+						frappe.msgprint(__("Error loading payment accounts. Please try again."));
 					}
-					frm.clear_table("payments");
-					modes.forEach(function (name) {
-						const row = frm.add_child("payments");
-						row.mode_of_payment = name;
-					});
-					frm.refresh_field("payments");
-					frappe.call({
-						method: "sf_trading.api.sales_invoice_payment.get_accounts_for_modes",
-						args: { company: frm.doc.company, modes: JSON.stringify(modes) },
-						callback: function (ar) {
-							const accounts = ar.message || {};
-							(frm.doc.payments || []).forEach(function (p) { p.account = accounts[p.mode_of_payment] || ""; });
-							frm.refresh_field("payments");
-							sf_trading_render_dialog(frm);
-						},
-						error: function () {
-							frappe.flags.sf_trading_popup_showing = false;
-							frappe.msgprint(__("Error loading payment accounts. Please try again."));
-						}
-					});
-				},
-				error: function () {
-					frappe.flags.sf_trading_popup_showing = false;
-					frappe.msgprint(__("Error loading payment modes. Please try again."));
-				}
-			});
-		}
+				});
+			},
+			error: function () {
+				frappe.flags.sf_trading_popup_showing = false;
+				frappe.msgprint(__("Error loading payment modes. Please try again."));
+			}
+		});
 	}
 
 	ensure_payments_then_show();
@@ -571,7 +500,7 @@ function sf_trading_show_pdc_popup(frm) {
 	function load_pdc_modes_then_show() {
 		frappe.call({
 			method: "sf_trading.api.sales_invoice_payment.get_payment_modes_with_account",
-			args: { company: frm.doc.company, is_pdc: 1, is_return: frm.doc.is_return ? 1 : 0 },
+			args: { company: frm.doc.company, is_pdc: 1, is_return: frm.doc.is_return ? 1 : 0, branch: frm.doc.branch || undefined },
 			callback: function (r) {
 				const modes = r.message || [];
 				if (!modes.length) {

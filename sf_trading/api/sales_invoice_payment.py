@@ -49,28 +49,26 @@ def get_available_credit(customer: str, company: str) -> float:
 
 
 @frappe.whitelist()
-def get_payment_modes_with_account(company: str, mode_list: str | list = None, is_return: int | str = 0, is_pdc: int | str = 0):
+def get_payment_modes_with_account(company: str, is_return: int | str = 0, is_pdc: int | str = 0, branch: str = None):
 	"""
 	Return Mode of Payment names that are enabled and have a default Cash/Bank
 	account for the given company. Use this to avoid "Please set default Cash or
 	Bank account" or disabled-mode errors when showing the payment popup.
 
+	The list is built from all enabled modes with a default account, then
+	restricted to the branch allowlist. POS Profile is not consulted.
+
 	Args:
 		company: Company name
-		mode_list: Optional JSON list or Python list of mode names to filter
-			(e.g. from POS Profile). If None, all enabled modes with account are returned.
+		is_return: 1 when the invoice is a return (filters to for_return modes)
+		is_pdc: 1 when collecting PDC modes (filters to for_pdc modes)
+		branch: Branch to restrict Cash/Bank modes to (from the document)
 
 	Returns:
 		List of mode names that are enabled and have default account for company.
 	"""
 	if not company:
 		return []
-
-	if isinstance(mode_list, str):
-		try:
-			mode_list = json.loads(mode_list) if mode_list else None
-		except Exception:
-			mode_list = None
 
 	# Modes that have a default account for this company
 	has_account = frappe.db.sql(
@@ -84,32 +82,15 @@ def get_payment_modes_with_account(company: str, mode_list: str | list = None, i
 	)
 	modes_with_account = {r[0] for r in has_account}
 
-	# Enabled modes: get_list with enabled=1
-	if mode_list is not None:
-		names = [m if isinstance(m, str) else (m.get("name") or m.get("mode_of_payment")) for m in (mode_list or [])]
-		names = [n for n in names if n]
-		if not names:
-			return []
-		enabled = frappe.get_all(
-			"Mode of Payment",
-			filters={"name": ["in", names], "enabled": 1},
-			pluck="name",
-			ignore_permissions=True,
-		)
-	else:
-		enabled = frappe.get_all(
-			"Mode of Payment",
-			filters={"enabled": 1},
-			pluck="name",
-			ignore_permissions=True,
-		)
+	enabled = frappe.get_all(
+		"Mode of Payment",
+		filters={"enabled": 1},
+		pluck="name",
+		ignore_permissions=True,
+	)
 
 	# Intersection: enabled and has default account for company
 	valid = [m for m in enabled if m in modes_with_account]
-	# Preserve order of mode_list when filtering from profile
-	if mode_list is not None and names:
-		order = {m: i for i, m in enumerate(names)}
-		valid.sort(key=lambda m: order.get(m, 999))
 
 	# PDC filter: applied globally regardless of user/branch.
 	# for_pdc MoPs only appear in PDC mode; they are excluded from all other popups.
@@ -128,11 +109,11 @@ def get_payment_modes_with_account(company: str, mode_list: str | list = None, i
 		if all_pdc_mops:
 			valid = [m for m in valid if m not in all_pdc_mops]
 
-	valid = _restrict_to_branch_allowlist(valid, company, is_return=frappe.utils.cint(is_return))
+	valid = _restrict_to_branch_allowlist(valid, company, is_return=frappe.utils.cint(is_return), branch=branch)
 	return valid
 
 
-def _restrict_to_branch_allowlist(modes: list, company: str, is_return: int = 0) -> list:
+def _restrict_to_branch_allowlist(modes: list, company: str, is_return: int = 0, branch: str = None) -> list:
 	"""For users in a Branch Configuration, filter Cash/Bank MoPs to the
 	branch's allowlist. Other types (General, Phone, etc.) pass through.
 	Bypassed for Administrator, Guest, System Manager, Sales Manager.
@@ -150,11 +131,13 @@ def _restrict_to_branch_allowlist(modes: list, company: str, is_return: int = 0)
 
 	from sf_trading.branch_defaults import _branch_mops_by_type, _resolve_user_branch
 
-	branch = _resolve_user_branch(user, company=company)
-	if not branch:
+	# Use the branch from the document when available (accurate for multi-branch users).
+	# Fall back to resolving from the session user.
+	resolved_branch = branch or _resolve_user_branch(user, company=company)
+	if not resolved_branch:
 		return modes
 
-	cash_allow, bank_allow = _branch_mops_by_type(branch)
+	cash_allow, bank_allow = _branch_mops_by_type(resolved_branch)
 	# If branch has no Cash/Bank MoPs configured, don't filter
 	if not cash_allow and not bank_allow:
 		return modes
@@ -188,7 +171,7 @@ def _restrict_to_branch_allowlist(modes: list, company: str, is_return: int = 0)
 		return_allowed = set(
 			frappe.get_all(
 				"Branch Configuration Mode of Payment",
-				filters={"parent": branch, "parenttype": "Branch Configuration", "for_return": 1},
+				filters={"parent": resolved_branch, "parenttype": "Branch Configuration", "for_return": 1},
 				pluck="mode_of_payment",
 				ignore_permissions=True,
 			)

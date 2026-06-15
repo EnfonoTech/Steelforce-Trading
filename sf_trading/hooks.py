@@ -101,6 +101,8 @@ app_include_js = [
 # before_install = "sf_trading.install.before_install"
 # after_install = "sf_trading.install.after_install"
 
+after_migrate = ["sf_trading.inter_branch.ensure_branch_accounting_dimension"]
+
 # Uninstallation
 # ------------
 
@@ -154,6 +156,7 @@ override_doctype_class = {
 # Hook on document methods and events
 
 _CC_HOOK = "sf_trading.branch_defaults.override_cost_center_from_branch"
+_BRANCH_HOOK = "sf_trading.inter_branch.auto_set_branch_from_warehouse"
 
 doc_events = {
 	"Customer": {
@@ -165,7 +168,10 @@ doc_events = {
 			_CC_HOOK,
 			"sf_trading.branch_defaults.override_payment_accounts_from_branch",
 		],
-		"validate": "sf_trading.api.sales_invoice_override.validate",
+		"validate": [
+			"sf_trading.api.sales_invoice_override.validate",
+			_BRANCH_HOOK,
+		],
 		"on_submit": "sf_trading.inter_company.sales_invoice_on_submit",
 	},
 	"Sales Order": {
@@ -176,13 +182,17 @@ doc_events = {
 	},
 	"Delivery Note": {
 		"before_validate": _CC_HOOK,
+		"validate": _BRANCH_HOOK,
 	},
 	"Purchase Invoice": {
 		"before_validate": [
 			"sf_trading.inter_company.purchase_invoice_before_validate",
 			_CC_HOOK,
 		],
-		"validate": "sf_trading.overrides.purchase_invoice.validate",
+		"validate": [
+			"sf_trading.overrides.purchase_invoice.validate",
+			_BRANCH_HOOK,
+		],
 		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
 	},
 	"Purchase Order": {
@@ -190,6 +200,7 @@ doc_events = {
 	},
 	"Purchase Receipt": {
 		"before_validate": _CC_HOOK,
+		"validate": _BRANCH_HOOK,
 	},
 	"Supplier Quotation": {
 		"before_validate": _CC_HOOK,
