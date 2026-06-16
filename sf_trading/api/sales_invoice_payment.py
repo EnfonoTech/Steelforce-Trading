@@ -114,72 +114,36 @@ def get_payment_modes_with_account(company: str, is_return: int | str = 0, is_pd
 
 
 def _restrict_to_branch_allowlist(modes: list, company: str, is_return: int = 0, branch: str = None) -> list:
-	"""For users in a Branch Configuration, filter Cash/Bank MoPs to the
-	branch's allowlist. Other types (General, Phone, etc.) pass through.
-	Bypassed for Administrator, Guest, System Manager, Sales Manager.
+	"""
+	Return only the MOPs that are configured in the document branch's
+	Branch Configuration Mode of Payment table.
+
+	- No branch set → return empty list (show nothing).
+	- Branch has no MOPs configured → return empty list (show nothing).
+	- No role bypasses — rule applies to everyone.
 	"""
 	if not modes:
-		return modes
+		return []
 
-	user = frappe.session.user
-	if user in ("Administrator", "Guest"):
-		return modes
+	if not branch:
+		return []
 
-	roles = set(frappe.get_roles(user))
-	if roles & {"System Manager", "Sales Manager", "Sales Master Manager"}:
-		return modes
+	filters = {"parent": branch, "parenttype": "Branch Configuration"}
+	if is_return:
+		filters["for_return"] = 1
 
-	from sf_trading.branch_defaults import _branch_mops_by_type, _resolve_user_branch
+	configured = frappe.get_all(
+		"Branch Configuration Mode of Payment",
+		filters=filters,
+		pluck="mode_of_payment",
+		ignore_permissions=True,
+	)
 
-	# Use the branch from the document when available (accurate for multi-branch users).
-	# Fall back to resolving from the session user.
-	resolved_branch = branch or _resolve_user_branch(user, company=company)
-	if not resolved_branch:
-		return modes
+	if not configured:
+		return []
 
-	cash_allow, bank_allow = _branch_mops_by_type(resolved_branch)
-	# If branch has no Cash/Bank MoPs configured, don't filter
-	if not cash_allow and not bank_allow:
-		return modes
-
-	cash_allow_set = set(cash_allow)
-	bank_allow_set = set(bank_allow)
-
-	mop_types = {
-		m["name"]: (m.get("type") or "")
-		for m in frappe.get_all(
-			"Mode of Payment",
-			filters={"name": ["in", modes]},
-			fields=["name", "type"],
-			ignore_permissions=True,
-		)
-	}
-
-	out = []
-	for m in modes:
-		t = mop_types.get(m, "")
-		if t == "Cash":
-			if m in cash_allow_set:
-				out.append(m)
-		elif t == "Bank":
-			if m in bank_allow_set:
-				out.append(m)
-		else:
-			out.append(m)
-
-	if is_return and out:
-		return_allowed = set(
-			frappe.get_all(
-				"Branch Configuration Mode of Payment",
-				filters={"parent": resolved_branch, "parenttype": "Branch Configuration", "for_return": 1},
-				pluck="mode_of_payment",
-				ignore_permissions=True,
-			)
-		)
-		if return_allowed:
-			out = [m for m in out if m in return_allowed]
-
-	return out
+	allowed = set(configured)
+	return [m for m in modes if m in allowed]
 
 
 @frappe.whitelist()

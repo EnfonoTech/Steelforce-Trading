@@ -83,7 +83,6 @@ def resolve_warehouse_branch(warehouse: str) -> str | None:
         "Branch Configuration Warehouse",
         {"warehouse": warehouse},
         "parent",
-        ignore_permissions=True,
     )
 
 
