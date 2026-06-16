@@ -2,8 +2,19 @@ import frappe
 
 
 def item_permission_query(user=None):
-	"""Restrict Item list/search to items that have an Item Default for the
-	user's permitted company. Bypassed for System Manager and Administrator.
+	"""Restrict Item list/search based on Company User Permissions.
+
+	List view:
+	  - No Company User Permission → show all items.
+	  - Has Company User Permission(s) → show only items that have an Item Default
+	    for at least one of the user's permitted companies.
+
+	Link fields:
+	  Items with no Item Default row are excluded when a company filter is present
+	  (enforced by search_items_with_stock_and_rate per-request; this query covers
+	  list view and any search that doesn't pass a company filter explicitly).
+
+	Bypassed for System Manager and Administrator.
 	"""
 	user = user or frappe.session.user
 	if user in ("Administrator", "Guest"):
@@ -12,19 +23,32 @@ def item_permission_query(user=None):
 	if "System Manager" in frappe.get_roles(user):
 		return ""
 
-	company = (
-		frappe.defaults.get_user_default("company")
-		or frappe.defaults.get_user_default("Company")
+	# Link-field searches go through /api/method/frappe.desk.search.search_link.
+	# For those, return "" — search_items_with_stock_and_rate pre-filters by
+	# Item Default for the form's company before calling item_query, so the
+	# User Permission restriction here would fight that and block valid items.
+	try:
+		req = getattr(frappe.local, "request", None)
+		if req and "search_link" in (req.path or ""):
+			return ""
+	except Exception:
+		pass
+
+	companies = frappe.get_all(
+		"User Permission",
+		filters={"user": user, "allow": "Company"},
+		pluck="for_value",
+		ignore_permissions=True,
 	)
-	if not company:
+	if not companies:
 		return ""
 
-	company_escaped = frappe.db.escape(company)
+	company_list = ", ".join([frappe.db.escape(c) for c in companies])
 	return (
 		"`tabItem`.`name` IN ("
 		"  SELECT `parent` FROM `tabItem Default`"
-		"  WHERE `company` = {company}"
-		")".format(company=company_escaped)
+		"  WHERE `company` IN ({0})"
+		")".format(company_list)
 	)
 
 

@@ -50,8 +50,24 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 	# Pop our custom filters before passing to ERPNext's item_query (it would
 	# otherwise try to apply them as Item field filters and either fail or
 	# return zero rows).
-	company = filters.pop("company", None) or frappe.defaults.get_user_default("company")
+	company = filters.pop("company", None)
 	price_list = filters.pop("price_list", None)
+
+	# Pre-filter by Item Default for this company BEFORE calling item_query,
+	# so ERPNext's pagination operates on the already-restricted item set.
+	# Doing this post-pagination caused items to disappear: item_query returns
+	# the first N items alphabetically, and the company-specific items may not
+	# be in that first page at all.
+	if company:
+		allowed_codes = frappe.get_all(
+			"Item Default",
+			filters={"company": company},
+			pluck="parent",
+			ignore_permissions=True,
+		)
+		if not allowed_codes:
+			return []
+		filters["name"] = ["in", allowed_codes]
 
 	# Delegate to ERPNext's standard item search. We pass as_dict=False so we
 	# get tuples in the exact format Frappe's autosuggest expects.
@@ -66,22 +82,6 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 	item_codes = [row[0] for row in base_rows if row and row[0]]
 	if not item_codes:
 		return list(base_rows)
-
-	# Filter: only show items that have an Item Default for the user's company
-	# Filter: only show items that have an Item Default for the user's company.
-	# (item_permission_query applies this globally to list views, but not to
-	#  direct function calls like this one, so we must enforce it here too.)
-	if company:
-		items_with_company_default = frappe.get_all(
-			"Item Default",
-			filters={"company": company, "parent": ["in", item_codes]},
-			pluck="parent",
-		)
-		allowed = set(items_with_company_default)
-		base_rows = [row for row in base_rows if row and row[0] in allowed]
-		item_codes = [row[0] for row in base_rows if row and row[0]]
-		if not item_codes:
-			return []
 
 	# Natural sort by item_name: numeric parts compared as floats so
 	# "2MM" (2.0) sorts before "2.6MM" (2.6), not after it.
@@ -205,22 +205,6 @@ def redirect_item_query_before_request():
 
 	frappe.form_dict["query"] = "sf_trading.api.item_search.search_items_with_stock_and_rate"
 
-	# Inject company into filters when the calling form hasn't passed one.
-	try:
-		import json
-
-		raw = frappe.form_dict.get("filters") or {}
-		filters = json.loads(raw) if isinstance(raw, str) and raw else (raw if isinstance(raw, dict) else {})
-		if not filters.get("company"):
-			company = (
-				frappe.defaults.get_user_default("company")
-				or frappe.defaults.get_user_default("Company")
-			)
-			if company:
-				filters["company"] = company
-				frappe.form_dict["filters"] = json.dumps(filters)
-	except Exception:
-		pass
 
 
 @frappe.whitelist()
