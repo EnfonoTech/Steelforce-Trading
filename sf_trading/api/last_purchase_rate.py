@@ -78,8 +78,10 @@ def get_last_purchase_rate(item_code, company=None):
 
 
 @frappe.whitelist()
-def get_item_purchase_history(item_code=None, company=None, limit=20):
-	"""Return purchase history (rates) for an item from submitted Purchase Invoices."""
+def get_item_purchase_history(item_code=None, cost_center=None, limit=20):
+	"""Return purchase history (rates) for an item. Requires cost_center."""
+	if not cost_center:
+		return []
 	limit = int(limit or 20)
 	where = ["pi.docstatus = 1"]
 	params = {"limit": limit}
@@ -88,9 +90,11 @@ def get_item_purchase_history(item_code=None, company=None, limit=20):
 		where.append("pii.item_code = %(item_code)s")
 		params["item_code"] = item_code
 
-	if company:
-		where.append("pi.company = %(company)s")
-		params["company"] = company
+	if cost_center:
+		where.append(
+			"(pii.cost_center = %(cost_center)s OR pi.cost_center = %(cost_center)s)"
+		)
+		params["cost_center"] = cost_center
 
 	perm_where, perm_params = _permission_conditions()
 	where.extend(perm_where)

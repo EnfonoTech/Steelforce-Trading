@@ -107,18 +107,10 @@ def get_last_selling_rate(item_code, company=None):
 
 
 @frappe.whitelist()
-def get_item_selling_history(item_code=None, company=None, limit=20):
-	"""
-	Get item selling history (last selling rates only, no purchase rates).
-	
-	Args:
-		item_code: Item code to get history for (optional)
-		company: Company name (optional)
-		limit: Number of records to return (default 20)
-	
-	Returns:
-		List of dictionaries with selling history
-	"""
+def get_item_selling_history(item_code=None, cost_center=None, limit=20):
+	"""Return selling history for an item. Requires cost_center."""
+	if not cost_center:
+		return []
 	limit = int(limit or 20)
 	where = ["si.docstatus = 1"]
 	params = {"limit": limit}
@@ -127,9 +119,11 @@ def get_item_selling_history(item_code=None, company=None, limit=20):
 		where.append("sii.item_code = %(item_code)s")
 		params["item_code"] = item_code
 
-	if company:
-		where.append("si.company = %(company)s")
-		params["company"] = company
+	if cost_center:
+		where.append(
+			"(sii.cost_center = %(cost_center)s OR si.cost_center = %(cost_center)s)"
+		)
+		params["cost_center"] = cost_center
 
 	# Restrict to user-permitted companies and cost centers
 	perm_where, perm_params = _permission_conditions()

@@ -73,6 +73,7 @@ sf_trading.get_default_item_for_last_purchase_rate = function (frm) {
 
 sf_trading.open_last_purchase_rate_dialog = function (frm, default_item_code) {
 	const company = frm.doc.company || frappe.defaults.get_default("company");
+	const cost_center = frm.doc.cost_center || null;
 
 	const d = new frappe.ui.Dialog({
 		title: __("Last Purchase Rate"),
@@ -99,6 +100,7 @@ sf_trading.open_last_purchase_rate_dialog = function (frm, default_item_code) {
 		},
 	});
 
+	d._cost_center = cost_center;
 	d.show();
 
 	setTimeout(() => {
@@ -116,13 +118,19 @@ sf_trading.open_last_purchase_rate_dialog = function (frm, default_item_code) {
 };
 
 sf_trading.fetch_last_purchase_rate = function (item_code, company, dialog) {
+	if (!dialog._cost_center) {
+		dialog.fields_dict.results.$wrapper.html(
+			'<div class="text-muted">' + __("Please select a Cost Center on the document first.") + "</div>"
+		);
+		return;
+	}
 	dialog.fields_dict.results.$wrapper.html(
 		'<div class="text-muted">' + __("Loading…") + "</div>"
 	);
 
 	frappe.call({
 		method: "sf_trading.api.last_purchase_rate.get_item_purchase_history",
-		args: { item_code: item_code, company: company, limit: 20 },
+		args: { item_code: item_code, cost_center: dialog._cost_center, limit: 20 },
 		callback: function (r) {
 			const rows = r.message || [];
 			if (!rows.length) {
