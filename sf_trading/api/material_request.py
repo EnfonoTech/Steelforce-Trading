@@ -7,6 +7,82 @@ from frappe.utils import nowdate, add_days, flt
 
 
 @frappe.whitelist()
+def get_mr_purchase_connections(transfer_mr):
+	"""
+	Return all non-cancelled Purchase MRs linked to a Transfer MR (via item-level
+	custom_source_mr) and the item_codes they cover.
+	Used to render the connections panel and decide whether to show the button.
+	"""
+	frappe.has_permission("Material Request", "read", transfer_mr, throw=True)
+
+	linked_items = frappe.get_all(
+		"Material Request Item",
+		filters={"custom_source_mr": transfer_mr, "docstatus": ["!=", 2]},
+		fields=["parent", "item_code"],
+		ignore_permissions=True,
+	)
+
+	purchase_mr_names = list({row.parent for row in linked_items})
+	purchase_mrs = []
+	if purchase_mr_names:
+		purchase_mrs = frappe.get_all(
+			"Material Request",
+			filters={"name": ["in", purchase_mr_names]},
+			fields=["name", "status", "docstatus", "transaction_date"],
+			ignore_permissions=True,
+		)
+
+	return {
+		"purchase_mrs": purchase_mrs,
+		"covered_item_codes": list({row.item_code for row in linked_items}),
+	}
+
+
+@frappe.whitelist()
+def make_purchase_request_from_mr(source_name):
+	"""
+	Map a submitted Material Transfer MR to a new (unsaved) Purchase MR.
+	Each item carries custom_source_mr pointing back to the source MR.
+	Called via frappe.model.open_mapped_doc — client opens the form without saving.
+	"""
+	frappe.has_permission("Material Request", "read", source_name, throw=True)
+	frappe.has_permission("Material Request", "create", throw=True)
+
+	src = frappe.get_doc("Material Request", source_name)
+	if src.material_request_type != "Material Transfer":
+		frappe.throw(_("Purchase Request can only be created from a Material Transfer request."))
+
+	# The source warehouse of the transfer (set_from_warehouse) is the warehouse
+	# that has no stock — purchases should be received there.
+	source_warehouse = src.get("set_from_warehouse") or None
+
+	mr = frappe.new_doc("Material Request")
+	mr.material_request_type = "Purchase"
+	mr.company = src.company
+	mr.transaction_date = nowdate()
+	mr.schedule_date = src.schedule_date
+	mr.set_warehouse = source_warehouse
+	mr.custom_priority = src.get("custom_priority") or None
+
+	for src_item in src.items:
+		mr.append("items", {
+			"item_code": src_item.item_code,
+			"item_name": src_item.item_name,
+			"description": src_item.description,
+			"qty": src_item.qty,
+			"uom": src_item.uom,
+			"stock_uom": src_item.stock_uom,
+			"conversion_factor": src_item.conversion_factor or 1,
+			"schedule_date": src_item.schedule_date or src.schedule_date,
+			"warehouse": src_item.from_warehouse or source_warehouse,
+			"custom_source_mr": source_name,
+		})
+
+	mr.run_method("set_missing_values")
+	return mr.as_dict()
+
+
+@frappe.whitelist()
 def create_material_request(item_code, from_warehouse, to_warehouse, qty, schedule_date, material_request_type, company):
 	"""
 	Create a Material Request for Material Transfer from one warehouse to another.
