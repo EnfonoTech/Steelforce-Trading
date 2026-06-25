@@ -220,6 +220,7 @@ doc_events = {
 			_LH_HOOK,
 		],
 		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
+		"on_submit": "sf_trading.api.purchase_return.auto_create_pr_return",
 	},
 	"Purchase Order": {
 		"before_validate": _CC_HOOK,
