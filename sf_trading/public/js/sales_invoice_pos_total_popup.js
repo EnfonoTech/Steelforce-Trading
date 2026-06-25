@@ -79,7 +79,7 @@ frappe.ui.form.on("Sales Invoice", {
 	before_submit: function (frm) {
 		// PDC: show PDC popup (cheque date + no + amount)
 		if (frm.doc.custom_payment_mode === "PDC") {
-			if (Math.abs(flt(frm.doc.grand_total)) > 0) {
+			if (Math.abs(flt(frm.doc.grand_total)) > 0 && flt(frm.doc.outstanding_amount) > 0) {
 				frappe.validated = false;
 				sf_trading_show_pdc_popup(frm);
 			}
@@ -88,7 +88,7 @@ frappe.ui.form.on("Sales Invoice", {
 
 		// Cash: show payment popup
 		if (frm.doc.custom_payment_mode !== "Credit") {
-			if (Math.abs(flt(frm.doc.grand_total)) > 0) {
+			if (Math.abs(flt(frm.doc.grand_total)) > 0 && flt(frm.doc.outstanding_amount) > 0) {
 				frappe.validated = false;
 				sf_trading_show_pos_total_popup(frm);
 			}
@@ -151,7 +151,7 @@ frappe.ui.form.on("Sales Invoice", {
 
 		// PDC: show PDC popup after save (same flow as Cash popup)
 		if (frm.doc.custom_payment_mode === "PDC") {
-			if (Math.abs(flt(frm.doc.grand_total)) > 0) {
+			if (Math.abs(flt(frm.doc.grand_total)) > 0 && flt(frm.doc.outstanding_amount) > 0) {
 				sf_trading_show_pdc_popup(frm);
 			}
 			return;
@@ -159,6 +159,7 @@ frappe.ui.form.on("Sales Invoice", {
 
 		// Non-credit: show Cash payment popup after save
 		if (!frm.doc.grand_total || Math.abs(flt(frm.doc.grand_total)) <= 0) return;
+		if (flt(frm.doc.outstanding_amount) <= 0) return;
 
 		sf_trading_show_pos_total_popup(frm);
 	},
