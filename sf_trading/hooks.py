@@ -50,6 +50,7 @@ app_include_js = [
 	f"/assets/sf_trading/js/sales_invoice_sales_person.js?{_v}",
 	f"/assets/sf_trading/js/return_qty_autofix.js?{_v}",
 	f"/assets/sf_trading/js/quotation.js?{_v}",
+	f"/assets/sf_trading/js/selling_price_realtime.js?{_v}",
 ]
 
 # include js, css files in header of web template
@@ -171,6 +172,7 @@ _BRANCH_HOOK = "sf_trading.inter_branch.auto_set_branch_from_warehouse"
 # Applies the branch's letter head to the document. Runs on validate, after
 # _BRANCH_HOOK so an auto-resolved branch is honoured.
 _LH_HOOK = "sf_trading.branch_defaults.set_letter_head_from_branch"
+_SP_HOOK = "sf_trading.api.selling_price_validation.validate_selling_price"
 
 doc_events = {
 	"Customer": {
@@ -187,6 +189,7 @@ doc_events = {
 			"sf_trading.api.sales_invoice_override.validate",
 			_BRANCH_HOOK,
 			_LH_HOOK,
+			_SP_HOOK,
 		],
 		"on_submit": [
 			"sf_trading.inter_company.sales_invoice_on_submit",
@@ -196,15 +199,15 @@ doc_events = {
 	},
 	"Sales Order": {
 		"before_validate": _CC_HOOK,
-		"validate": _LH_HOOK,
+		"validate": [_LH_HOOK, _SP_HOOK],
 	},
 	"Quotation": {
 		"before_validate": _CC_HOOK,
-		"validate": _LH_HOOK,
+		"validate": [_LH_HOOK, _SP_HOOK],
 	},
 	"Delivery Note": {
 		"before_validate": _CC_HOOK,
-		"validate": [_BRANCH_HOOK, _LH_HOOK],
+		"validate": [_BRANCH_HOOK, _LH_HOOK, _SP_HOOK],
 	},
 	"Purchase Invoice": {
 		"before_validate": [
