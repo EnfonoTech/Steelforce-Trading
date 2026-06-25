@@ -79,18 +79,34 @@ frappe.ui.form.on("Sales Invoice", {
 	before_submit: function (frm) {
 		// PDC: show PDC popup (cheque date + no + amount)
 		if (frm.doc.custom_payment_mode === "PDC") {
+			frappe.validated = false;
 			if (Math.abs(flt(frm.doc.grand_total)) > 0 && Math.abs(flt(frm.doc.outstanding_amount)) > 0) {
-				frappe.validated = false;
 				sf_trading_show_pdc_popup(frm);
+			} else {
+				// Advance fully covers the invoice — submit directly then print
+				frm.save("Submit").then(function () {
+					if (frm.doc.docstatus === 1) {
+						sf_trading_open_invoice_print(frm);
+						frm.reload_doc();
+					}
+				});
 			}
 			return;
 		}
 
 		// Cash: show payment popup
 		if (frm.doc.custom_payment_mode !== "Credit") {
+			frappe.validated = false;
 			if (Math.abs(flt(frm.doc.grand_total)) > 0 && Math.abs(flt(frm.doc.outstanding_amount)) > 0) {
-				frappe.validated = false;
 				sf_trading_show_pos_total_popup(frm);
+			} else {
+				// Advance fully covers the invoice — submit directly then print
+				frm.save("Submit").then(function () {
+					if (frm.doc.docstatus === 1) {
+						sf_trading_open_invoice_print(frm);
+						frm.reload_doc();
+					}
+				});
 			}
 			return;
 		}
