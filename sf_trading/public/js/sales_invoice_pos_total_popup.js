@@ -75,6 +75,23 @@ frappe.ui.form.on("Sales Invoice", {
 				sf_trading_open_invoice_print(frm);
 			});
 		}
+
+		// New Invoice button — left-click opens same window; right/middle-click open new tab
+		if (frm.doc.docstatus === 0 || frm.doc.docstatus === 1) {
+			const $btn = frm.add_custom_button(__("New Invoice"), function () {
+				frappe.new_doc("Sales Invoice");
+			});
+			if ($btn) {
+				$btn.html(
+					'<a href="/app/sales-invoice/new" ' +
+					'style="color:inherit;text-decoration:none">' + __("New Invoice") + "</a>"
+				);
+				// Stop propagation so the button JS handler doesn't double-fire on left-click
+				$btn.find("a").on("click", function (e) {
+					e.stopPropagation();
+				});
+			}
+		}
 	},
 	before_submit: function (frm) {
 		// PDC: show PDC popup (cheque date + no + amount)
