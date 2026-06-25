@@ -49,6 +49,7 @@ app_include_js = [
 	f"/assets/sf_trading/js/customer_company.js?{_v}",
 	f"/assets/sf_trading/js/sales_invoice_sales_person.js?{_v}",
 	f"/assets/sf_trading/js/return_qty_autofix.js?{_v}",
+	f"/assets/sf_trading/js/quotation.js?{_v}",
 ]
 
 # include js, css files in header of web template
@@ -187,7 +188,11 @@ doc_events = {
 			_BRANCH_HOOK,
 			_LH_HOOK,
 		],
-		"on_submit": "sf_trading.inter_company.sales_invoice_on_submit",
+		"on_submit": [
+			"sf_trading.inter_company.sales_invoice_on_submit",
+			"sf_trading.api.quotation.update_quotation_status_from_invoice",
+		],
+		"on_cancel": "sf_trading.api.quotation.update_quotation_status_from_invoice",
 	},
 	"Sales Order": {
 		"before_validate": _CC_HOOK,

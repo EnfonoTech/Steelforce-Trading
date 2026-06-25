@@ -49,6 +49,15 @@ function sf_apply_branch_defaults(frm) {
 			if (d.set_warehouse && frm.fields_dict.set_warehouse) {
 				frm.set_value("set_warehouse", d.set_warehouse);
 			}
+			// Forms without set_warehouse (e.g. Quotation): push warehouse to item rows
+			if (d.set_warehouse && !frm.fields_dict.set_warehouse) {
+				(frm.doc.items || []).forEach(function (row) {
+					if (frappe.meta.has_field(row.doctype, "warehouse")) {
+						row.warehouse = d.set_warehouse;
+					}
+				});
+				frm.refresh_field("items");
+			}
 		},
 	});
 }
