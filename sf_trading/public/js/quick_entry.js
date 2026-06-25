@@ -55,7 +55,10 @@ sf_trading.open_quick_entry_dialog = function (frm) {
 				fieldtype: 'Link',
 				options: 'Item',
 				get_query: function () {
-					return { filters: { "is_sales_item": 1, "disabled": 0 } };
+					return {
+						query: "erpnext.controllers.queries.item_query",
+						filters: { "is_sales_item": 1, "disabled": 0, "company": company }
+					};
 				}
 			},
 			{ fieldname: 'results', fieldtype: 'HTML' }

@@ -171,9 +171,8 @@ sf_trading.open_last_selling_rate_dialog = function(frm, default_item_code) {
 				default: default_item_code,
 				get_query: function() {
 					return {
-						filters: {
-							"is_sales_item": 1
-						}
+						query: "erpnext.controllers.queries.item_query",
+						filters: { "is_sales_item": 1, "company": company }
 					};
 				}
 			},

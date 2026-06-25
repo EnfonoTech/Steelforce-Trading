@@ -22,7 +22,17 @@ def get_items_with_stock(company=None, price_list=None, item_code=None, limit=20
 
 	limit = int(limit or 200)
 
-	params = {"company": company, "limit": limit}
+	# Only show items configured for this company in Item Defaults
+	allowed_items = frappe.get_all(
+		"Item Default",
+		filters={"company": company},
+		pluck="parent",
+		ignore_permissions=True,
+	)
+	if not allowed_items:
+		return []
+
+	params = {"company": company, "limit": limit, "allowed_items": allowed_items}
 	where = [
 		"bin.actual_qty > 0",
 		"item.is_sales_item = 1",
@@ -30,6 +40,7 @@ def get_items_with_stock(company=None, price_list=None, item_code=None, limit=20
 		"wh.company = %(company)s",
 		"wh.disabled = 0",
 		"wh.is_group = 0",
+		"bin.item_code IN %(allowed_items)s",
 	]
 
 	if item_code:

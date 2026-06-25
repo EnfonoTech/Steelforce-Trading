@@ -84,7 +84,10 @@ sf_trading.open_last_purchase_rate_dialog = function (frm, default_item_code) {
 				options: "Item",
 				default: default_item_code,
 				get_query: function () {
-					return { filters: { is_purchase_item: 1 } };
+					return {
+						query: "erpnext.controllers.queries.item_query",
+						filters: { "is_purchase_item": 1, "company": company }
+					};
 				},
 			},
 			{ fieldname: "results", fieldtype: "HTML" },

@@ -90,6 +90,12 @@ sf_trading.open_stock_availability_dialog = function(frm, default_item_code) {
 				fieldtype: "Link",
 				options: "Item",
 				default: default_item_code,
+				get_query: function() {
+					return {
+						query: "erpnext.controllers.queries.item_query",
+						filters: { "company": company }
+					};
+				},
 			},
 			{
 				fieldname: "item_name",
