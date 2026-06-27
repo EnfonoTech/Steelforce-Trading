@@ -33,7 +33,7 @@ function sf_check_overdue_on_customer(frm) {
 				frappe.msgprint({
 					title: __("Overdue Credit Invoice"),
 					message: __(
-						"Customer {0} has an overdue credit invoice <b>{1}</b> dated {2} "
+						"Customer {0} has an overdue credit invoice <a href='/app/sales-invoice/{1}'>{1}</a> dated {2} "
 						+ "with outstanding amount {3}. "
 						+ "Saving this invoice will be blocked until it is settled.",
 						[frm.doc.customer, inv.name, inv.posting_date,

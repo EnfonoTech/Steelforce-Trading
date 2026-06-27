@@ -41,17 +41,19 @@ def validate(doc, _method=None):
 
 	inv = _get_overdue_invoice(doc.customer, doc.company)
 	if inv:
+		inv_link = frappe.utils.get_link_to_form("Sales Invoice", inv.name)
 		frappe.throw(
 			_(
 				"Cannot create a new credit invoice for {0}. "
 				"Invoice {1} dated {2} has an outstanding amount of {3} "
 				"that is overdue. Please settle the outstanding balance first."
 			).format(
-				doc.customer,
-				inv.name,
+				frappe.bold(doc.customer),
+				inv_link,
 				inv.posting_date,
 				frappe.utils.fmt_money(inv.outstanding_amount, currency=doc.currency),
-			)
+			),
+			title=_("Overdue Invoice"),
 		)
 
 
