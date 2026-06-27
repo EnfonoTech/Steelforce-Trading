@@ -225,11 +225,14 @@ def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list, ch
 	from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
 	from erpnext.accounts.doctype.sales_invoice.sales_invoice import get_bank_cash_account
 
+	number_format = frappe.db.get_value("Currency", si.currency, "number_format") or "#,###.##"
+	currency_precision = len(number_format.split(".")[-1]) if "." in number_format else 0
+
 	for row in valid_rows:
 		# Reload invoice each time so outstanding is up to date after previous payments
 		si.reload()
-		outstanding = frappe.utils.flt(si.outstanding_amount)
-		amount = frappe.utils.flt(row["amount"])
+		outstanding = frappe.utils.flt(si.outstanding_amount, currency_precision)
+		amount = frappe.utils.flt(row["amount"], currency_precision)
 
 		if amount <= 0:
 			continue
@@ -269,16 +272,18 @@ def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list, ch
 					pe.paid_to_account_currency = acc.account_currency
 					pe.paid_to_account_type = acc.account_type
 
-		# paid_amount / received_amount in payment currency
-		pe.paid_amount = amount
-		pe.received_amount = amount
-
-		# Update reference allocation to match this amount
+		# Clamp to the reference row's actual outstanding to avoid sub-cent validation
+		# failures (e.g. user pays 1.11 but DB outstanding is 1.109 after rounding).
 		if pe.references:
-			# Assume single reference row for this invoice
 			ref = pe.references[0]
-			# For "Pay" type (return SI), allocated_amount must be negative
-			ref.allocated_amount = -amount if pe.payment_type == "Pay" else amount
+			ref_outstanding = frappe.utils.flt(ref.outstanding_amount)
+			effective_amount = min(amount, abs(ref_outstanding))
+			pe.paid_amount = effective_amount
+			pe.received_amount = effective_amount
+			ref.allocated_amount = -effective_amount if pe.payment_type == "Pay" else effective_amount
+		else:
+			pe.paid_amount = amount
+			pe.received_amount = amount
 
 		# PDC: posting date = invoice date; reference date = future cheque date
 		if cheque_date:

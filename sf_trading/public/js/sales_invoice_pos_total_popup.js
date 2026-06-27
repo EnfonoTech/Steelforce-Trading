@@ -279,6 +279,14 @@ function sf_trading_show_pos_total_popup(frm) {
 	ensure_payments_then_show();
 }
 
+function sf_trading_get_currency_precision(currency_code) {
+	var currency_doc = frappe.model.get_doc(":Currency", currency_code);
+	if (currency_doc && currency_doc.number_format) {
+		return get_number_format_info(currency_doc.number_format).precision;
+	}
+	return cint(frappe.boot.sysdefaults.currency_precision) || 2;
+}
+
 function sf_trading_render_dialog(frm) {
 	// Validate form state
 	if (!frm || !frm.doc) {
@@ -292,14 +300,17 @@ function sf_trading_render_dialog(frm) {
 		return;
 	}
 
-	// Use outstanding_amount when positive (handles advance payments reducing the payable amount).
-	// Fall back to rounded_total / grand_total for fresh invoices where outstanding may not yet differ.
-	const invoice_total = Math.abs(flt(
+	const currency = frm.doc.currency || "";
+	const curr_precision = sf_trading_get_currency_precision(currency);
+
+	// Round to currency precision so the displayed value and the comparison value are identical.
+	// Without rounding, outstanding_amount can be e.g. 12.489 (stored with extra decimals) which
+	// displays as "12.49" but causes false over-payment errors when the user enters 11.38+1.11=12.49.
+	const invoice_total = flt(Math.abs(flt(
 		(frm.doc.outstanding_amount > 0 ? frm.doc.outstanding_amount : null) ||
 		frm.doc.rounded_total ||
 		frm.doc.grand_total || 0
-	));
-	const currency = frm.doc.currency || "";
+	)), curr_precision);
 
 	// Validate invoice total
 	if (invoice_total <= 0) {
@@ -315,7 +326,8 @@ function sf_trading_render_dialog(frm) {
 			label: __("Amount to Pay"),
 			default: invoice_total,
 			read_only: 1,
-			options: currency,
+			options: "currency",
+			precision: curr_precision,
 		},
 		{ fieldtype: "Section Break", label: __("Enter Payment Amounts") },
 	];
@@ -335,7 +347,8 @@ function sf_trading_render_dialog(frm) {
 				fieldtype: "Currency",
 				label: mode,
 				default: payment.amount || 0,
-				options: currency,
+				options: "currency",
+				precision: curr_precision,
 			},
 			{ fieldtype: "Column Break", fieldname: "cb_" + idx },
 			{
@@ -385,13 +398,15 @@ function sf_trading_render_dialog(frm) {
 			return;
 		}
 
+		const total_rounded = flt(total, curr_precision);
+
 		// Prevent over-payment
-		if (total - invoice_total > 0.0001) {
+		if (total_rounded - invoice_total > 0.0001) {
 			frappe.msgprint({
 				title: __("Error"),
 				message: __(
 					"Total payment amount {0} cannot be greater than amount to pay {1}.",
-					[format_currency(total, currency), format_currency(invoice_total, currency)]
+					[format_currency(total_rounded, currency), format_currency(invoice_total, currency)]
 				),
 				indicator: "red",
 			});
@@ -399,11 +414,11 @@ function sf_trading_render_dialog(frm) {
 		}
 
 		// Prevent under-allocation
-		if (invoice_total - total > 0.0001) {
+		if (invoice_total - total_rounded > 0.0001) {
 			frappe.msgprint({
 				title: __("Incomplete"),
 				message: __("{0} still to be allocated", [
-					format_currency(invoice_total - total, currency),
+					format_currency(invoice_total - total_rounded, currency),
 				]),
 				indicator: "red",
 			});
@@ -414,8 +429,8 @@ function sf_trading_render_dialog(frm) {
 		// Keeps dialog visible until we know it's safe — if outstanding < total (e.g. advances
 		// already applied), the error shows while the dialog is still on screen.
 		const finalize_payments = () => {
-			const actual_os = Math.abs(flt(frm.doc.outstanding_amount || 0));
-			if (actual_os > 0 && flt(total - actual_os) > 0.0001) {
+			const actual_os = flt(Math.abs(flt(frm.doc.outstanding_amount || 0)), curr_precision);
+			if (actual_os > 0 && flt(total_rounded - actual_os) > 0.0001) {
 				frappe.msgprint({
 					title: __("Payment Error"),
 					message: __(
@@ -552,12 +567,13 @@ function sf_trading_show_pdc_popup(frm) {
 
 	frappe.flags.sf_trading_popup_showing = true;
 
-	const invoice_total = Math.abs(flt(
+	const currency = frm.doc.currency || "";
+	const pdc_precision = sf_trading_get_currency_precision(currency);
+	const invoice_total = flt(Math.abs(flt(
 		(frm.doc.outstanding_amount > 0 ? frm.doc.outstanding_amount : null) ||
 		frm.doc.rounded_total ||
 		frm.doc.grand_total || 0
-	));
-	const currency = frm.doc.currency || "";
+	)), pdc_precision);
 
 	function load_pdc_modes_then_show() {
 		frappe.call({
@@ -587,7 +603,8 @@ function sf_trading_show_pdc_popup(frm) {
 				label: __("Amount to Pay"),
 				default: invoice_total,
 				read_only: 1,
-				options: currency,
+				options: "currency",
+				precision: pdc_precision,
 			},
 			{ fieldtype: "Section Break", label: __("Cheque Details") },
 			{
@@ -619,7 +636,8 @@ function sf_trading_show_pdc_popup(frm) {
 					fieldtype: "Currency",
 					label: mode,
 					default: idx === 0 ? invoice_total : 0,
-					options: currency,
+					options: "currency",
+					precision: pdc_precision,
 				},
 				{ fieldtype: "Column Break", fieldname: "cb_" + idx },
 				{
@@ -658,25 +676,26 @@ function sf_trading_show_pdc_popup(frm) {
 				frappe.msgprint({ title: __("Error"), message: __("Please enter at least one payment amount."), indicator: "red" });
 				return;
 			}
-			if (total - invoice_total > 0.0001) {
-				frappe.msgprint({ title: __("Error"), message: __("Total payment {0} exceeds amount to pay {1}.", [format_currency(total, currency), format_currency(invoice_total, currency)]), indicator: "red" });
+			const total_rounded = flt(total, pdc_precision);
+			if (total_rounded - invoice_total > 0.0001) {
+				frappe.msgprint({ title: __("Error"), message: __("Total payment {0} exceeds amount to pay {1}.", [format_currency(total_rounded, currency), format_currency(invoice_total, currency)]), indicator: "red" });
 				return;
 			}
-			if (invoice_total - total > 0.0001) {
-				frappe.msgprint({ title: __("Incomplete"), message: __("{0} still to be allocated.", [format_currency(invoice_total - total, currency)]), indicator: "red" });
+			if (invoice_total - total_rounded > 0.0001) {
+				frappe.msgprint({ title: __("Incomplete"), message: __("{0} still to be allocated.", [format_currency(invoice_total - total_rounded, currency)]), indicator: "red" });
 				return;
 			}
 
 			const finalize_pdc_payments = function () {
-				const actual_os = Math.abs(flt(frm.doc.outstanding_amount || 0));
-				if (actual_os > 0 && flt(total - actual_os) > 0.0001) {
+				const actual_os = flt(Math.abs(flt(frm.doc.outstanding_amount || 0)), pdc_precision);
+				if (actual_os > 0 && flt(total_rounded - actual_os) > 0.0001) {
 					frappe.msgprint({
 						title: __("Payment Error"),
 						message: __(
 							"Payment total ({0}) exceeds outstanding amount ({1}). " +
 							"The invoice may have advance payments already applied. " +
 							"Please create the payment manually for the correct outstanding amount.",
-							[format_currency(total, currency), format_currency(actual_os, currency)]
+							[format_currency(total_rounded, currency), format_currency(actual_os, currency)]
 						),
 						indicator: "red",
 					});
