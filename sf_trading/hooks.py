@@ -51,6 +51,7 @@ app_include_js = [
 	f"/assets/sf_trading/js/return_qty_autofix.js?{_v}",
 	f"/assets/sf_trading/js/quotation.js?{_v}",
 	f"/assets/sf_trading/js/selling_price_realtime.js?{_v}",
+	f"/assets/sf_trading/js/company_print_format.js?{_v}",
 ]
 
 # include js, css files in header of web template
@@ -341,12 +342,18 @@ fixtures = [
 		"filters": [["name", "in", ("B2B Creator",)]],
 	},
 	{
+		"doctype": "DocType",
+		"filters": [["name", "in", ("Company Print Format",)]],
+	},
+	{
 		"doctype": "Custom Field",
 		"filters": [
 			[
 				"name",
 				"in",
 				(
+					"Company-custom_print_formats",
+					"Company-custom_delivery_note_print_format",
 					"Customer Credit Limit-custom_credit_days",
 					"Customer-custom_commercial_registration_number",
 					"Sales Invoice-inter_company_branch",

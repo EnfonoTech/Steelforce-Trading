@@ -1,9 +1,13 @@
 // sf_trading: Popup to enter payment amounts for Sales Invoice
 // Shows after save when the correct grand_total is available
-function sf_trading_open_invoice_print(frm) {
+function sf_trading_open_invoice_print(frm, format_override) {
 	if (!frm || !frm.doc || !frm.doc.name) return;
 	const base_url = window.location.origin;
-	const format = encodeURIComponent(frm.meta.default_print_format || "");
+	// format_override is only passed from the manual Print Invoice button (company priority).
+	// Auto-print after submit does not pass it, so it falls back to the doctype default.
+	const format = encodeURIComponent(
+		format_override !== undefined ? (format_override || "") : (frm.meta.default_print_format || "")
+	);
 
 	const url =
 		`${base_url}/printview?` +
@@ -69,10 +73,34 @@ frappe.ui.form.on("Sales Invoice", {
 			});
 		}
 
-		// Add Print button on submitted invoices
+		// Add Print button on submitted invoices — uses company print format as first priority
 		if (frm.doc.docstatus === 1) {
 			frm.add_custom_button(__("Print Invoice"), function () {
-				sf_trading_open_invoice_print(frm);
+				sf_trading.get_company_print_format(frm.doc.company, frm.doctype, function (company_format) {
+					var format = company_format || frm.meta.default_print_format || "";
+					sf_trading_open_invoice_print(frm, format);
+				});
+			});
+
+			frm.add_custom_button(__("Print DN"), function () {
+				frappe
+					.xcall("frappe.client.get_value", {
+						doctype: "Company",
+						filters: { name: frm.doc.company },
+						fieldname: "custom_delivery_note_print_format",
+					})
+					.then(function (result) {
+						var dn_format = result && result.custom_delivery_note_print_format;
+						if (!dn_format) {
+							frappe.msgprint({
+								title: __("Not Configured"),
+								message: __("No Delivery Note print format set on company {0}.", [frm.doc.company]),
+								indicator: "orange",
+							});
+							return;
+						}
+						sf_trading_open_invoice_print(frm, dn_format);
+					});
 			});
 		}
 
