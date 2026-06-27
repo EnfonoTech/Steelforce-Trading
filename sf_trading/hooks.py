@@ -188,6 +188,7 @@ doc_events = {
 		],
 		"validate": [
 			"sf_trading.api.sales_invoice_override.validate",
+			"sf_trading.api.sales_invoice_override.validate_driver_payment",
 			_BRANCH_HOOK,
 			_LH_HOOK,
 			_SP_HOOK,
@@ -368,6 +369,9 @@ fixtures = [
 					"Material Request-custom_priority",
 					"Customer-custom_company",
 					"Customer-custom_branch_access",
+					"Sales Invoice-custom_driver",
+					"Driver-custom_branch",
+					"Driver-custom_payment_days",
 				)
 			]
 		]

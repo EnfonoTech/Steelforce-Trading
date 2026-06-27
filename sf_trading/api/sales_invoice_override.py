@@ -90,6 +90,69 @@ def _get_overdue_invoice(customer, company):
 	return rows[0] if rows else None
 
 
+def validate_driver_payment(doc, _method=None):
+	"""Block new Cash+Driver invoice if the same driver has an overdue unsettled invoice."""
+	if doc.is_return:
+		return
+	if doc.custom_payment_mode == "Credit":
+		return
+	if not doc.get("custom_driver"):
+		return
+
+	inv = _get_driver_overdue_invoice(doc.custom_driver, doc.name)
+	if inv:
+		inv_link = frappe.utils.get_link_to_form("Sales Invoice", inv.name)
+		payment_days = frappe.db.get_value("Driver", doc.custom_driver, "custom_payment_days") or 1
+		driver_name = frappe.db.get_value("Driver", doc.custom_driver, "full_name") or doc.custom_driver
+		frappe.throw(
+			_(
+				"Delivery Person {0} has an unsettled invoice {1} dated {2} with outstanding amount {3}. "
+				"Payment was due within {4} day(s). Please collect and record the payment first."
+			).format(
+				frappe.bold(driver_name),
+				inv_link,
+				inv.posting_date,
+				frappe.utils.fmt_money(inv.outstanding_amount, currency=doc.currency),
+				payment_days,
+			),
+			title=_("Delivery Person Payment Overdue"),
+		)
+
+
+def _get_driver_overdue_invoice(driver, exclude_name=None):
+	"""Return the oldest overdue uncleared Cash invoice for the driver, or None."""
+	payment_days = frappe.utils.cint(
+		frappe.db.get_value("Driver", driver, "custom_payment_days") or 1
+	)
+
+	conditions = """
+		SELECT name, posting_date, outstanding_amount
+		FROM `tabSales Invoice`
+		WHERE custom_driver = %s
+		  AND docstatus = 1
+		  AND outstanding_amount > 0
+		  AND DATEDIFF(%s, posting_date) > %s
+	"""
+	params = [driver, today(), payment_days]
+
+	if exclude_name:
+		conditions += " AND name != %s"
+		params.append(exclude_name)
+
+	conditions += " ORDER BY posting_date ASC LIMIT 1"
+
+	rows = frappe.db.sql(conditions, params, as_dict=True)
+	return rows[0] if rows else None
+
+
+@frappe.whitelist()
+def check_driver_payment_overdue(driver):
+	"""Client-side check: return the oldest overdue driver invoice dict or None."""
+	if not driver:
+		return None
+	return _get_driver_overdue_invoice(driver)
+
+
 @frappe.whitelist()
 def check_customer_credit_overdue(customer, company):
 	"""Client-side check: return the oldest overdue invoice dict or None."""

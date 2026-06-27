@@ -29,6 +29,14 @@ function sf_trading_open_invoice_print(frm, format_override) {
 }
 
 frappe.ui.form.on("Sales Invoice", {
+	setup: function (frm) {
+		frm.set_query("custom_driver", function (doc) {
+			if (doc.branch) {
+				return { filters: { custom_branch: doc.branch } };
+			}
+			return {};
+		});
+	},
 	refresh: function (frm) {
 		// Remove "Permanently Submit?" confirmation when clicking Submit.
 		// Popup/confirm logic is handled in before_submit below.
@@ -139,6 +147,26 @@ frappe.ui.form.on("Sales Invoice", {
 			return;
 		}
 
+		// Cash + Driver: skip payment popup, submit and auto-print
+		if (frm.doc.custom_payment_mode !== "Credit" && frm.doc.custom_driver) {
+			frappe.validated = false;
+			frappe.db.get_value("Driver", frm.doc.custom_driver, "full_name").then(function (r) {
+				var driver_label = (r && r.message && r.message.full_name) || frm.doc.custom_driver;
+				frappe.confirm(
+					__("Delivery Person {0} is assigned. Invoice will be submitted without collecting payment now. Continue?", [driver_label]),
+					function () {
+						frm.save("Submit").then(function () {
+							if (frm.doc.docstatus === 1) {
+								sf_trading_open_invoice_print(frm);
+								frm.reload_doc();
+							}
+						});
+					}
+				);
+			});
+			return;
+		}
+
 		// Cash: show payment popup
 		if (frm.doc.custom_payment_mode !== "Credit") {
 			frappe.validated = false;
@@ -215,6 +243,38 @@ frappe.ui.form.on("Sales Invoice", {
 			if (Math.abs(flt(frm.doc.grand_total)) > 0 && Math.abs(flt(frm.doc.outstanding_amount)) > 0) {
 				sf_trading_show_pdc_popup(frm);
 			}
+			return;
+		}
+
+		// Cash + Driver: skip popup, confirm then submit
+		if (frm.doc.custom_driver) {
+			if (frappe.flags.sf_trading_driver_confirm_open) return;
+			frappe.flags.sf_trading_driver_confirm_open = true;
+			frappe.db.get_value("Driver", frm.doc.custom_driver, "full_name").then(function (r) {
+				var driver_label = (r && r.message && r.message.full_name) || frm.doc.custom_driver;
+				const d = frappe.confirm(
+					__("Delivery Person {0} is assigned. Submit without collecting payment now?", [driver_label]),
+					function () {
+						frappe.flags.sf_trading_skip_payment_popup = true;
+						frm.save("Submit").then(function () {
+							if (frm.doc.docstatus === 1) {
+								sf_trading_open_invoice_print(frm);
+								frm.reload_doc();
+							}
+						}).finally(function () {
+							setTimeout(function () {
+								delete frappe.flags.sf_trading_skip_payment_popup;
+							}, 500);
+						});
+					},
+					function () { /* user chose No: leave as draft */ }
+				);
+				if (d) {
+					d.onhide = function () {
+						delete frappe.flags.sf_trading_driver_confirm_open;
+					};
+				}
+			});
 			return;
 		}
 
