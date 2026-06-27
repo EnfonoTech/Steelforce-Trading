@@ -25,14 +25,15 @@ def get_transfer_progress(material_request):
             mri.qty         AS required_qty,
             mri.uom         AS uom,
             mri.warehouse   AS warehouse,
-            COALESCE(SUM(sed.qty), 0) AS transferred_qty
+            COALESCE(SUM(
+                CASE WHEN se.docstatus = 1 THEN sed.qty ELSE 0 END
+            ), 0) AS transferred_qty
         FROM `tabMaterial Request Item` mri
         LEFT JOIN `tabStock Entry Detail` sed
             ON  sed.material_request_item = mri.name
         LEFT JOIN `tabStock Entry` se
             ON  se.name = sed.parent
             AND se.stock_entry_type = 'Material Transfer'
-            AND se.docstatus = 1
         WHERE mri.parent = %s
         GROUP BY mri.name
         ORDER BY mri.idx
