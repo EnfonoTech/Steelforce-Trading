@@ -177,7 +177,10 @@ _SP_HOOK = "sf_trading.api.selling_price_validation.validate_selling_price"
 
 doc_events = {
 	"Customer": {
-		"validate": "sf_trading.api.customer_override.validate",
+		"validate": [
+			"sf_trading.api.customer_override.validate",
+			"sf_trading.customer_permission.validate_credit_branch_access",
+		],
 		"before_save": "sf_trading.customer_permission.auto_add_branch_on_credit_limit",
 	},
 	"Sales Invoice": {
@@ -343,6 +346,10 @@ fixtures = [
 		"filters": [["name", "in", ("B2B Creator",)]],
 	},
 	{
+		"doctype": "Custom DocPerm",
+		"filters": [["parent", "in", ("Driver",)]],
+	},
+	{
 		"doctype": "DocType",
 		"filters": [["name", "in", ("Company Print Format",)]],
 	},
@@ -372,6 +379,18 @@ fixtures = [
 					"Sales Invoice-custom_driver",
 					"Driver-custom_branch",
 					"Driver-custom_payment_days",
+					"Sales Invoice-custom_sales_person",
+					"Quotation-branch",
+					"Quotation-cost_center",
+					"Quotation-project",
+					"Quotation-set_warehouse",
+					"Quotation Item-branch",
+					"Quotation Item-cost_center",
+					"Quotation Item-project",
+					"Sales Invoice Item-custom_quotation",
+					"Item Group-custom_min_margin_pct",
+					"Price List-custom_enforce_min_price",
+					"Material Request Item-custom_source_mr",
 				)
 			]
 		]

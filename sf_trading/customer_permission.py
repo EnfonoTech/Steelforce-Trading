@@ -1,4 +1,5 @@
 import frappe
+from frappe import _
 from frappe.utils import flt
 
 
@@ -6,37 +7,94 @@ def permission_query_conditions_for_customer(user):
 	"""
 	Additional SQL WHERE condition for Customer list/link queries.
 
-	- System Manager: unrestricted
-	- User WITH Branch in User Permissions: sees non-credit customers freely,
-	  but credit customers only if their branch is in Customer Branch Access
-	- User WITHOUT Branch in User Permissions: no additional condition
-	  (company filter from standard User Permissions on custom_company handles it)
+	- No Company User Permission: show all customers (no restriction)
+	- Has Company User Permission: ERPNext standard permissions filter by company;
+	  additionally hide customers with no custom_company set, and restrict
+	  credit customers to branches the user has access to.
 	"""
 	if not user:
 		user = frappe.session.user
 
-	if "System Manager" in frappe.get_roles(user):
+	companies = frappe.get_all(
+		"User Permission",
+		filters={"user": user, "allow": "Company"},
+		pluck="for_value",
+	)
+	if not companies:
 		return ""
 
+	# Hide customers with no company set
+	conditions = [
+		"`tabCustomer`.custom_company IS NOT NULL",
+		"`tabCustomer`.custom_company != ''",
+	]
+
+	# Restrict credit customers to branches the user has access to
 	branches = frappe.get_all(
 		"User Permission",
 		filters={"user": user, "allow": "Branch"},
 		pluck="for_value",
 	)
+	if branches:
+		branch_list = ", ".join([frappe.db.escape(b) for b in branches])
+		conditions.append("""(
+			`tabCustomer`.name NOT IN (
+				SELECT parent FROM `tabCustomer Credit Limit` WHERE credit_limit > 0
+			)
+			OR `tabCustomer`.name IN (
+				SELECT parent FROM `tabCustomer Branch Access` WHERE branch IN ({0})
+			)
+		)""".format(branch_list))
 
-	if not branches:
-		return ""
+	return " AND ".join(conditions)
 
-	branch_list = ", ".join([frappe.db.escape(b) for b in branches])
 
-	return """(
-		`tabCustomer`.name NOT IN (
-			SELECT parent FROM `tabCustomer Credit Limit` WHERE credit_limit > 0
+def validate_credit_branch_access(doc, _method=None):
+	"""Require at least one branch access row when a credit limit is set."""
+	has_credit = any(flt(row.get("credit_limit")) > 0 for row in (doc.credit_limits or []))
+	if has_credit and not doc.get("custom_branch_access"):
+		frappe.throw(
+			_("At least one Branch must be added in Branch Access when a Credit Limit is set."),
+			title=_("Branch Access Required"),
 		)
-		OR `tabCustomer`.name IN (
-			SELECT parent FROM `tabCustomer Branch Access` WHERE branch IN ({0})
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def customer_query_credit_branch(doctype, txt, searchfield, start, page_len, filters, as_dict=False):
+	"""Custom search query for the customer link on Sales Invoice.
+
+	Returns only credit customers (credit_limit > 0) that have the invoice's
+	branch in their Branch Access table. If no branch is passed, returns nothing.
+	"""
+	branch = (filters or {}).get("branch") or ""
+
+	if branch:
+		branch_cond = "AND `tabCustomer`.name IN (SELECT parent FROM `tabCustomer Branch Access` WHERE branch = %(branch)s)"
+	else:
+		branch_cond = "AND 1=0"
+
+	return frappe.db.sql(
+		"""
+		SELECT `tabCustomer`.name, `tabCustomer`.customer_name
+		FROM `tabCustomer`
+		WHERE EXISTS (
+			SELECT 1 FROM `tabCustomer Credit Limit`
+			WHERE parent = `tabCustomer`.name AND credit_limit > 0
 		)
-	)""".format(branch_list)
+		AND (`tabCustomer`.{searchfield} LIKE %(txt)s OR `tabCustomer`.customer_name LIKE %(txt)s)
+		{branch_cond}
+		ORDER BY `tabCustomer`.name
+		LIMIT {start}, {page_len}
+		""".format(
+			searchfield=searchfield,
+			branch_cond=branch_cond,
+			start=int(start),
+			page_len=int(page_len),
+		),
+		{"txt": f"%{txt}%", "branch": branch},
+		as_dict=as_dict,
+	)
 
 
 def auto_add_branch_on_credit_limit(doc, method):

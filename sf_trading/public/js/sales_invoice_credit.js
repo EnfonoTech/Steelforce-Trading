@@ -1,9 +1,10 @@
 // Customer filter: Credit mode shows only customers with credit_limit > 0
 function sf_apply_customer_credit_filter(frm) {
-	frm.set_query("customer", function () {
-		if (frm.doc.custom_payment_mode === "Credit") {
+	frm.set_query("customer", function (doc) {
+		if (doc.custom_payment_mode === "Credit") {
 			return {
-				filters: [["Customer Credit Limit", "credit_limit", ">", 0]],
+				query: "sf_trading.customer_permission.customer_query_credit_branch",
+				filters: { branch: doc.branch || "" },
 			};
 		}
 		return {};
