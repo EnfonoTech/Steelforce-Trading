@@ -362,7 +362,6 @@ selling_rate_doctypes.forEach(function(doctype) {
 					const grid = frm.fields_dict.items.grid;
 					const $toolbar = grid.wrapper.find(".grid-buttons");
 					if ($toolbar.find("button:contains('Last Selling Rate')").length > 0) return;
-					}
 				}
 
 				if (attempts < maxAttempts) {
