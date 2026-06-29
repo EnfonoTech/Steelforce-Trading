@@ -73,10 +73,10 @@ frappe.ui.form.on("Sales Invoice", {
 		}
 
 		// Warn once when a new PDC return is first opened
-		if (frm.is_new() && frm.doc.is_return && frm.doc.custom_payment_mode === "PDC") {
+		if (frm.is_new() && frm.doc.is_return && frm.doc.custom_payment_mode === "Cheque") {
 			frappe.msgprint({
-				title: __("PDC Return"),
-				message: __("This is a return for a PDC invoice. Confirm the payment with accounts before submitting."),
+				title: __("Cheque Return"),
+				message: __("This is a return for a Cheque invoice. Confirm the payment with accounts before submitting."),
 				indicator: "orange",
 			});
 		}
@@ -130,8 +130,8 @@ frappe.ui.form.on("Sales Invoice", {
 		}
 	},
 	before_submit: function (frm) {
-		// PDC: show PDC popup (cheque date + no + amount)
-		if (frm.doc.custom_payment_mode === "PDC") {
+		// Cheque: show Cheque popup (cheque date + no + amount)
+		if (frm.doc.custom_payment_mode === "Cheque") {
 			frappe.validated = false;
 			if (Math.abs(flt(frm.doc.grand_total)) > 0 && Math.abs(flt(frm.doc.outstanding_amount)) > 0) {
 				sf_trading_show_pdc_popup(frm);
@@ -238,8 +238,8 @@ frappe.ui.form.on("Sales Invoice", {
 			return;
 		}
 
-		// PDC: show PDC popup after save (same flow as Cash popup)
-		if (frm.doc.custom_payment_mode === "PDC") {
+		// Cheque: show Cheque popup after save (same flow as Cash popup)
+		if (frm.doc.custom_payment_mode === "Cheque") {
 			if (Math.abs(flt(frm.doc.grand_total)) > 0 && Math.abs(flt(frm.doc.outstanding_amount)) > 0) {
 				sf_trading_show_pdc_popup(frm);
 			}
@@ -616,46 +616,63 @@ function sf_trading_render_dialog(frm) {
 	});
 }
 
-// ── PDC popup ─────────────────────────────────────────────────────────────────
-// Same Save / Save & Submit flow as the Cash popup, but collects Cheque Date
-// and Cheque No, and passes them to create_pos_payments_for_invoice so the
-// Payment Entry is posted on the future cheque date.
+// ── Cheque popup ──────────────────────────────────────────────────────────────
+// Loads both Cheque (for_pdc) modes and normal cash modes so the customer can
+// split payment across cheque and cash. Cheque Date + Cheque No apply only to
+// the for_pdc mode entries; cash mode entries are created without cheque info.
 
 function sf_trading_show_pdc_popup(frm) {
 	if (frappe.flags.sf_trading_popup_showing) return;
 	if (!frm || !frm.doc) return;
-
 	frappe.flags.sf_trading_popup_showing = true;
 
 	const currency = frm.doc.currency || "";
-	const pdc_precision = sf_trading_get_currency_precision(currency);
+	const precision = sf_trading_get_currency_precision(currency);
 	const invoice_total = flt(Math.abs(flt(
 		(frm.doc.outstanding_amount > 0 ? frm.doc.outstanding_amount : null) ||
 		frm.doc.rounded_total ||
 		frm.doc.grand_total || 0
-	)), pdc_precision);
+	)), precision);
 
-	function load_pdc_modes_then_show() {
-		frappe.call({
-			method: "sf_trading.api.sales_invoice_payment.get_payment_modes_with_account",
-			args: { company: frm.doc.company, is_pdc: 1, is_return: frm.doc.is_return ? 1 : 0, branch: frm.doc.branch || undefined },
-			callback: function (r) {
-				const modes = r.message || [];
-				if (!modes.length) {
+	const base_args = { company: frm.doc.company, is_return: frm.doc.is_return ? 1 : 0, branch: frm.doc.branch || "" };
+
+	// Load cheque modes first, then cash modes sequentially
+	frappe.call({
+		method: "sf_trading.api.sales_invoice_payment.get_payment_modes_with_account",
+		args: Object.assign({}, base_args, { is_pdc: 1 }),
+		callback: function (r1) {
+			const cheque_modes = r1.message || [];
+			frappe.call({
+				method: "sf_trading.api.sales_invoice_payment.get_payment_modes_with_account",
+				args: Object.assign({}, base_args, { is_pdc: 0 }),
+				callback: function (r2) {
+					const cash_modes = r2.message || [];
+					if (!cheque_modes.length && !cash_modes.length) {
+						frappe.flags.sf_trading_popup_showing = false;
+						frappe.msgprint(__("No payment modes configured for this branch."));
+						return;
+					}
+					show_cheque_dialog(cheque_modes, cash_modes);
+				},
+				error: function () {
 					frappe.flags.sf_trading_popup_showing = false;
-					frappe.msgprint(__("No PDC Mode of Payment configured for this branch. Please mark a Mode of Payment as 'For PDC' in Branch Configuration."));
-					return;
-				}
-				show_pdc_dialog(modes);
-			},
-			error: function () {
-				frappe.flags.sf_trading_popup_showing = false;
-				frappe.msgprint(__("Error loading PDC payment modes. Please try again."));
-			},
-		});
-	}
+					frappe.msgprint(__("Error loading Cheque payment modes. Please try again."));
+				},
+			});
+		},
+		error: function () {
+			frappe.flags.sf_trading_popup_showing = false;
+			frappe.msgprint(__("Error loading Cheque payment modes. Please try again."));
+		},
+	});
 
-	function show_pdc_dialog(modes) {
+	function show_cheque_dialog(cheque_modes, cash_modes) {
+		// All fieldnames in display order for balance calculation
+		const all_fieldnames = [
+			...cheque_modes.map(function (_, i) { return "chq_" + i; }),
+			...cash_modes.map(function (_, i)   { return "csh_" + i; }),
+		];
+
 		const fields = [
 			{
 				fieldname: "invoice_total",
@@ -664,7 +681,7 @@ function sf_trading_show_pdc_popup(frm) {
 				default: invoice_total,
 				read_only: 1,
 				options: "currency",
-				precision: pdc_precision,
+				precision: precision,
 			},
 			{ fieldtype: "Section Break", label: __("Cheque Details") },
 			{
@@ -672,6 +689,7 @@ function sf_trading_show_pdc_popup(frm) {
 				fieldtype: "Date",
 				label: __("Cheque Date"),
 				reqd: 1,
+				default: frappe.datetime.get_today(),
 			},
 			{
 				fieldname: "cheque_no",
@@ -679,64 +697,90 @@ function sf_trading_show_pdc_popup(frm) {
 				label: __("Cheque No"),
 				reqd: 1,
 			},
-			{ fieldtype: "Section Break", label: __("Payment Amounts") },
 		];
 
-		modes.forEach(function (mode, idx) {
-			fields.push(
-				{
-					fieldtype: "Section Break",
-					fieldname: "row_" + idx,
-					label: "",
-					hide_border: 1,
-					collapsible: 0,
-				},
-				{
-					fieldname: "pay_" + idx,
-					fieldtype: "Currency",
-					label: mode,
-					default: idx === 0 ? invoice_total : 0,
-					options: "currency",
-					precision: pdc_precision,
-				},
-				{ fieldtype: "Column Break", fieldname: "cb_" + idx },
-				{
-					fieldtype: "Button",
-					fieldname: "fill_" + idx,
-					label: mode,
-					click: function () {
-						modes.forEach(function (_, i) {
-							d.set_value("pay_" + i, i === idx ? invoice_total : 0);
-						});
+		if (cheque_modes.length) {
+			fields.push({ fieldtype: "Section Break", label: __("Cheque Payments") });
+			cheque_modes.forEach(function (mode, idx) {
+				fields.push(
+					{ fieldtype: "Section Break", fieldname: "chq_row_" + idx, label: "", hide_border: 1 },
+					{
+						fieldname: "chq_" + idx,
+						fieldtype: "Currency",
+						label: mode,
+						default: idx === 0 ? invoice_total : 0,
+						options: "currency",
+						precision: precision,
 					},
-				}
-			);
-		});
+					{ fieldtype: "Column Break" },
+					{
+						fieldtype: "Button",
+						fieldname: "fill_chq_" + idx,
+						label: mode,
+						click: (function (fi) {
+							return function () {
+								all_fieldnames.forEach(function (fn) { d.set_value(fn, 0); });
+								d.set_value(fi, invoice_total);
+							};
+						})("chq_" + idx),
+					}
+				);
+			});
+		}
+
+		if (cash_modes.length) {
+			fields.push({ fieldtype: "Section Break", label: __("Other Payments") });
+			cash_modes.forEach(function (mode, idx) {
+				fields.push(
+					{ fieldtype: "Section Break", fieldname: "csh_row_" + idx, label: "", hide_border: 1 },
+					{
+						fieldname: "csh_" + idx,
+						fieldtype: "Currency",
+						label: mode,
+						default: 0,
+						options: "currency",
+						precision: precision,
+					},
+					{ fieldtype: "Column Break" },
+					{
+						fieldtype: "Button",
+						fieldname: "fill_csh_" + idx,
+						label: mode,
+						click: (function (fi) {
+							return function () {
+								all_fieldnames.forEach(function (fn) { d.set_value(fn, 0); });
+								d.set_value(fi, invoice_total);
+							};
+						})("csh_" + idx),
+					}
+				);
+			});
+		}
 
 		function apply_and_close(vals, submit) {
 			if (!vals) return;
-			const cheque_date = vals.cheque_date;
-			const cheque_no = (vals.cheque_no || "").trim();
-			if (!cheque_date || !cheque_no) {
-				frappe.msgprint({ title: __("Required"), message: __("Please enter Cheque Date and Cheque No."), indicator: "red" });
-				return;
-			}
 
-			let total = 0;
-			const payments_payload = [];
-			modes.forEach(function (mode, i) {
-				const amt = flt(vals["pay_" + i]) || 0;
-				if (amt > 0) {
-					payments_payload.push({ mode_of_payment: mode, amount: amt });
-					total += amt;
-				}
+			let cheque_total = 0, cash_total = 0;
+			const cheque_payments = [], cash_payments = [];
+
+			cheque_modes.forEach(function (mode, i) {
+				const amt = flt(vals["chq_" + i]) || 0;
+				if (amt > 0) { cheque_payments.push({ mode_of_payment: mode, amount: amt }); cheque_total += amt; }
+			});
+			cash_modes.forEach(function (mode, i) {
+				const amt = flt(vals["csh_" + i]) || 0;
+				if (amt > 0) { cash_payments.push({ mode_of_payment: mode, amount: amt }); cash_total += amt; }
 			});
 
-			if (!payments_payload.length) {
+			if (!cheque_payments.length && !cash_payments.length) {
 				frappe.msgprint({ title: __("Error"), message: __("Please enter at least one payment amount."), indicator: "red" });
 				return;
 			}
-			const total_rounded = flt(total, pdc_precision);
+
+			const cheque_date = vals.cheque_date;
+			const cheque_no   = (vals.cheque_no || "").trim();
+
+			const total_rounded = flt(cheque_total + cash_total, precision);
 			if (total_rounded - invoice_total > 0.0001) {
 				frappe.msgprint({ title: __("Error"), message: __("Total payment {0} exceeds amount to pay {1}.", [format_currency(total_rounded, currency), format_currency(invoice_total, currency)]), indicator: "red" });
 				return;
@@ -746,40 +790,64 @@ function sf_trading_show_pdc_popup(frm) {
 				return;
 			}
 
-			const finalize_pdc_payments = function () {
-				const actual_os = flt(Math.abs(flt(frm.doc.outstanding_amount || 0)), pdc_precision);
+			const finalize = function () {
+				const actual_os = flt(Math.abs(flt(frm.doc.outstanding_amount || 0)), precision);
 				if (actual_os > 0 && flt(total_rounded - actual_os) > 0.0001) {
 					frappe.msgprint({
 						title: __("Payment Error"),
-						message: __(
-							"Payment total ({0}) exceeds outstanding amount ({1}). " +
-							"The invoice may have advance payments already applied. " +
-							"Please create the payment manually for the correct outstanding amount.",
-							[format_currency(total_rounded, currency), format_currency(actual_os, currency)]
-						),
+						message: __("Payment total ({0}) exceeds outstanding amount ({1}). The invoice may have advance payments already applied. Please create the payment manually.", [format_currency(total_rounded, currency), format_currency(actual_os, currency)]),
 						indicator: "red",
 					});
 					return;
 				}
 				d.hide();
 				frappe.flags.sf_trading_popup_showing = false;
-				frappe.call({
-					method: "sf_trading.api.sales_invoice_payment.create_pos_payments_for_invoice",
-					args: {
-						sales_invoice: frm.doc.name,
-						payments: JSON.stringify(payments_payload),
-						cheque_date: cheque_date,
-						cheque_no: cheque_no,
-					},
-					freeze: true,
-					freeze_message: __("Creating PDC payment..."),
-					callback: function (r) {
-						if (r && r.message && r.message.length) {
-							frappe.show_alert({ message: __("PDC Payment Entry created."), indicator: "green" }, 5);
-							frm.reload_doc();
-						}
-					},
-				});
+
+				// Create cheque payments first (if any), then cash payments sequentially
+				// to avoid racing on outstanding_amount.
+				function create_cash_payments(created_so_far) {
+					if (!cash_payments.length) {
+						frappe.show_alert({ message: __("Cheque Payment Entry created."), indicator: "green" }, 5);
+						frm.reload_doc();
+						return;
+					}
+					frappe.call({
+						method: "sf_trading.api.sales_invoice_payment.create_pos_payments_for_invoice",
+						args: {
+							sales_invoice: frm.doc.name,
+							payments: JSON.stringify(cash_payments),
+						},
+						freeze: true,
+						freeze_message: __("Creating Cheque payment..."),
+						callback: function (r) {
+							const total_created = (created_so_far || 0) + ((r && r.message) ? r.message.length : 0);
+							if (total_created) {
+								frappe.show_alert({ message: __("Cheque Payment Entry created."), indicator: "green" }, 5);
+								frm.reload_doc();
+							}
+						},
+					});
+				}
+
+				if (cheque_payments.length) {
+					frappe.call({
+						method: "sf_trading.api.sales_invoice_payment.create_pos_payments_for_invoice",
+						args: {
+							sales_invoice: frm.doc.name,
+							payments: JSON.stringify(cheque_payments),
+							cheque_date: cheque_date,
+							cheque_no: cheque_no,
+						},
+						freeze: true,
+						freeze_message: __("Creating Cheque payment..."),
+						callback: function (r) {
+							const n = (r && r.message) ? r.message.length : 0;
+							create_cash_payments(n);
+						},
+					});
+				} else {
+					create_cash_payments(0);
+				}
 			};
 
 			if (submit && frm.doc.docstatus === 0) {
@@ -787,19 +855,19 @@ function sf_trading_show_pdc_popup(frm) {
 				frm.save("Submit").then(function () {
 					if (frm.doc.docstatus !== 1) return;
 					sf_trading_open_invoice_print(frm);
-					finalize_pdc_payments();
+					finalize();
 				}).finally(function () {
 					setTimeout(function () { delete frappe.flags.sf_trading_skip_payment_popup; }, 500);
 				});
 			} else if (frm.doc.docstatus === 1) {
-				finalize_pdc_payments();
+				finalize();
 			} else {
-				frappe.show_alert({ message: __("Invoice saved. Submit when ready to record the PDC payment."), indicator: "blue" }, 4);
+				frappe.show_alert({ message: __("Invoice saved. Submit when ready to record the Cheque payment."), indicator: "blue" }, 4);
 			}
 		}
 
 		const d = new frappe.ui.Dialog({
-			title: __("PDC Payment"),
+			title: __("Cheque Payment"),
 			fields: fields,
 			primary_action_label: __("Save & Submit"),
 			primary_action: function (vals) { if (vals) apply_and_close(vals, true); },
@@ -808,7 +876,7 @@ function sf_trading_show_pdc_popup(frm) {
 				if (frm.doc.docstatus === 0) {
 					d.hide();
 					frappe.flags.sf_trading_popup_showing = false;
-					frappe.show_alert({ message: __("Invoice saved. Submit when ready to record the PDC payment."), indicator: "blue" }, 4);
+					frappe.show_alert({ message: __("Invoice saved. Submit when ready to record the Cheque payment."), indicator: "blue" }, 4);
 					frm.reload_doc();
 					return;
 				}
@@ -820,26 +888,23 @@ function sf_trading_show_pdc_popup(frm) {
 
 		d.show();
 
-		// Align amount field and button on the same line
 		frappe.utils.sleep(100).then(function () {
 			d.$wrapper.find(".section-body").css({ display: "flex", alignItems: "flex-end" });
 
-			// Click on amount field → auto-fill with remaining balance
-			modes.forEach(function (_, idx) {
-				const field = d.fields_dict["pay_" + idx];
+			// Click-to-fill: fill remaining balance into the clicked field
+			all_fieldnames.forEach(function (fn, idx) {
+				const field = d.fields_dict[fn];
 				if (!field || !field.$wrapper) return;
-				field.$wrapper.find("input").off("click.sf_pdc").on("click.sf_pdc", function () {
+				field.$wrapper.find("input").off("click.sf_cheque").on("click.sf_cheque", function () {
 					let other = 0;
-					modes.forEach(function (__, i) {
-						if (i !== idx) other += flt(d.get_value("pay_" + i)) || 0;
+					all_fieldnames.forEach(function (ofn, oi) {
+						if (oi !== idx) other += flt(d.get_value(ofn)) || 0;
 					});
-					d.set_value("pay_" + idx, Math.max(0, flt(invoice_total - other)));
+					d.set_value(fn, Math.max(0, flt(invoice_total - other)));
 				});
 			});
 		});
 	}
-
-	load_pdc_modes_then_show();
 }
 
 // ── Credit Limit fetch ────────────────────────────────────────────────────────

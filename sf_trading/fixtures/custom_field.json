@@ -608,7 +608,7 @@
   "name": "Sales Invoice-custom_payment_mode",
   "no_copy": 0,
   "non_negative": 0,
-  "options": "Cash\nCredit\nPDC",
+  "options": "Cash\nCredit\nCheque",
   "permlevel": 0,
   "placeholder": null,
   "precision": "",

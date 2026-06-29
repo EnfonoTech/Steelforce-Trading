@@ -60,6 +60,23 @@ frappe.ui.form.on("Sales Invoice", {
 	},
 	custom_payment_mode: function (frm) {
 		sf_apply_customer_credit_filter(frm);
+		if (frm.doc.custom_payment_mode === "Cheque" && frm.doc.branch) {
+			frappe.call({
+				method: "sf_trading.api.sales_invoice_payment.branch_has_pdc_modes",
+				args: { branch: frm.doc.branch },
+				callback: function (r) {
+					if (!r.message) {
+						frappe.msgprint({
+							title: __("Cheque Not Available"),
+							message: __("Branch {0} has no Cheque (PDC) payment modes configured. Please use Cash or Credit.", [frm.doc.branch]),
+							indicator: "red",
+						});
+						frm.set_value("custom_payment_mode", "Cash");
+					}
+				},
+			});
+			return;
+		}
 		if (frm.doc.custom_payment_mode === "Credit" && frm.doc.customer) {
 			sf_get_customer_credit_limit(frm.doc.customer, frm.doc.company).then(function (limit) {
 				if (limit <= 0) {

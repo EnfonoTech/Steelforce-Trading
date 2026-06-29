@@ -113,6 +113,19 @@ def get_payment_modes_with_account(company: str, is_return: int | str = 0, is_pd
 	return valid
 
 
+@frappe.whitelist()
+def branch_has_pdc_modes(branch: str) -> bool:
+	"""Return True if the branch has at least one 'For PDC' mode of payment configured."""
+	if not branch:
+		return False
+	return bool(
+		frappe.db.exists(
+			"Branch Configuration Mode of Payment",
+			{"parent": branch, "parenttype": "Branch Configuration", "for_pdc": 1},
+		)
+	)
+
+
 def _restrict_to_branch_allowlist(modes: list, company: str, is_return: int = 0, branch: str = None) -> list:
 	"""
 	Return only the MOPs that are configured in the document branch's
