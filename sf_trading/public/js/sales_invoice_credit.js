@@ -4,7 +4,15 @@ function sf_apply_customer_credit_filter(frm) {
 		if (doc.custom_payment_mode === "Credit") {
 			return {
 				query: "sf_trading.customer_permission.customer_query_credit_branch",
-				filters: { branch: doc.branch || "" },
+				filters: { branch: doc.branch || "", company: doc.company || "" },
+			};
+		}
+		// Cash / Cheque: only show customers whose company matches the invoice company
+		if (doc.company) {
+			return {
+				filters: {
+					custom_company: doc.company,
+				},
 			};
 		}
 		return {};

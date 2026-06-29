@@ -68,11 +68,17 @@ def customer_query_credit_branch(doctype, txt, searchfield, start, page_len, fil
 	branch in their Branch Access table. If no branch is passed, returns nothing.
 	"""
 	branch = (filters or {}).get("branch") or ""
+	company = (filters or {}).get("company") or ""
 
 	if branch:
 		branch_cond = "AND `tabCustomer`.name IN (SELECT parent FROM `tabCustomer Branch Access` WHERE branch = %(branch)s)"
 	else:
 		branch_cond = "AND 1=0"
+
+	if company:
+		company_cond = "AND `tabCustomer`.custom_company = %(company)s"
+	else:
+		company_cond = ""
 
 	return frappe.db.sql(
 		"""
@@ -82,17 +88,21 @@ def customer_query_credit_branch(doctype, txt, searchfield, start, page_len, fil
 			SELECT 1 FROM `tabCustomer Credit Limit`
 			WHERE parent = `tabCustomer`.name AND credit_limit > 0
 		)
+		AND `tabCustomer`.custom_company IS NOT NULL
+		AND `tabCustomer`.custom_company != ''
 		AND (`tabCustomer`.{searchfield} LIKE %(txt)s OR `tabCustomer`.customer_name LIKE %(txt)s)
 		{branch_cond}
+		{company_cond}
 		ORDER BY `tabCustomer`.name
 		LIMIT {start}, {page_len}
 		""".format(
 			searchfield=searchfield,
 			branch_cond=branch_cond,
+			company_cond=company_cond,
 			start=int(start),
 			page_len=int(page_len),
 		),
-		{"txt": f"%{txt}%", "branch": branch},
+		{"txt": f"%{txt}%", "branch": branch, "company": company},
 		as_dict=as_dict,
 	)
 
