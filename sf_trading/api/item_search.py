@@ -9,7 +9,7 @@ def _natural_key(s):
 	Plain alphabetical sort puts '2.6MM' before '2MM' because '.' < 'M' in ASCII.
 	This key compares the numeric parts as floats so 2 < 2.6 gives the right order.
 	"""
-	parts = re.split(r"(\d+(?:\.\d+)?)", s or "")
+	parts = re.split(r"(\d+(?:\.\d+)?|\.\d+)", s or "")
 	result = []
 	for part in parts:
 		try:
