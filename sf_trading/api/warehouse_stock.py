@@ -90,3 +90,13 @@ def get_item_warehouse_stock(item_code, company=None, limit=None, target_warehou
 		return filtered_stock_data[:limit]
 	
 	return filtered_stock_data
+
+
+@frappe.whitelist()
+def get_available_qty(item_code: str, warehouse: str) -> float:
+	"""Return actual_qty from Bin for the given item + warehouse."""
+	if not item_code or not warehouse:
+		return 0.0
+	return frappe.utils.flt(
+		frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty") or 0
+	)
