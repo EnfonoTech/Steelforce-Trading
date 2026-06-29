@@ -28,32 +28,34 @@ app_license = "mit"
 # app_include_css = "/assets/sf_trading/css/sf_trading.css"
 from sf_trading import __version__ as _v
 app_include_js = [
-	f"/assets/sf_trading/js/warehouse_stock_popup.js?{_v}",
+	# ── Multi-doctype: selling (Sales Invoice, Sales Order, Quotation, Delivery Note) ──
 	f"/assets/sf_trading/js/last_selling_rate.js?{_v}",
-	f"/assets/sf_trading/js/last_purchase_rate.js?{_v}",
-	f"/assets/sf_trading/js/stock_availability.js?{_v}",
 	f"/assets/sf_trading/js/quick_entry.js?{_v}",
 	f"/assets/sf_trading/js/create_customer.js?{_v}",
-	f"/assets/sf_trading/js/sales_invoice_barcode.js?{_v}",
-	f"/assets/sf_trading/js/sales_invoice_inter_company.js?{_v}",
-	f"/assets/sf_trading/js/sales_invoice_pos_total_popup.js?{_v}",
+	f"/assets/sf_trading/js/selling_price_realtime.js?{_v}",
+	# ── Multi-doctype: purchasing (Purchase Invoice, Purchase Order, Purchase Receipt, …) ──
+	f"/assets/sf_trading/js/last_purchase_rate.js?{_v}",
+	f"/assets/sf_trading/js/create_supplier.js?{_v}",
+	# ── Multi-doctype: cross-selling + purchasing ──
+	f"/assets/sf_trading/js/return_qty_autofix.js?{_v}",
 	f"/assets/sf_trading/js/accounting_dimension_sync.js?{_v}",
-	f"/assets/sf_trading/js/sales_invoice_credit.js?{_v}",
-	f"/assets/sf_trading/js/workflow_approval_shortcut.js?{_v}",
-	f"/assets/sf_trading/js/item_search_cache_buster.js?{_v}",
 	f"/assets/sf_trading/js/sales_invoice_item_search.js?{_v}",
 	f"/assets/sf_trading/js/purchase_invoice_cost_center.js?{_v}",
-	f"/assets/sf_trading/js/create_supplier.js?{_v}",
-	f"/assets/sf_trading/js/stock_entry.js?{_v}",
-	f"/assets/sf_trading/js/material_request.js?{_v}",
-	f"/assets/sf_trading/js/customer_company.js?{_v}",
-	f"/assets/sf_trading/js/sales_invoice_sales_person.js?{_v}",
-	f"/assets/sf_trading/js/return_qty_autofix.js?{_v}",
-	f"/assets/sf_trading/js/quotation.js?{_v}",
-	f"/assets/sf_trading/js/selling_price_realtime.js?{_v}",
-	f"/assets/sf_trading/js/warehouse_qty_realtime.js?{_v}",
+	f"/assets/sf_trading/js/stock_availability.js?{_v}",
+	# ── Global (all pages / all item_code fields / print patches) ──
+	f"/assets/sf_trading/js/workflow_approval_shortcut.js?{_v}",
+	f"/assets/sf_trading/js/item_search_cache_buster.js?{_v}",
 	f"/assets/sf_trading/js/company_print_format.js?{_v}",
 ]
+
+# doctype_js: loaded only when that specific doctype form opens
+doctype_js = {
+	"Sales Invoice":    "public/js/sales_invoice.js",
+	"Stock Entry":      "public/js/stock_entry.js",
+	"Material Request": "public/js/material_request.js",
+	"Customer":         "public/js/customer_company.js",
+	"Quotation":        "public/js/quotation.js",
+}
 
 # include js, css files in header of web template
 # web_include_css = "/assets/sf_trading/css/sf_trading.css"
