@@ -5,8 +5,6 @@
 // in its controller lifecycle. We patch in multiple lifecycle events AND set
 // df.get_query directly to reliably win that race in both dev and production.
 
-console.log("[sf_trading] item_search.js loaded");
-
 (function () {
 	const CUSTOM_QUERY = "sf_trading.api.item_search.search_items_with_stock_and_rate";
 

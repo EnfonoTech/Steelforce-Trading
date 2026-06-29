@@ -3,20 +3,9 @@
 
 frappe.provide("sf_trading");
 
-// Debug: Log that script is loaded
-console.log("sf_trading: last_selling_rate.js loaded");
-
 sf_trading.add_last_selling_rate_button = function(frm) {
-	// Check if items grid exists
-	if (!frm.fields_dict.items) {
-		console.log("sf_trading: items field not found");
-		return;
-	}
-	
-	if (!frm.fields_dict.items.grid) {
-		console.log("sf_trading: items grid not found");
-		return;
-	}
+	if (!frm.fields_dict.items) return;
+	if (!frm.fields_dict.items.grid) return;
 
 	const grid = frm.fields_dict.items.grid;
 
@@ -76,10 +65,7 @@ sf_trading.add_last_selling_rate_button = function(frm) {
 		}
 	}
 	
-	if (!$toolbar.length) {
-		console.log("sf_trading: Could not find grid-buttons toolbar", grid.wrapper);
-		return;
-	}
+	if (!$toolbar.length) return;
 	
 	// Check if button already exists
 	if ($toolbar.find("button:contains('Last Selling Rate')").length > 0) {
@@ -114,10 +100,8 @@ sf_trading.add_last_selling_rate_button = function(frm) {
 	// Insert after target button, or append if no target
 	if ($target.length > 0 && $target.parent().is($toolbar)) {
 		last_selling_rate_btn.insertAfter($target);
-		console.log("sf_trading: Button added after target");
 	} else {
 		$toolbar.append(last_selling_rate_btn);
-		console.log("sf_trading: Button appended to toolbar");
 	}
 };
 
@@ -377,16 +361,12 @@ selling_rate_doctypes.forEach(function(doctype) {
 					// If button was added successfully, stop trying
 					const grid = frm.fields_dict.items.grid;
 					const $toolbar = grid.wrapper.find(".grid-buttons");
-					if ($toolbar.find("button:contains('Last Selling Rate')").length > 0) {
-						console.log("sf_trading: Button added successfully on attempt", attempts);
-						return;
+					if ($toolbar.find("button:contains('Last Selling Rate')").length > 0) return;
 					}
 				}
-				
+
 				if (attempts < maxAttempts) {
 					setTimeout(tryAddButton, 400);
-				} else {
-					console.log("sf_trading: Failed to add button after", maxAttempts, "attempts");
 				}
 			};
 			
