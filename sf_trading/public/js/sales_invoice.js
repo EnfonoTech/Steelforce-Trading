@@ -1105,7 +1105,11 @@ frappe.ui.form.on("Sales Invoice", {
 				frappe.msgprint({
 					title: __("Insufficient Stock"),
 					indicator: "red",
+<<<<<<< Updated upstream
 					message: __("Available qty for {0} in {1} is {2} {3}. Quantity has been reset to 0 — this row will block saving until fixed.", [
+=======
+					message: __("Available qty for {0} in {1} is {2} {3}.", [
+>>>>>>> Stashed changes
 						row.item_code, row.warehouse,
 						format_number(available_in_row_uom, null, 3), row.uom || "",
 					]),
@@ -1148,7 +1152,11 @@ frappe.ui.form.on("Sales Invoice", {
 					frappe.msgprint({
 						title: __("Cannot Save"),
 						indicator: "red",
+<<<<<<< Updated upstream
 						message: __("Cannot save: insufficient warehouse stock for {0}. Fix the quantity or remove the item.", [blocked_items.join(", ")]),
+=======
+						message: __("Cannot save: insufficient warehouse stock for {0}.", [blocked_items.join(", ")]),
+>>>>>>> Stashed changes
 					});
 				}
 			});
