@@ -1083,29 +1083,48 @@ frappe.ui.form.on("Sales Invoice", {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 (function () {
-	function check_warehouse_qty(frm, cdt, cdn) {
-		var row = locals[cdt][cdn];
-		if (!row || !row.item_code || !row.warehouse || !(flt(row.qty) > 0)) return;
-		frappe.call({
+	function get_available_qty(item_code, warehouse) {
+		return frappe.call({
 			method: "sf_trading.api.warehouse_stock.get_available_qty",
-			args: { item_code: row.item_code, warehouse: row.warehouse },
-			callback: function(r) {
-				var available = flt(r.message);
-				var qty_in_stock_uom = flt(row.qty) * flt(row.conversion_factor || 1);
-				if (qty_in_stock_uom > available) {
-					var available_in_row_uom = flt(row.conversion_factor || 1) > 0
-						? available / flt(row.conversion_factor) : available;
-					frappe.msgprint({
-						title: __("Insufficient Stock"),
-						indicator: "orange",
-						message: __("Available qty for {0} in {1} is {2} {3}", [
-							row.item_code, row.warehouse,
-							format_number(available_in_row_uom, null, 3), row.uom || "",
-						]),
-					});
-				}
-			},
+			args: { item_code: item_code, warehouse: warehouse },
+		}).then(function(r) { return flt(r.message); });
+	}
+
+	// Resolves to true if the row's qty fits in available stock. When it doesn't,
+	// shows the shortfall, zeroes the qty, and flags the row so a save stays
+	// blocked even after the qty has been reset to 0 (it would otherwise look
+	// "valid" again and slip through).
+	function validate_row_qty(cdt, cdn, reset_on_fail) {
+		var row = locals[cdt][cdn];
+		if (!row || !row.item_code || !row.warehouse || !(flt(row.qty) > 0)) return Promise.resolve(true);
+		return get_available_qty(row.item_code, row.warehouse).then(function(available) {
+			var qty_in_stock_uom = flt(row.qty) * flt(row.conversion_factor || 1);
+			if (qty_in_stock_uom > available) {
+				var available_in_row_uom = flt(row.conversion_factor || 1) > 0
+					? available / flt(row.conversion_factor) : available;
+				frappe.msgprint({
+					title: __("Insufficient Stock"),
+					indicator: "red",
+<<<<<<< Updated upstream
+					message: __("Available qty for {0} in {1} is {2} {3}. Quantity has been reset to 0 — this row will block saving until fixed.", [
+=======
+					message: __("Available qty for {0} in {1} is {2} {3}.", [
+>>>>>>> Stashed changes
+						row.item_code, row.warehouse,
+						format_number(available_in_row_uom, null, 3), row.uom || "",
+					]),
+				});
+				row._sf_insufficient_stock = true;
+				if (reset_on_fail) frappe.model.set_value(cdt, cdn, "qty", 0);
+				return false;
+			}
+			row._sf_insufficient_stock = false;
+			return true;
 		});
+	}
+
+	function check_warehouse_qty(frm, cdt, cdn) {
+		validate_row_qty(cdt, cdn, true);
 	}
 
 	frappe.ui.form.on("Sales Invoice Item", {
@@ -1113,6 +1132,34 @@ frappe.ui.form.on("Sales Invoice", {
 		warehouse: check_warehouse_qty,
 		item_code: function(frm, cdt, cdn) {
 			setTimeout(function() { check_warehouse_qty(frm, cdt, cdn); }, 1000);
+		},
+	});
+
+	frappe.ui.form.on("Sales Invoice", {
+		validate: function(frm) {
+			if (!frm.doc.items || !frm.doc.items.length) return;
+			var blocked_items = [];
+			var checks = frm.doc.items.map(function(row) {
+				return validate_row_qty(row.doctype, row.name, true).then(function(ok) {
+					if (!ok || row._sf_insufficient_stock) {
+						frappe.validated = false;
+						blocked_items.push(row.item_code);
+					}
+				});
+			});
+			return Promise.all(checks).then(function() {
+				if (!frappe.validated && blocked_items.length) {
+					frappe.msgprint({
+						title: __("Cannot Save"),
+						indicator: "red",
+<<<<<<< Updated upstream
+						message: __("Cannot save: insufficient warehouse stock for {0}. Fix the quantity or remove the item.", [blocked_items.join(", ")]),
+=======
+						message: __("Cannot save: insufficient warehouse stock for {0}.", [blocked_items.join(", ")]),
+>>>>>>> Stashed changes
+					});
+				}
+			});
 		},
 	});
 })();
