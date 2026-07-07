@@ -107,8 +107,8 @@ def get_last_selling_rate(item_code, company=None):
 
 
 @frappe.whitelist()
-def get_item_selling_history(item_code=None, cost_center=None, limit=20):
-	"""Return selling history for an item. Requires cost_center."""
+def get_item_selling_history(item_code=None, cost_center=None, customer=None, limit=20):
+	"""Return selling history for an item. Requires cost_center. Optionally filter by customer."""
 	if not cost_center:
 		return []
 	limit = int(limit or 20)
@@ -124,6 +124,10 @@ def get_item_selling_history(item_code=None, cost_center=None, limit=20):
 			"(sii.cost_center = %(cost_center)s OR si.cost_center = %(cost_center)s)"
 		)
 		params["cost_center"] = cost_center
+
+	if customer:
+		where.append("si.customer = %(customer)s")
+		params["customer"] = customer
 
 	# Restrict to user-permitted companies and cost centers
 	perm_where, perm_params = _permission_conditions()

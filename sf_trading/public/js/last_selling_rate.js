@@ -105,6 +105,79 @@ sf_trading.add_last_selling_rate_button = function(frm) {
 	}
 };
 
+sf_trading.add_customer_last_selling_rate_button = function(frm) {
+	if (!frm.fields_dict.items) return;
+	if (!frm.fields_dict.items.grid) return;
+
+	const grid = frm.fields_dict.items.grid;
+
+	// Try multiple ways to find the toolbar
+	let $toolbar = grid.wrapper.find(".grid-buttons");
+
+	if (!$toolbar.length) {
+		$toolbar = grid.wrapper.find(".grid-footer .grid-buttons");
+	}
+
+	if (!$toolbar.length) {
+		const $footer = grid.wrapper.find(".grid-footer");
+		if ($footer.length) {
+			$toolbar = $footer.find(".grid-buttons");
+		}
+	}
+
+	if (!$toolbar.length) {
+		const $addRowBtn = grid.wrapper.find("button:contains('Add Row')");
+		if ($addRowBtn.length) {
+			$toolbar = $addRowBtn.closest(".grid-buttons");
+		}
+	}
+
+	if (!$toolbar.length) return;
+
+	// Check if button already exists
+	if ($toolbar.find("button:contains('Customer Last Selling Rate')").length > 0) {
+		return;
+	}
+
+	// Position right after the plain "Last Selling Rate" button when present
+	let $target = $toolbar.find("button").filter(function () {
+		return $(this).text().trim() === __('Last Selling Rate');
+	}).last();
+
+	if ($target.length === 0) {
+		$target = $toolbar.find("button:contains('Price Assist')").last();
+	}
+
+	if ($target.length === 0) {
+		$target = $toolbar.find("button:contains('Add Multiple')").last();
+	}
+
+	if ($target.length === 0) {
+		$target = $toolbar.find("button:contains('Add Row')").last();
+	}
+
+	if ($target.length === 0) {
+		$target = $toolbar.children().first();
+	}
+
+	// Create the button
+	let customer_last_selling_rate_btn = $(`<button type="button" class="btn btn-secondary btn-xs" style="margin-left: 10px;">
+		${__('Customer Last Selling Rate')}
+	</button>`);
+
+	customer_last_selling_rate_btn.on('click', function () {
+		let default_item_code = sf_trading.get_default_item_for_last_selling_rate(frm);
+		sf_trading.open_customer_last_selling_rate_dialog(frm, default_item_code);
+	});
+
+	// Insert after target button, or append if no target
+	if ($target.length > 0 && $target.parent().is($toolbar)) {
+		customer_last_selling_rate_btn.insertAfter($target);
+	} else {
+		$toolbar.append(customer_last_selling_rate_btn);
+	}
+};
+
 // Get default item: from the currently open/expanded row in items grid, or from the last row
 sf_trading.get_default_item_for_last_selling_rate = function(frm) {
 	if (!frm || !frm.fields_dict.items || !frm.fields_dict.items.grid) {
@@ -191,7 +264,75 @@ sf_trading.open_last_selling_rate_dialog = function(frm, default_item_code) {
 	}, 200);
 };
 
+sf_trading.open_customer_last_selling_rate_dialog = function(frm, default_item_code) {
+	let company = frm.doc.company || frappe.defaults.get_default("company");
+	let cost_center = frm.doc.cost_center || null;
+	let customer = frm.doc.customer || null;
+
+	// Create dialog
+	let d = new frappe.ui.Dialog({
+		title: __('Customer Last Selling Rate'),
+		fields: [
+			{
+				fieldname: 'item_code',
+				label: __('Item Code'),
+				fieldtype: 'Link',
+				options: 'Item',
+				default: default_item_code,
+				get_query: function() {
+					return {
+						query: "erpnext.controllers.queries.item_query",
+						filters: { "is_sales_item": 1, "company": company }
+					};
+				}
+			},
+			{ fieldname: 'results', fieldtype: 'HTML' }
+		],
+		size: 'extra-large',
+		primary_action_label: __('Close'),
+		primary_action: function () {
+			d.hide();
+		}
+	});
+
+	d._cost_center = cost_center;
+	d._customer = customer;
+	d.show();
+
+	setTimeout(() => {
+		// Bind onchange for the Link field
+		if (d.fields_dict.item_code) {
+			d.fields_dict.item_code.df.onchange = function () {
+				const item_code = d.get_value('item_code');
+				if (item_code) {
+					sf_trading.fetch_customer_last_selling_rate(item_code, company, d);
+				}
+			};
+			d.fields_dict.item_code.refresh();
+		}
+
+		// Auto-fetch if dialog opened with default item
+		if (default_item_code) {
+			sf_trading.fetch_customer_last_selling_rate(default_item_code, company, d);
+		}
+	}, 200);
+};
+
 sf_trading.fetch_last_selling_rate = function(item_code, company, dialog) {
+	sf_trading._fetch_selling_history(item_code, company, dialog, {});
+};
+
+sf_trading.fetch_customer_last_selling_rate = function(item_code, company, dialog) {
+	if (!dialog._customer) {
+		dialog.fields_dict.results.$wrapper.html(
+			'<div class="text-muted">' + __('Please select a Customer on the document first.') + '</div>'
+		);
+		return;
+	}
+	sf_trading._fetch_selling_history(item_code, company, dialog, { customer: dialog._customer });
+};
+
+sf_trading._fetch_selling_history = function(item_code, company, dialog, extra_args) {
 	if (!dialog._cost_center) {
 		dialog.fields_dict.results.$wrapper.html(
 			'<div class="text-muted">' + __('Please select a Cost Center on the document first.') + '</div>'
@@ -202,7 +343,7 @@ sf_trading.fetch_last_selling_rate = function(item_code, company, dialog) {
 
 	frappe.call({
 		method: 'sf_trading.api.last_selling_rate.get_item_selling_history',
-		args: { item_code: item_code, cost_center: dialog._cost_center, limit: 20 },
+		args: Object.assign({ item_code: item_code, cost_center: dialog._cost_center, limit: 20 }, extra_args || {}),
 		callback: function (r) {
 			const rows = r.message || [];
 			if (!rows.length) {
@@ -358,24 +499,26 @@ selling_rate_doctypes.forEach(function(doctype) {
 				attempts++;
 				if (frm.fields_dict.items && frm.fields_dict.items.grid) {
 					sf_trading.add_last_selling_rate_button(frm);
-					// If button was added successfully, stop trying
+					sf_trading.add_customer_last_selling_rate_button(frm);
+					// If both buttons were added successfully, stop trying
 					const grid = frm.fields_dict.items.grid;
 					const $toolbar = grid.wrapper.find(".grid-buttons");
-					if ($toolbar.find("button:contains('Last Selling Rate')").length > 0) return;
+					if ($toolbar.find("button:contains('Customer Last Selling Rate')").length > 0) return;
 				}
 
 				if (attempts < maxAttempts) {
 					setTimeout(tryAddButton, 400);
 				}
 			};
-			
+
 			// Start trying after initial delay
 			setTimeout(tryAddButton, 800);
 		},
-		
+
 		items_add: function(frm, cdt, cdn) {
 			setTimeout(function () {
 				sf_trading.add_last_selling_rate_button(frm);
+				sf_trading.add_customer_last_selling_rate_button(frm);
 			}, 800);
 		}
 	});
