@@ -5,13 +5,24 @@ import frappe
 from frappe import _
 from frappe.utils import flt, getdate
 
+from sf_trading.sf_trading.report.dcr_report.dcr_report import (
+	CHEQUE_ALLOC_SUBQUERY,
+	HOME_CREDIT_CONDITION,
+	OTHER_ALLOC_SUBQUERY,
+	SETTLED_ON_TIME_CONDITION,
+)
+
 
 REPORT_TYPES = [
 	"Cash Sales",
+	"Cheque Sales",
 	"Credit Sales",
+	"Home Credit (Delivery)",
 	"Sales Return - Cash",
 	"VAT Collected on Cash Sales",
+	"VAT Collected on Cheque Sales",
 	"VAT Applied on Credit Sales",
+	"VAT Applied on Home Credit",
 	"VAT Refund on Sales Return",
 	"Credit Purchase - DIRECT PURCHASE",
 	"Cash Received : Credit Sales",
@@ -43,7 +54,7 @@ def execute(filters=None):
 
 def get_columns(report_type):
 	"""Columns vary by report type."""
-	if report_type in ("Cash Sales", "Credit Sales", "VAT Collected on Cash Sales", "VAT Applied on Credit Sales"):
+	if report_type in ("Cash Sales", "Cheque Sales", "Credit Sales", "VAT Collected on Cash Sales", "VAT Collected on Cheque Sales", "VAT Applied on Credit Sales"):
 		return [
 			_("Sales Invoice") + ":Link/Sales Invoice:120",
 			_("Posting Date") + ":Date:100",
@@ -53,6 +64,17 @@ def get_columns(report_type):
 			_("VAT") + ":Currency:100",
 			_("Grand Total") + ":Currency:120",
 			_("Discount") + ":Currency:90",
+		]
+	if report_type in ("Home Credit (Delivery)", "VAT Applied on Home Credit"):
+		return [
+			_("Sales Invoice") + ":Link/Sales Invoice:120",
+			_("Posting Date") + ":Date:100",
+			_("Customer") + ":Link/Customer:150",
+			_("Customer Name") + ":Data:180",
+			_("Delivery Person") + ":Link/Driver:150",
+			_("Net Total") + ":Currency:120",
+			_("VAT") + ":Currency:100",
+			_("Grand Total") + ":Currency:120",
 		]
 	if report_type in ("Sales Return - Cash", "VAT Refund on Sales Return"):
 		return [
@@ -135,8 +157,12 @@ def get_data_for_type(report_type, from_date, to_date, company, cost_center):
 	params = {"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center}
 	if report_type in ("Cash Sales", "VAT Collected on Cash Sales"):
 		return _detail_cash_sales(params, cost_center)
+	if report_type in ("Cheque Sales", "VAT Collected on Cheque Sales"):
+		return _detail_cheque_sales(params, cost_center)
 	if report_type in ("Credit Sales", "VAT Applied on Credit Sales"):
 		return _detail_credit_sales(params, cost_center)
+	if report_type in ("Home Credit (Delivery)", "VAT Applied on Home Credit"):
+		return _detail_home_credit(params, cost_center)
 	if report_type in ("Sales Return - Cash", "VAT Refund on Sales Return"):
 		return _detail_sales_return_cash(params, cost_center)
 	if report_type == "Credit Purchase - DIRECT PURCHASE":
@@ -158,25 +184,90 @@ def get_data_for_type(report_type, from_date, to_date, company, cost_center):
 	return []
 
 
-def _detail_cash_sales(params, cost_center):
+def _settled_invoices_with_alloc(params, cost_center):
+	"""Settled sales (paid on/before invoice date) with the amount allocated by
+	Cheque-mode vs other-mode Payment Entries, for splitting between Cash/Cheque Sales."""
 	cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "si.posting_date")
 	cc = " AND sii.cost_center = %(cost_center)s" if cost_center else ""
 	sql = """
 		SELECT si.name, si.posting_date, si.customer, si.customer_name,
-			si.base_net_total, si.total_taxes_and_charges, si.grand_total, si.discount_amount
+			si.base_net_total, si.total_taxes_and_charges, si.grand_total, si.discount_amount,
+			""" + CHEQUE_ALLOC_SUBQUERY + """ as cheque_alloc,
+			""" + OTHER_ALLOC_SUBQUERY + """ as other_alloc
 		FROM `tabSales Invoice` si
 		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
-		INNER JOIN `tabPayment Entry Reference` per ON per.reference_doctype = 'Sales Invoice' AND per.reference_name = si.name
-		INNER JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1 AND pe.payment_type = 'Receive'
 		WHERE si.docstatus = 1 AND si.is_return = 0 AND """ + cond + """
-		AND pe.posting_date <= si.posting_date
+		AND """ + SETTLED_ON_TIME_CONDITION + """
 		""" + cc + """
 		GROUP BY si.name, si.posting_date, si.customer, si.customer_name, si.base_net_total,
 			si.total_taxes_and_charges, si.grand_total, si.discount_amount
 		ORDER BY si.posting_date, si.name
 	"""
+	return frappe.db.sql(sql, params, as_dict=True)
+
+
+def _scaled_si_row(r, share):
+	return [
+		r.name,
+		r.posting_date,
+		r.get("customer"),
+		r.get("customer_name") or "",
+		flt(r.get("base_net_total")) * share,
+		flt(r.get("total_taxes_and_charges")) * share,
+		flt(r.get("grand_total")) * share,
+		flt(r.get("discount_amount")) * share,
+	]
+
+
+def _detail_cash_sales(params, cost_center):
+	out = []
+	for r in _settled_invoices_with_alloc(params, cost_center):
+		total_alloc = flt(r.cheque_alloc) + flt(r.other_alloc)
+		share = (flt(r.other_alloc) / total_alloc) if total_alloc else 1
+		if share > 0:
+			out.append(_scaled_si_row(r, share))
+	return out
+
+
+def _detail_cheque_sales(params, cost_center):
+	out = []
+	for r in _settled_invoices_with_alloc(params, cost_center):
+		total_alloc = flt(r.cheque_alloc) + flt(r.other_alloc)
+		share = (flt(r.cheque_alloc) / total_alloc) if total_alloc else 0
+		if share > 0:
+			out.append(_scaled_si_row(r, share))
+	return out
+
+
+def _detail_home_credit(params, cost_center):
+	cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "si.posting_date")
+	cc = " AND sii.cost_center = %(cost_center)s" if cost_center else ""
+	sql = """
+		SELECT si.name, si.posting_date, si.customer, si.customer_name, si.custom_driver,
+			si.base_net_total, si.total_taxes_and_charges, si.grand_total
+		FROM `tabSales Invoice` si
+		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
+		WHERE si.docstatus = 1 AND si.is_return = 0 AND """ + cond + """
+		AND """ + HOME_CREDIT_CONDITION + """
+		""" + cc + """
+		GROUP BY si.name, si.posting_date, si.customer, si.customer_name, si.custom_driver,
+			si.base_net_total, si.total_taxes_and_charges, si.grand_total
+		ORDER BY si.posting_date, si.name
+	"""
 	rows = frappe.db.sql(sql, params, as_dict=True)
-	return [_row_si(r) for r in rows]
+	return [
+		[
+			r.name,
+			r.posting_date,
+			r.get("customer"),
+			r.get("customer_name") or "",
+			r.get("custom_driver") or "",
+			flt(r.get("base_net_total")),
+			flt(r.get("total_taxes_and_charges")),
+			flt(r.get("grand_total")),
+		]
+		for r in rows
+	]
 
 
 def _row_si(r):
@@ -207,6 +298,7 @@ def _detail_credit_sales(params, cost_center):
 			WHERE per.reference_doctype = 'Sales Invoice' AND per.reference_name = si.name
 			  AND pe.posting_date <= si.posting_date
 		)
+		AND NOT (""" + HOME_CREDIT_CONDITION + """)
 		""" + cc + """
 		GROUP BY si.name, si.posting_date, si.customer, si.customer_name, si.base_net_total,
 			si.total_taxes_and_charges, si.grand_total, si.discount_amount

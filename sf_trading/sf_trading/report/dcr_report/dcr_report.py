@@ -149,20 +149,35 @@ def get_data(filters):
 	receipts_petty_cash = 0
 	total_discount_adj = 0
 	
-	# Get Cash Sales (Sales Invoices with Cash payment mode)
-	cash_sales_data = get_cash_sales(from_date, to_date, company, cost_center)
+	# Get settled sales (paid on/before invoice date) split between Cash and Cheque
+	# by payment allocation, so split-payment invoices land in both rows proportionally
+	settled_split = get_settled_sales_split(from_date, to_date, company, cost_center)
+
+	cash_sales_data = settled_split["cash"]
 	cash_sales_net = cash_sales_data.get("net_total", 0)
 	vat_collected_cash = cash_sales_data.get("vat_amount", 0)
 	# Include VAT in cash sales
 	cash_sales = cash_sales_net + vat_collected_cash
 	total_discount_adj += cash_sales_data.get("discount", 0)
-	
+
+	cheque_sales_data = settled_split["cheque"]
+	cheque_sales_net = cheque_sales_data.get("net_total", 0)
+	vat_collected_cheque = cheque_sales_data.get("vat_amount", 0)
+	cheque_sales = cheque_sales_net + vat_collected_cheque
+	cheque_discount = cheque_sales_data.get("discount", 0)
+
 	# Get Credit Sales (Sales Invoices without immediate payment or with credit terms)
 	credit_sales_data = get_credit_sales(from_date, to_date, company, cost_center)
 	credit_sales_net = credit_sales_data.get("net_total", 0)
 	vat_applied_credit = credit_sales_data.get("vat_amount", 0)
 	# Include VAT in credit sales
 	credit_sales = credit_sales_net + vat_applied_credit
+
+	# Get Home Credit (Delivery Person set, no payment entry received yet)
+	home_credit_data = get_home_credit_sales(from_date, to_date, company, cost_center)
+	home_credit_net = home_credit_data.get("net_total", 0)
+	vat_applied_home_credit = home_credit_data.get("vat_amount", 0)
+	home_credit_sales = home_credit_net + vat_applied_home_credit
 	
 	# Get Sales Return - Cash
 	sales_return_data = get_sales_returns_cash(from_date, to_date, company, cost_center)
@@ -193,9 +208,15 @@ def get_data(filters):
 	
 	# Calculate Gross Margin for Cash Sales (use net amount, VAT is not part of margin)
 	gross_margin_cash = cash_sales_net - cash_sales_data.get("cost", 0)
-	
+
+	# Calculate Gross Margin for Cheque Sales (use net amount, VAT is not part of margin)
+	gross_margin_cheque = cheque_sales_net - cheque_sales_data.get("cost", 0)
+
 	# Calculate Gross Margin for Credit Sales (use net amount, VAT is not part of margin)
 	gross_margin_credit = credit_sales_net - credit_sales_data.get("cost", 0)
+
+	# Calculate Gross Margin for Home Credit (use net amount, VAT is not part of margin)
+	gross_margin_home_credit = home_credit_net - home_credit_data.get("cost", 0)
 	
 	# Build report data with clickable links (margin column only for System Manager)
 	def _row(particulars, income, expense, discount_adj, margin=0):
@@ -244,8 +265,14 @@ def get_data(filters):
 	
 	data.append(_row(get_report_link("CASH SALES", "Cash Sales", from_date_str, to_date_str, company, cost_center), cash_sales, 0, -total_discount_adj, gross_margin_cash))
 
+	# CHEQUE SALES - link to DCR Detail report
+	data.append(_row(get_report_link("CHEQUE SALES", "Cheque Sales", from_date_str, to_date_str, company, cost_center), cheque_sales, 0, -cheque_discount, gross_margin_cheque))
+
 	# CREDIT SALES - link to DCR Detail report
 	data.append(_row(get_report_link("CREDIT SALES", "Credit Sales", from_date_str, to_date_str, company, cost_center), credit_sales, 0, 0, gross_margin_credit))
+
+	# Home Credit (Delivery Person set, payment not yet received) - link to DCR Detail report
+	data.append(_row(get_report_link("Home Credit (Delivery)", "Home Credit (Delivery)", from_date_str, to_date_str, company, cost_center), home_credit_sales, 0, 0, gross_margin_home_credit))
 
 	# Sales Return - Cash - link to DCR Detail report
 	data.append(_row(get_report_link("Sales Return - Cash", "Sales Return - Cash", from_date_str, to_date_str, company, cost_center), 0, sales_return_cash, 0, 0))
@@ -253,8 +280,14 @@ def get_data(filters):
 	# VAT Collected on Cash Sales - link to DCR Detail report (same invoices as Cash Sales)
 	data.append(_row(get_report_link("VAT Collected on Cash Sales", "VAT Collected on Cash Sales", from_date_str, to_date_str, company, cost_center), vat_collected_cash, 0, 0, 0))
 
+	# VAT Collected on Cheque Sales - link to DCR Detail report (same invoices as Cheque Sales)
+	data.append(_row(get_report_link("VAT Collected on Cheque Sales", "VAT Collected on Cheque Sales", from_date_str, to_date_str, company, cost_center), vat_collected_cheque, 0, 0, 0))
+
 	# VAT Applied on Credit Sales - link to DCR Detail report
 	data.append(_row(get_report_link("VAT Applied on Credit Sales", "VAT Applied on Credit Sales", from_date_str, to_date_str, company, cost_center), vat_applied_credit, 0, 0, 0))
+
+	# VAT Applied on Home Credit - link to DCR Detail report (same invoices as Home Credit)
+	data.append(_row(get_report_link("VAT Applied on Home Credit", "VAT Applied on Home Credit", from_date_str, to_date_str, company, cost_center), vat_applied_home_credit, 0, 0, 0))
 
 	# VAT Refund on Sales Return - link to DCR Detail report
 	data.append(_row(get_report_link("VAT Refund on Sales Return", "VAT Refund on Sales Return", from_date_str, to_date_str, company, cost_center), 0, vat_refund_sales_return, 0, 0))
@@ -348,9 +381,52 @@ def get_opening_cash_balance(from_date, company, cost_center):
 	return flt(opening)
 
 
-def get_cash_sales(from_date, to_date, company, cost_center):
-	"""Get cash sales: Sales Invoices that have a Payment Entry on the same day or before invoice date.
-	Cash sale = invoice paid on or before invoice date (no credit)."""
+# Invoice has a qualifying (on/before invoice date) Receive Payment Entry (any mode) = settled sale
+SETTLED_ON_TIME_CONDITION = """EXISTS (
+	SELECT 1 FROM `tabPayment Entry Reference` st_per
+	INNER JOIN `tabPayment Entry` st_pe ON st_pe.name = st_per.parent AND st_pe.docstatus = 1 AND st_pe.payment_type = 'Receive'
+	WHERE st_per.reference_doctype = 'Sales Invoice' AND st_per.reference_name = si.name
+		AND st_pe.posting_date <= si.posting_date
+)"""
+
+# Amount allocated to the invoice by qualifying (on/before invoice date) Cheque-mode Payment Entries
+CHEQUE_ALLOC_SUBQUERY = """(
+	SELECT COALESCE(SUM(chq_per.allocated_amount), 0)
+	FROM `tabPayment Entry Reference` chq_per
+	INNER JOIN `tabPayment Entry` chq_pe ON chq_pe.name = chq_per.parent AND chq_pe.docstatus = 1 AND chq_pe.payment_type = 'Receive'
+	INNER JOIN `tabMode of Payment` chq_mop ON chq_mop.name = chq_pe.mode_of_payment
+	WHERE chq_per.reference_doctype = 'Sales Invoice' AND chq_per.reference_name = si.name
+		AND chq_pe.posting_date <= si.posting_date
+		AND LOWER(chq_mop.name) LIKE '%%cheque%%'
+)"""
+
+# Amount allocated to the invoice by qualifying (on/before invoice date) non-Cheque Payment Entries
+OTHER_ALLOC_SUBQUERY = """(
+	SELECT COALESCE(SUM(oth_per.allocated_amount), 0)
+	FROM `tabPayment Entry Reference` oth_per
+	INNER JOIN `tabPayment Entry` oth_pe ON oth_pe.name = oth_per.parent AND oth_pe.docstatus = 1 AND oth_pe.payment_type = 'Receive'
+	LEFT JOIN `tabMode of Payment` oth_mop ON oth_mop.name = oth_pe.mode_of_payment
+	WHERE oth_per.reference_doctype = 'Sales Invoice' AND oth_per.reference_name = si.name
+		AND oth_pe.posting_date <= si.posting_date
+		AND (oth_mop.name IS NULL OR LOWER(oth_mop.name) NOT LIKE '%%cheque%%')
+)"""
+
+# Invoice has any submitted Receive Payment Entry (regardless of date)
+HAS_ANY_RECEIVE_PE_CONDITION = """EXISTS (
+	SELECT 1 FROM `tabPayment Entry Reference` any_per
+	INNER JOIN `tabPayment Entry` any_pe ON any_pe.name = any_per.parent AND any_pe.docstatus = 1 AND any_pe.payment_type = 'Receive'
+	WHERE any_per.reference_doctype = 'Sales Invoice' AND any_per.reference_name = si.name
+)"""
+
+# Home credit: Delivery Person selected on the invoice and no payment received yet
+HOME_CREDIT_CONDITION = "COALESCE(si.custom_driver, '') != '' AND NOT " + HAS_ANY_RECEIVE_PE_CONDITION
+
+
+def get_settled_sales_split(from_date, to_date, company, cost_center):
+	"""Get settled sales (Sales Invoices paid on/before invoice date) split between
+	Cash Sales and Cheque Sales by the payment allocation of each mode.
+	A split-payment invoice (e.g. 10 by Cheque + 1.5 by Cash) contributes its amounts
+	proportionally to both rows instead of being classified into a single one."""
 	conditions = "si.docstatus = 1 AND si.is_return = 0"
 	if from_date:
 		conditions += " AND si.posting_date >= %(from_date)s"
@@ -359,45 +435,88 @@ def get_cash_sales(from_date, to_date, company, cost_center):
 	if company:
 		conditions += " AND si.company = %(company)s"
 	cost_center_condition = " AND sii.cost_center = %(cost_center)s" if cost_center else ""
-	# Must have at least one Payment Entry (Receive) with posting_date <= invoice posting_date
 	result = frappe.db.sql("""
 		SELECT
 			si.name,
 			si.base_net_total,
 			si.total_taxes_and_charges as vat_amount,
 			si.discount_amount as discount,
+			SUM(COALESCE(sii.incoming_rate, 0) * sii.stock_qty) as cost,
+			{cheque_alloc} as cheque_alloc,
+			{other_alloc} as other_alloc
+		FROM `tabSales Invoice` si
+		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
+		WHERE {conditions}
+			AND {settled_condition}
+			{cost_center_condition}
+		GROUP BY si.name, si.base_net_total, si.total_taxes_and_charges, si.discount_amount
+	""".format(conditions=conditions, settled_condition=SETTLED_ON_TIME_CONDITION,
+		cheque_alloc=CHEQUE_ALLOC_SUBQUERY, other_alloc=OTHER_ALLOC_SUBQUERY,
+		cost_center_condition=cost_center_condition), {
+		"from_date": from_date,
+		"to_date": to_date,
+		"company": company,
+		"cost_center": cost_center,
+	}, as_dict=True)
+	cash = {"net_total": 0, "vat_amount": 0, "discount": 0, "cost": 0}
+	cheque = {"net_total": 0, "vat_amount": 0, "discount": 0, "cost": 0}
+	for r in result:
+		total_alloc = flt(r.cheque_alloc) + flt(r.other_alloc)
+		cheque_share = flt(r.cheque_alloc) / total_alloc if total_alloc else 0
+		for key, value in (
+			("net_total", r.base_net_total),
+			("vat_amount", r.vat_amount),
+			("discount", r.discount),
+			("cost", r.cost),
+		):
+			cheque[key] += flt(value) * cheque_share
+			cash[key] += flt(value) * (1 - cheque_share)
+	return {"cash": cash, "cheque": cheque}
+
+
+def get_home_credit_sales(from_date, to_date, company, cost_center):
+	"""Get home credit sales: Sales Invoices with a Delivery Person (driver) selected
+	and NO Payment Entry received yet. Once a payment is received the invoice moves
+	to its respective row (Cash/Cheque/Credit Sales)."""
+	conditions = "si.docstatus = 1 AND si.is_return = 0"
+	if from_date:
+		conditions += " AND si.posting_date >= %(from_date)s"
+	if to_date:
+		conditions += " AND si.posting_date <= %(to_date)s"
+	if company:
+		conditions += " AND si.company = %(company)s"
+	cost_center_condition = " AND sii.cost_center = %(cost_center)s" if cost_center else ""
+	result = frappe.db.sql("""
+		SELECT
+			si.name,
+			si.base_net_total,
+			si.total_taxes_and_charges as vat_amount,
 			SUM(COALESCE(sii.incoming_rate, 0) * sii.stock_qty) as cost
 		FROM `tabSales Invoice` si
 		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
-		INNER JOIN `tabPayment Entry Reference` per ON per.reference_doctype = 'Sales Invoice' AND per.reference_name = si.name
-		INNER JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1 AND pe.payment_type = 'Receive'
 		WHERE {conditions}
-			AND pe.posting_date <= si.posting_date
+			AND {home_credit_condition}
 			{cost_center_condition}
-		GROUP BY si.name, si.base_net_total, si.total_taxes_and_charges, si.discount_amount
-	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		GROUP BY si.name, si.base_net_total, si.total_taxes_and_charges
+	""".format(conditions=conditions, home_credit_condition=HOME_CREDIT_CONDITION, cost_center_condition=cost_center_condition), {
 		"from_date": from_date,
 		"to_date": to_date,
 		"company": company,
 		"cost_center": cost_center,
 	}, as_dict=True)
 	if result:
-		total_net = sum(flt(r.base_net_total) for r in result)
-		total_vat = sum(flt(r.vat_amount or 0) for r in result)
-		total_discount = sum(flt(r.discount or 0) for r in result)
-		total_cost = sum(flt(r.cost or 0) for r in result)
 		return {
-			"net_total": total_net,
-			"vat_amount": total_vat,
-			"discount": total_discount,
-			"cost": total_cost,
+			"net_total": sum(flt(r.base_net_total) for r in result),
+			"vat_amount": sum(flt(r.vat_amount or 0) for r in result),
+			"cost": sum(flt(r.cost or 0) for r in result),
 		}
-	return {"net_total": 0, "vat_amount": 0, "discount": 0, "cost": 0}
+	return {"net_total": 0, "vat_amount": 0, "cost": 0}
 
 
 def get_credit_sales(from_date, to_date, company, cost_center):
 	"""Get credit sales: Sales Invoices that do NOT have a Payment Entry on the same day or before invoice date.
-	Credit sale = invoice not paid on/before invoice date (payment later or not yet)."""
+	Credit sale = invoice not paid on/before invoice date (payment later or not yet).
+	Home Credit invoices (Delivery Person set, no payment yet) are excluded (shown separately)."""
 	conditions = "si.docstatus = 1 AND si.is_return = 0"
 	if from_date:
 		conditions += " AND si.posting_date >= %(from_date)s"
@@ -422,9 +541,10 @@ def get_credit_sales(from_date, to_date, company, cost_center):
 				WHERE per.reference_doctype = 'Sales Invoice' AND per.reference_name = si.name
 				  AND pe.posting_date <= si.posting_date
 			)
+			AND NOT ({home_credit_condition})
 			{cost_center_condition}
 		GROUP BY si.name, si.base_net_total, si.total_taxes_and_charges
-	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+	""".format(conditions=conditions, home_credit_condition=HOME_CREDIT_CONDITION, cost_center_condition=cost_center_condition), {
 		"from_date": from_date,
 		"to_date": to_date,
 		"company": company,
