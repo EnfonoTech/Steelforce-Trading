@@ -20,7 +20,7 @@
 			args: {
 				item_code: row.item_code,
 				warehouse: row.warehouse || "",
-				price_list: frm.doc.selling_price_list || "",
+				price_list: row.custom_price_list || frm.doc.selling_price_list || "",
 				conversion_rate: frm.doc.conversion_rate || 1,
 				uom_cf: row.conversion_factor || 1,
 			},

@@ -90,17 +90,20 @@ def validate_selling_price(doc, method=None):
 		cf = flt(item.conversion_factor) or 1.0
 		rate = flt(item.base_net_rate)
 
+		# A row's own Price List (if set) takes precedence over the invoice's.
+		effective_price_list = item.get("custom_price_list") or doc.get("selling_price_list")
+
 		# When the price list enforces minimum price, it REPLACES the cost checks.
 		enforce_pl = (
 			not is_internal
-			and doc.get("selling_price_list")
-			and frappe.db.get_value("Price List", doc.selling_price_list, "custom_enforce_min_price")
+			and effective_price_list
+			and frappe.db.get_value("Price List", effective_price_list, "custom_enforce_min_price")
 		)
 
 		if enforce_pl:
 			pl_rate = flt(frappe.db.get_value(
 				"Item Price",
-				{"item_code": item.item_code, "price_list": doc.selling_price_list, "selling": 1},
+				{"item_code": item.item_code, "price_list": effective_price_list, "selling": 1},
 				"price_list_rate",
 			))
 			if not pl_rate:

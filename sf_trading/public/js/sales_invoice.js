@@ -398,6 +398,76 @@ frappe.ui.form.on("Sales Invoice", {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Per-Item Price List
+// ═══════════════════════════════════════════════════════════════════════════════
+// Each row can override the invoice's Price List (custom_price_list). When set
+// (or left blank, in which case the invoice's own Price List applies), the row's
+// rate is looked up from that price list — same resolution ERPNext itself uses
+// (party pricing, qty breaks, uom fallback, currency conversion).
+
+function sf_apply_row_price_list(frm, cdt, cdn) {
+	const row = locals[cdt][cdn];
+	if (!row || !row.item_code) return;
+	const price_list = row.custom_price_list || frm.doc.selling_price_list;
+	if (!price_list) return;
+
+	frappe.call({
+		method: "sf_trading.api.item_row_price_list.get_row_price_list_rate",
+		args: {
+			item_code: row.item_code,
+			price_list: price_list,
+			doctype: frm.doc.doctype,
+			uom: row.uom,
+			stock_uom: row.stock_uom,
+			qty: row.qty || 1,
+			transaction_date: frm.doc.posting_date || frappe.datetime.get_today(),
+			customer: frm.doc.customer,
+			company: frm.doc.company,
+			conversion_rate: frm.doc.conversion_rate || 1,
+		},
+		callback: function (r) {
+			if (!r.message || !flt(r.message.rate)) return;
+			frappe.model.set_value(cdt, cdn, "price_list_rate", r.message.rate);
+			frappe.model.set_value(cdt, cdn, "rate", r.message.rate);
+		},
+	});
+}
+
+frappe.ui.form.on("Sales Invoice Item", {
+	custom_price_list: function (frm, cdt, cdn) { sf_apply_row_price_list(frm, cdt, cdn); },
+	item_code: function (frm, cdt, cdn) {
+		// ERPNext's own item_code handler re-rates the row from the invoice's
+		// price list a moment later — reapply the row's own price list (if any)
+		// afterwards so it isn't clobbered by that.
+		const row = locals[cdt][cdn];
+		if (row && row.custom_price_list) {
+			setTimeout(function () { sf_apply_row_price_list(frm, cdt, cdn); }, 800);
+		}
+	},
+	items_add: function (frm, cdt, cdn) {
+		const row = locals[cdt][cdn];
+		if (row && !row.custom_price_list && frm.doc.selling_price_list) {
+			frappe.model.set_value(cdt, cdn, "custom_price_list", frm.doc.selling_price_list);
+		}
+	},
+});
+
+frappe.ui.form.on("Sales Invoice", {
+	selling_price_list: function (frm) {
+		// ERPNext's own price-list-change handler re-rates every row against
+		// the invoice's price list a moment later — reapply row-level
+		// overrides afterwards so they aren't clobbered by that.
+		setTimeout(function () {
+			(frm.doc.items || []).forEach(function (row) {
+				if (row.item_code && row.custom_price_list) {
+					sf_apply_row_price_list(frm, row.doctype, row.name);
+				}
+			});
+		}, 700);
+	},
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Barcode Scanner
 // ═══════════════════════════════════════════════════════════════════════════════
 
