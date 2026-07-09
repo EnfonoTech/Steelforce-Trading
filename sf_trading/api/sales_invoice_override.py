@@ -157,3 +157,22 @@ def check_driver_payment_overdue(driver):
 def check_customer_credit_overdue(customer, company):
 	"""Client-side check: return the oldest overdue invoice dict or None."""
 	return _get_overdue_invoice(customer, company)
+
+
+@frappe.whitelist()
+def get_credit_limit_status(customer, company):
+	"""Client-side check: customer's credit limit and current outstanding for a company.
+	Used by the real-time credit-limit popup while items are being added on Sales Invoice."""
+	if not customer or not company:
+		return {"credit_limit": 0, "outstanding": 0, "currency": None}
+
+	from erpnext.selling.doctype.customer.customer import get_credit_limit, get_customer_outstanding
+	from frappe.utils import flt
+
+	credit_limit = flt(get_credit_limit(customer, company))
+	outstanding = flt(get_customer_outstanding(customer, company)) if credit_limit else 0
+	return {
+		"credit_limit": credit_limit,
+		"outstanding": outstanding,
+		"currency": frappe.get_cached_value("Company", company, "default_currency"),
+	}

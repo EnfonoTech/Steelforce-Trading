@@ -1155,3 +1155,94 @@ frappe.ui.form.on("Sales Invoice", {
 		},
 	});
 })();
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Real-time credit limit popup (Credit mode)
+// Watches item changes and warns the moment outstanding + this invoice
+// exceeds the customer's credit limit. Also re-warns on save.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+(function() {
+	function credit_check_applies(frm) {
+		return frm.doc.docstatus === 0
+			&& !frm.doc.is_return
+			&& frm.doc.custom_payment_mode === "Credit"
+			&& frm.doc.customer
+			&& frm.doc.company;
+	}
+
+	function fetch_credit_status(frm) {
+		var key = frm.doc.customer + "::" + frm.doc.company;
+		if (frm._sf_credit_status && frm._sf_credit_status.key === key) {
+			return Promise.resolve(frm._sf_credit_status);
+		}
+		return frappe.call({
+			method: "sf_trading.api.sales_invoice_override.get_credit_limit_status",
+			args: { customer: frm.doc.customer, company: frm.doc.company },
+		}).then(function(r) {
+			var status = r.message || {};
+			status.key = key;
+			frm._sf_credit_status = status;
+			return status;
+		});
+	}
+
+	function run_credit_check(frm) {
+		if (!credit_check_applies(frm)) return;
+		fetch_credit_status(frm).then(function(status) {
+			if (!flt(status.credit_limit)) return;
+
+			var invoice_total = flt(frm.doc.base_grand_total || frm.doc.grand_total);
+			var projected = flt(status.outstanding) + invoice_total;
+			var limit = flt(status.credit_limit);
+			var currency = status.currency;
+
+			// Warn on every change (and on save) while the total stays over the limit
+			if (projected > limit) {
+				frappe.msgprint({
+					title: __("Credit Limit Exceeded"),
+					indicator: "red",
+					message: __(
+						"Customer {0}<br>Credit Limit: <b>{1}</b><br>Current Outstanding: <b>{2}</b><br>"
+						+ "This Invoice: <b>{3}</b><br>Exceeds limit by: <b>{4}</b>",
+						[frm.doc.customer, format_currency(limit, currency),
+						 format_currency(status.outstanding, currency), format_currency(invoice_total, currency),
+						 format_currency(projected - limit, currency)]
+					),
+				});
+			}
+		});
+	}
+
+	function schedule_credit_check(frm) {
+		// Debounce: let ERPNext finish recalculating totals (rate fetch is async)
+		if (frm._sf_credit_check_timer) clearTimeout(frm._sf_credit_check_timer);
+		frm._sf_credit_check_timer = setTimeout(function() { run_credit_check(frm); }, 600);
+	}
+
+	frappe.ui.form.on("Sales Invoice Item", {
+		item_code: function(frm) { schedule_credit_check(frm); },
+		qty: function(frm) { schedule_credit_check(frm); },
+		rate: function(frm) { schedule_credit_check(frm); },
+		items_remove: function(frm) { schedule_credit_check(frm); },
+	});
+
+	frappe.ui.form.on("Sales Invoice", {
+		refresh: function(frm) {
+			if (credit_check_applies(frm) && (frm.doc.items || []).length) {
+				schedule_credit_check(frm);
+			}
+		},
+		customer: function(frm) {
+			frm._sf_credit_status = null;
+			schedule_credit_check(frm);
+		},
+		custom_payment_mode: function(frm) { schedule_credit_check(frm); },
+		discount_amount: function(frm) { schedule_credit_check(frm); },
+		additional_discount_percentage: function(frm) { schedule_credit_check(frm); },
+		validate: function(frm) {
+			// Warn on save too
+			run_credit_check(frm);
+		},
+	});
+})();
