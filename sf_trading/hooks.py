@@ -280,9 +280,9 @@ override_whitelisted_methods = {
 # each overriding function accepts a `data` argument;
 # generated from the base implementation of the doctype dashboard,
 # along with any modifications made in other Frappe apps
-# override_doctype_dashboards = {
-# 	"Task": "sf_trading.task.get_dashboard_data"
-# }
+override_doctype_dashboards = {
+	"Quotation": ["sf_trading.api.quotation.get_dashboard_data"]
+}
 
 # exempt linked doctypes from being automatically cancelled
 #
@@ -391,6 +391,7 @@ fixtures = [
 					"Quotation Item-cost_center",
 					"Quotation Item-project",
 					"Sales Invoice Item-custom_quotation",
+					"Sales Invoice Item-custom_price_list",
 					"Item Group-custom_min_margin_pct",
 					"Price List-custom_enforce_min_price",
 					"Material Request Item-custom_source_mr",

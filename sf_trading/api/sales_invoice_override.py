@@ -39,7 +39,7 @@ def validate(doc, _method=None):
 	if not doc.customer:
 		return
 
-	inv = _get_overdue_invoice(doc.customer, doc.company)
+	inv = _get_overdue_invoice(doc.customer, doc.company, as_of_date=doc.posting_date)
 	if inv:
 		inv_link = frappe.utils.get_link_to_form("Sales Invoice", inv.name)
 		frappe.throw(
@@ -57,11 +57,17 @@ def validate(doc, _method=None):
 		)
 
 
-def _get_overdue_invoice(customer, company):
+def _get_overdue_invoice(customer, company, as_of_date=None):
 	"""Return the oldest overdue credit invoice for the customer, or None.
 
 	Uses the Credit Days configured on the Customer Credit Limit row for the
 	given company. Returns None if no credit days are set (validation disabled).
+
+	as_of_date is the date "overdue" is measured against - the posting date of
+	the invoice being created, not necessarily the real calendar date. This
+	matters when an invoice is deliberately post-dated: the credit-days clock
+	should run from the older invoice's posting date to the new invoice's
+	posting date, not to whatever today happens to be.
 	"""
 	credit_days = frappe.db.get_value(
 		"Customer Credit Limit",
@@ -84,7 +90,7 @@ def _get_overdue_invoice(customer, company):
 		ORDER BY posting_date ASC
 		LIMIT 1
 		""",
-		(customer, company, today(), frappe.utils.cint(credit_days)),
+		(customer, company, as_of_date or today(), frappe.utils.cint(credit_days)),
 		as_dict=True,
 	)
 	return rows[0] if rows else None
@@ -99,7 +105,7 @@ def validate_driver_payment(doc, _method=None):
 	if not doc.get("custom_driver"):
 		return
 
-	inv = _get_driver_overdue_invoice(doc.custom_driver, doc.name)
+	inv = _get_driver_overdue_invoice(doc.custom_driver, doc.name, as_of_date=doc.posting_date)
 	if inv:
 		inv_link = frappe.utils.get_link_to_form("Sales Invoice", inv.name)
 		payment_days = frappe.db.get_value("Driver", doc.custom_driver, "custom_payment_days") or 1
@@ -119,7 +125,7 @@ def validate_driver_payment(doc, _method=None):
 		)
 
 
-def _get_driver_overdue_invoice(driver, exclude_name=None):
+def _get_driver_overdue_invoice(driver, exclude_name=None, as_of_date=None):
 	"""Return the oldest overdue uncleared Cash invoice for the driver, or None."""
 	payment_days = frappe.utils.cint(
 		frappe.db.get_value("Driver", driver, "custom_payment_days") or 1
@@ -133,7 +139,7 @@ def _get_driver_overdue_invoice(driver, exclude_name=None):
 		  AND outstanding_amount > 0
 		  AND DATEDIFF(%s, posting_date) > %s
 	"""
-	params = [driver, today(), payment_days]
+	params = [driver, as_of_date or today(), payment_days]
 
 	if exclude_name:
 		conditions += " AND name != %s"

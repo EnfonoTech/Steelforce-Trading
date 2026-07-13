@@ -86,6 +86,21 @@ def make_sales_invoice_from_quotation(source_name):
 	return si.as_dict()
 
 
+def get_dashboard_data(data):
+	"""Add Sales Invoice to the Quotation "Connections" dashboard.
+
+	Sales Invoices here are created directly from Quotation (Sales Order is
+	skipped), so the link lives on Sales Invoice Item.custom_quotation instead
+	of the standard prevdoc_docname fieldname.
+	"""
+	data = frappe._dict(data)
+	data.setdefault("non_standard_fieldnames", {})["Sales Invoice"] = "custom_quotation"
+	data.setdefault("transactions", []).append(
+		{"label": frappe._("Sales Invoice"), "items": ["Sales Invoice"]}
+	)
+	return data
+
+
 def update_quotation_status_from_invoice(doc, method=None):
 	"""On Sales Invoice submit/cancel: update status of linked Quotations."""
 	quotations = {item.custom_quotation for item in doc.items if item.get("custom_quotation")}
