@@ -1190,6 +1190,7 @@ frappe.ui.form.on("Sales Invoice", {
 	}
 
 	function check_warehouse_qty(frm, cdt, cdn) {
+		if (!frm.doc.update_stock) return;
 		validate_row_qty(cdt, cdn, true);
 	}
 
@@ -1203,6 +1204,7 @@ frappe.ui.form.on("Sales Invoice", {
 
 	frappe.ui.form.on("Sales Invoice", {
 		validate: function(frm) {
+			if (!frm.doc.update_stock) return;
 			if (!frm.doc.items || !frm.doc.items.length) return;
 			var blocked_items = [];
 			var checks = frm.doc.items.map(function(row) {
