@@ -545,7 +545,6 @@ fixtures = [
 			"Purchase Receipt-apply_putaway_rule-hidden",
 			"Purchase Receipt-set_posting_time-hidden",
 			"Purchase Receipt-posting_time-hidden",
-			"Purchase Receipt-supplier_delivery_note-hidden",
 			"Sales Order-taxes-hidden",
 			"Sales Order-pricing_rules-hidden",
 			"Sales Order-packed_items-hidden",
