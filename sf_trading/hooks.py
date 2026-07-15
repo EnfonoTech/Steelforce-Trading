@@ -55,6 +55,10 @@ doctype_js = {
 	"Material Request": "public/js/material_request.js",
 	"Customer":         "public/js/customer_company.js",
 	"Quotation":        "public/js/quotation.js",
+	"Supplier Quotation": "public/js/purchase_tax_template.js",
+	"Purchase Order":     "public/js/purchase_tax_template.js",
+	"Purchase Receipt":   "public/js/purchase_tax_template.js",
+	"Purchase Invoice":   "public/js/purchase_tax_template.js",
 }
 
 # include js, css files in header of web template
@@ -178,13 +182,25 @@ _BRANCH_HOOK = "sf_trading.inter_branch.auto_set_branch_from_warehouse"
 _LH_HOOK = "sf_trading.branch_defaults.set_letter_head_from_branch"
 _SP_HOOK = "sf_trading.api.selling_price_validation.validate_selling_price"
 
+# Picks the purchase tax template matching the document currency (default
+# template for company-currency docs, "Import VAT 0%" otherwise).
+_PTT_HOOK = "sf_trading.purchase_tax_template.set_template_by_currency"
+
 doc_events = {
 	"Customer": {
 		"validate": [
 			"sf_trading.api.customer_override.validate",
 			"sf_trading.customer_permission.validate_credit_branch_access",
+			"sf_trading.party_accounts.apply_title_case",
 		],
-		"before_save": "sf_trading.customer_permission.auto_add_branch_on_credit_limit",
+		"before_save": [
+			"sf_trading.customer_permission.auto_add_branch_on_credit_limit",
+			"sf_trading.party_accounts.create_customer_receivable_account",
+		],
+	},
+	"Supplier": {
+		"validate": "sf_trading.party_accounts.apply_title_case",
+		"before_save": "sf_trading.party_accounts.create_supplier_payable_account",
 	},
 	"Sales Invoice": {
 		"before_validate": [
@@ -221,6 +237,7 @@ doc_events = {
 		"before_validate": [
 			"sf_trading.inter_company.purchase_invoice_before_validate",
 			_CC_HOOK,
+			_PTT_HOOK,
 		],
 		"validate": [
 			"sf_trading.overrides.purchase_invoice.validate",
@@ -231,15 +248,15 @@ doc_events = {
 		"on_submit": "sf_trading.api.purchase_return.auto_create_pr_return",
 	},
 	"Purchase Order": {
-		"before_validate": _CC_HOOK,
+		"before_validate": [_CC_HOOK, _PTT_HOOK],
 		"validate": _LH_HOOK,
 	},
 	"Purchase Receipt": {
-		"before_validate": _CC_HOOK,
+		"before_validate": [_CC_HOOK, _PTT_HOOK],
 		"validate": [_BRANCH_HOOK, _LH_HOOK],
 	},
 	"Supplier Quotation": {
-		"before_validate": _CC_HOOK,
+		"before_validate": [_CC_HOOK, _PTT_HOOK],
 		"validate": _LH_HOOK,
 	},
 }
@@ -370,6 +387,7 @@ fixtures = [
 					"Sales Invoice-inter_company_branch",
 					"Sales Invoice-custom_sale_type",
 					"Purchase Receipt-custom_billing_approval_status",
+					"Purchase Taxes and Charges Template-custom_for_foreign_currency",
 					"Customer-custom_vat_registration_number",
 					"Sales Invoice-custom_credit_limit",
 					"Sales Invoice-custom_contact_expairy_date",
@@ -434,11 +452,9 @@ fixtures = [
 			"Purchase Invoice-base_net_total-hidden",
 			"Purchase Invoice-net_total-hidden",
 			"Purchase Invoice-tax_category-hidden",
-			"Purchase Invoice-taxes_and_charges-hidden",
 			"Purchase Invoice-shipping_rule-hidden",
 			"Purchase Invoice-incoterm-hidden",
 			"Purchase Invoice-named_place-hidden",
-			"Purchase Invoice-taxes-hidden",
 			"Purchase Invoice-base_taxes_and_charges_added-hidden",
 			"Purchase Invoice-base_taxes_and_charges_deducted-hidden",
 			"Purchase Invoice-taxes_and_charges_added-hidden",
