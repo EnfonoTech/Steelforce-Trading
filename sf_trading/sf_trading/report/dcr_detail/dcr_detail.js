@@ -1,6 +1,19 @@
 // Copyright (c) 2025, sf_trading and contributors
 // For license information, please see license.txt
 
+function sf_dcr_detail_default_cost_center() {
+	// User Permission first (marked default, or the only permitted one),
+	// then the session default
+	const perms = frappe.defaults.get_user_permissions();
+	const cc = perms && perms["Cost Center"];
+	if (cc && cc.length) {
+		const def = cc.find(function (d) { return d.is_default; });
+		if (def) return def.doc;
+		if (cc.length === 1) return cc[0].doc;
+	}
+	return frappe.defaults.get_user_default("Cost Center") || "";
+}
+
 frappe.query_reports["DCR Detail"] = {
 	filters: [
 		{
@@ -9,17 +22,23 @@ frappe.query_reports["DCR Detail"] = {
 			fieldtype: "Select",
 			options: [
 				"Cash Sales",
+				"Bank Sales",
 				"Cheque Sales",
 				"Credit Sales",
 				"Home Credit (Delivery)",
 				"Sales Return - Cash",
+				"Sales Return - Credit",
 				"VAT Collected on Cash Sales",
+				"VAT Collected on Bank Sales",
 				"VAT Collected on Cheque Sales",
 				"VAT Applied on Credit Sales",
 				"VAT Applied on Home Credit",
 				"VAT Refund on Sales Return",
+				"Loyalty / Write Off",
 				"Credit Purchase - DIRECT PURCHASE",
 				"Cash Received : Credit Sales",
+				"Payments-Petty Cash (Approved)",
+				"Payments-Petty Cash (UnApproved)",
 				"Payments-Petty Cash (Total Payments)",
 				"Cash Receipts (Cash Sales)",
 				"Bank Sales Receipts",
@@ -57,6 +76,11 @@ frappe.query_reports["DCR Detail"] = {
 			label: __("Cost Center"),
 			fieldtype: "Link",
 			options: "Cost Center",
+			default: sf_dcr_detail_default_cost_center(),
+			get_query: function () {
+				const company = frappe.query_report.get_filter_value("company");
+				return { filters: company ? { company: company } : {} };
+			},
 		},
 	],
 };

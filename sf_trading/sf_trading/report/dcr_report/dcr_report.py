@@ -3,8 +3,7 @@
 
 import frappe
 from frappe import _
-from frappe.utils import flt, getdate, add_days, slug
-from frappe.utils.data import quoted
+from frappe.utils import add_days, flt, getdate
 
 
 def execute(filters=None):
@@ -18,6 +17,19 @@ def _show_margin():
 	return "System Manager" in frappe.get_roles()
 
 
+def enforce_user_cost_center(cost_center):
+	"""A user restricted to exactly one Cost Center via User Permission always
+	sees only that cost center's data, even with no filter selected."""
+	if cost_center:
+		return cost_center
+	from frappe.core.doctype.user_permission.user_permission import get_user_permissions
+	perms = (get_user_permissions() or {}).get("Cost Center") or []
+	allowed = list({p.get("doc") for p in perms if p.get("doc")})
+	if len(allowed) == 1:
+		return allowed[0]
+	return cost_center
+
+
 def get_columns():
 	cols = [
 		_("Particulars") + ":Data:300",
@@ -28,81 +40,6 @@ def get_columns():
 	if _show_margin():
 		cols.append(_("Gross Margin") + ":Currency:120")
 	return cols
-
-
-def get_list_view_link(doctype, label, filters_dict):
-	"""Create a clickable link to list view with filters"""
-	from frappe.utils import get_url, getdate
-	import json
-	from urllib.parse import urlencode
-	
-	# Build route - Frappe list view format
-	doctype_slug = slug(doctype)
-	route = f"{doctype_slug}/view/list"
-	
-	# Build filters as query parameters
-	# Frappe list views expect date ranges in format: ["between", [date1, date2]]
-	query_params = {}
-	for key, value in filters_dict.items():
-		if value is not None and value != "":
-			if isinstance(value, list) and len(value) == 2:
-				# Date range: validate dates and format for Frappe
-				valid_dates = []
-				for date_val in value:
-					if date_val:
-						# Check string representation first to avoid getdate() error
-						date_str_check = str(date_val)
-						if date_str_check and not date_str_check.startswith("0000-") and date_str_check != "0000-01-01":
-							try:
-								# Validate date by trying to parse it
-								parsed_date = getdate(date_val)
-								# Check year is valid (not 0 or negative)
-								if parsed_date and parsed_date.year > 0:
-									date_str = parsed_date.strftime("%Y-%m-%d")
-									# Final check - ensure it's not invalid
-									if date_str and not date_str.startswith("0000-") and date_str != "0000-01-01" and date_str != "0000-01-01":
-										valid_dates.append(date_str)
-							except:
-								# Skip invalid dates
-								pass
-				# Only add date filter if we have exactly 2 valid dates
-				# Frappe expects: ["between", [date1, date2]] (lowercase "between")
-				if len(valid_dates) == 2:
-					# Final validation - ensure both dates are valid
-					date1, date2 = valid_dates[0], valid_dates[1]
-					if (date1 and date2 and 
-						not date1.startswith("0000-") and not date2.startswith("0000-") and
-						date1 != "0000-01-01" and date2 != "0000-01-01"):
-						query_params[key] = json.dumps(["between", valid_dates])
-			else:
-				# Single value: validate and pass as string
-				str_value = str(value)
-				# Check for invalid date strings BEFORE calling getdate()
-				if str_value and not str_value.startswith("0000-") and str_value != "0000-01-01":
-					# For date fields, try to validate
-					if key.endswith("_date") or key == "posting_date":
-						try:
-							parsed_date = getdate(str_value)
-							# Check year is valid (not 0 or negative)
-							if parsed_date and parsed_date.year > 0:
-								date_str = parsed_date.strftime("%Y-%m-%d")
-								if date_str and not date_str.startswith("0000-") and date_str != "0000-01-01":
-									query_params[key] = date_str
-						except:
-							# Skip invalid dates
-							pass
-					else:
-						query_params[key] = str_value
-	
-	# Build URL
-	if query_params:
-		# URL encode the query parameters properly
-		query_string = urlencode(query_params)
-		url = get_url(uri=f"/app/{route}?{query_string}")
-	else:
-		url = get_url(uri=f"/app/{route}")
-	
-	return f'<a href="{url}">{label}</a>'
 
 
 def get_report_link(label, report_type, from_date_str, to_date_str, company, cost_center):
@@ -122,311 +59,88 @@ def get_report_link(label, report_type, from_date_str, to_date_str, company, cos
 	return f'<a href="{url}">{label}</a>'
 
 
-def get_data(filters):
-	data = []
-	
-	if not filters.get("from_date") or not filters.get("to_date"):
-		frappe.throw(_("Please select From Date and To Date"))
-	
-	from_date = getdate(filters.get("from_date"))
-	to_date = getdate(filters.get("to_date"))
-	company = filters.get("company")
-	cost_center = filters.get("cost_center")
-	
-	# Get opening balance from previous day
-	opening_balance = get_opening_cash_balance(from_date, company, cost_center)
-	
-	# Initialize totals
-	cash_sales = 0
-	credit_sales = 0
-	vat_collected_cash = 0
-	vat_applied_credit = 0
-	sales_return_cash = 0
-	vat_refund_sales_return = 0
-	credit_purchase = 0
-	cash_received_credit_sales = 0
-	payments_petty_cash = 0
-	receipts_petty_cash = 0
-	total_discount_adj = 0
-	
-	# Get settled sales (paid on/before invoice date) split between Cash and Cheque
-	# by payment allocation, so split-payment invoices land in both rows proportionally
-	settled_split = get_settled_sales_split(from_date, to_date, company, cost_center)
+# ═══════════════════════════════════════════════════════════════════════════════
+# Settlement-based classification (shared with DCR Detail)
+#
+# Sales lines follow the money actually received ON/BEFORE the invoice date:
+#   Cash-type mode          → CASH SALES
+#   Cheque mode (for_pdc)   → CHEQUE SALES (even though MoP type is Bank)
+#   any other mode          → BANK SALES
+# The unsettled remainder → CREDIT SALES, or Home Credit when a driver is set.
+# Split payments land proportionally in each line.
+# ═══════════════════════════════════════════════════════════════════════════════
 
-	cash_sales_data = settled_split["cash"]
-	cash_sales_net = cash_sales_data.get("net_total", 0)
-	vat_collected_cash = cash_sales_data.get("vat_amount", 0)
-	# Include VAT in cash sales
-	cash_sales = cash_sales_net + vat_collected_cash
-	total_discount_adj += cash_sales_data.get("discount", 0)
+def _mode_is_cheque(alias):
+	"""SQL condition: the mode of payment on `alias` is a cheque/PDC mode.
+	Cheque modes are flagged for_pdc in Branch Configuration; name match is a
+	fallback for unconfigured modes."""
+	return (
+		"(EXISTS (SELECT 1 FROM `tabBranch Configuration Mode of Payment` {a}_pdc"
+		" WHERE {a}_pdc.mode_of_payment = {a}.mode_of_payment AND {a}_pdc.for_pdc = 1)"
+		" OR LOWER(COALESCE({a}.mode_of_payment, '')) LIKE '%%cheque%%'"
+		" OR LOWER(COALESCE({a}.mode_of_payment, '')) LIKE '%%chq%%')"
+	).format(a=alias)
 
-	cheque_sales_data = settled_split["cheque"]
-	cheque_sales_net = cheque_sales_data.get("net_total", 0)
-	vat_collected_cheque = cheque_sales_data.get("vat_amount", 0)
-	cheque_sales = cheque_sales_net + vat_collected_cheque
-	cheque_discount = cheque_sales_data.get("discount", 0)
 
-	# Get Credit Sales (Sales Invoices without immediate payment or with credit terms)
-	credit_sales_data = get_credit_sales(from_date, to_date, company, cost_center)
-	credit_sales_net = credit_sales_data.get("net_total", 0)
-	vat_applied_credit = credit_sales_data.get("vat_amount", 0)
-	# Include VAT in credit sales
-	credit_sales = credit_sales_net + vat_applied_credit
+def _settled_alloc_subquery(prefix, kind):
+	"""Amount settled against the invoice on/before its posting date via the given
+	kind of mode ('cash', 'bank' or 'cheque'), from Payment Entries plus the
+	invoice's own POS payment rows."""
+	p = prefix
+	pe_cheque = _mode_is_cheque(f"{p}_pe")
+	sip_cheque = _mode_is_cheque(f"{p}_sip")
+	if kind == "cash":
+		pe_mode = f"({p}_mop.type = 'Cash' AND NOT {pe_cheque})"
+		sip_mode = f"({p}_sipm.type = 'Cash' AND NOT {sip_cheque})"
+	elif kind == "bank":
+		pe_mode = f"(COALESCE({p}_mop.type, '') != 'Cash' AND NOT {pe_cheque})"
+		sip_mode = f"(COALESCE({p}_sipm.type, '') != 'Cash' AND NOT {sip_cheque})"
+	else:
+		pe_mode = pe_cheque
+		sip_mode = sip_cheque
+	return f"""((
+		SELECT COALESCE(SUM({p}_per.allocated_amount), 0)
+		FROM `tabPayment Entry Reference` {p}_per
+		INNER JOIN `tabPayment Entry` {p}_pe ON {p}_pe.name = {p}_per.parent AND {p}_pe.docstatus = 1 AND {p}_pe.payment_type = 'Receive'
+		LEFT JOIN `tabMode of Payment` {p}_mop ON {p}_mop.name = {p}_pe.mode_of_payment
+		WHERE {p}_per.reference_doctype = 'Sales Invoice' AND {p}_per.reference_name = si.name
+			AND {p}_pe.posting_date <= si.posting_date
+			AND {pe_mode}
+	) + (
+		SELECT COALESCE(SUM({p}_sip.base_amount), 0)
+		FROM `tabSales Invoice Payment` {p}_sip
+		LEFT JOIN `tabMode of Payment` {p}_sipm ON {p}_sipm.name = {p}_sip.mode_of_payment
+		WHERE {p}_sip.parent = si.name AND {p}_sip.parenttype = 'Sales Invoice'
+			AND {sip_mode}
+	))"""
 
-	# Get Home Credit (Delivery Person set, no payment entry received yet)
-	home_credit_data = get_home_credit_sales(from_date, to_date, company, cost_center)
-	home_credit_net = home_credit_data.get("net_total", 0)
-	vat_applied_home_credit = home_credit_data.get("vat_amount", 0)
-	home_credit_sales = home_credit_net + vat_applied_home_credit
-	
-	# Get Sales Return - Cash
-	sales_return_data = get_sales_returns_cash(from_date, to_date, company, cost_center)
-	sales_return_cash_net = sales_return_data.get("net_total", 0)
-	vat_refund_sales_return = sales_return_data.get("vat_amount", 0)
-	# Include VAT in sales return
-	sales_return_cash = sales_return_cash_net + vat_refund_sales_return
-	
-	# Get Credit Purchase (including VAT)
-	credit_purchase_data = get_credit_purchases(from_date, to_date, company, cost_center)
-	credit_purchase = credit_purchase_data.get("total_with_vat", 0)
-	
-	# Get Cash Received from Credit Sales (Payment Entries for Sales Invoices)
-	cash_received_credit_sales = get_cash_received_credit_sales(from_date, to_date, company, cost_center)
-	
-	# Get Cash Receipts from POS (only cash mode payments)
-	cash_receipts_pos = get_cash_receipts_from_pos(from_date, to_date, company, cost_center)
-	
-	# Get Petty Cash Payments and Receipts (based on Payment Entries)
-	petty_cash_data = get_petty_cash_transactions(from_date, to_date, company, cost_center)
-	payments_petty_cash = petty_cash_data.get("payments", 0)
-	receipts_petty_cash = petty_cash_data.get("receipts", 0)
-	
-	# Get Internal Transfer transactions affecting cash accounts
-	internal_transfer_data = get_internal_transfer_cash_transactions(from_date, to_date, company, cost_center)
-	cash_out_internal_transfer = internal_transfer_data.get("cash_out", 0)  # Cash transferred to bank
-	cash_in_internal_transfer = internal_transfer_data.get("cash_in", 0)  # Cash received from bank
-	
-	# Calculate Gross Margin for Cash Sales (use net amount, VAT is not part of margin)
-	gross_margin_cash = cash_sales_net - cash_sales_data.get("cost", 0)
 
-	# Calculate Gross Margin for Cheque Sales (use net amount, VAT is not part of margin)
-	gross_margin_cheque = cheque_sales_net - cheque_sales_data.get("cost", 0)
+SETTLED_CASH_ALLOC_SUBQUERY = _settled_alloc_subquery("sc", "cash")
+SETTLED_BANK_ALLOC_SUBQUERY = _settled_alloc_subquery("sb", "bank")
+SETTLED_CHEQUE_ALLOC_SUBQUERY = _settled_alloc_subquery("sq", "cheque")
 
-	# Calculate Gross Margin for Credit Sales (use net amount, VAT is not part of margin)
-	gross_margin_credit = credit_sales_net - credit_sales_data.get("cost", 0)
-
-	# Calculate Gross Margin for Home Credit (use net amount, VAT is not part of margin)
-	gross_margin_home_credit = home_credit_net - home_credit_data.get("cost", 0)
-	
-	# Build report data with clickable links (margin column only for System Manager)
-	def _row(particulars, income, expense, discount_adj, margin=0):
-		row = [particulars, income, expense, discount_adj]
-		if _show_margin():
-			row.append(margin)
-		return row
-
-	# Opening Cash Balance - no link (row 1 - bold)
-	data.append(_row("<b>Opening Cash Balance</b>", opening_balance, 0, 0, 0))
-	
-	# CASH SALES - link to Sales Invoice list filtered by cash payments
-	# Format dates safely - validate using Frappe's getdate
-	from_date_str = None
-	to_date_str = None
-	if from_date:
-		try:
-			# Check string representation first
-			from_date_check = str(from_date)
-			if from_date_check and not from_date_check.startswith("0000-") and from_date_check != "0000-01-01":
-				# Use Frappe's getdate to validate
-				valid_from = getdate(from_date)
-				# Check year is valid (not 0 or negative)
-				if valid_from and valid_from.year > 0:
-					from_date_str = valid_from.strftime("%Y-%m-%d")
-					# Final check
-					if from_date_str.startswith("0000-") or from_date_str == "0000-01-01":
-						from_date_str = None
-		except:
-			from_date_str = None
-	if to_date:
-		try:
-			# Check string representation first
-			to_date_check = str(to_date)
-			if to_date_check and not to_date_check.startswith("0000-") and to_date_check != "0000-01-01":
-				# Use Frappe's getdate to validate
-				valid_to = getdate(to_date)
-				# Check year is valid (not 0 or negative)
-				if valid_to and valid_to.year > 0:
-					to_date_str = valid_to.strftime("%Y-%m-%d")
-					# Final check
-					if to_date_str.startswith("0000-") or to_date_str == "0000-01-01":
-						to_date_str = None
-		except:
-			to_date_str = None
-	
-	data.append(_row(get_report_link("CASH SALES", "Cash Sales", from_date_str, to_date_str, company, cost_center), cash_sales, 0, -total_discount_adj, gross_margin_cash))
-
-	# CHEQUE SALES - link to DCR Detail report
-	data.append(_row(get_report_link("CHEQUE SALES", "Cheque Sales", from_date_str, to_date_str, company, cost_center), cheque_sales, 0, -cheque_discount, gross_margin_cheque))
-
-	# CREDIT SALES - link to DCR Detail report
-	data.append(_row(get_report_link("CREDIT SALES", "Credit Sales", from_date_str, to_date_str, company, cost_center), credit_sales, 0, 0, gross_margin_credit))
-
-	# Home Credit (Delivery Person set, payment not yet received) - link to DCR Detail report
-	data.append(_row(get_report_link("Home Credit (Delivery)", "Home Credit (Delivery)", from_date_str, to_date_str, company, cost_center), home_credit_sales, 0, 0, gross_margin_home_credit))
-
-	# Sales Return - Cash - link to DCR Detail report
-	data.append(_row(get_report_link("Sales Return - Cash", "Sales Return - Cash", from_date_str, to_date_str, company, cost_center), 0, sales_return_cash, 0, 0))
-
-	# VAT Collected on Cash Sales - link to DCR Detail report (same invoices as Cash Sales)
-	data.append(_row(get_report_link("VAT Collected on Cash Sales", "VAT Collected on Cash Sales", from_date_str, to_date_str, company, cost_center), vat_collected_cash, 0, 0, 0))
-
-	# VAT Collected on Cheque Sales - link to DCR Detail report (same invoices as Cheque Sales)
-	data.append(_row(get_report_link("VAT Collected on Cheque Sales", "VAT Collected on Cheque Sales", from_date_str, to_date_str, company, cost_center), vat_collected_cheque, 0, 0, 0))
-
-	# VAT Applied on Credit Sales - link to DCR Detail report
-	data.append(_row(get_report_link("VAT Applied on Credit Sales", "VAT Applied on Credit Sales", from_date_str, to_date_str, company, cost_center), vat_applied_credit, 0, 0, 0))
-
-	# VAT Applied on Home Credit - link to DCR Detail report (same invoices as Home Credit)
-	data.append(_row(get_report_link("VAT Applied on Home Credit", "VAT Applied on Home Credit", from_date_str, to_date_str, company, cost_center), vat_applied_home_credit, 0, 0, 0))
-
-	# VAT Refund on Sales Return - link to DCR Detail report
-	data.append(_row(get_report_link("VAT Refund on Sales Return", "VAT Refund on Sales Return", from_date_str, to_date_str, company, cost_center), 0, vat_refund_sales_return, 0, 0))
-
-	# Credit Purchase - link to DCR Detail report
-	data.append(_row(get_report_link("Credit Purchase - DIRECT PURCHASE", "Credit Purchase - DIRECT PURCHASE", from_date_str, to_date_str, company, cost_center), 0, credit_purchase, 0, 0))
-
-	# Cash Received : Credit Sales - link to DCR Detail report
-	data.append(_row(get_report_link("Cash Received : Credit Sales", "Cash Received : Credit Sales", from_date_str, to_date_str, company, cost_center), cash_received_credit_sales, 0, 0, 0))
-
-	# Payments-Petty Cash - link to DCR Detail report
-	data.append(_row(get_report_link("Payments-Petty Cash (Total Payments)", "Payments-Petty Cash (Total Payments)", from_date_str, to_date_str, company, cost_center), 0, payments_petty_cash, 0, 0))
-
-	# Total receipt petty cash (row 11 - bold)
-	total_receipt_petty_cash = cash_receipts_pos + cash_received_credit_sales
-	data.append(_row("<b>" + _("Total Receipt-Petty Cash") + "</b>", total_receipt_petty_cash, 0, 0, 0))
-
-	# Bank Sales (row 12 - bold) - link to DCR Detail (Bank Sales Receipts; user can change type for payments)
-	non_cash_data = get_non_cash_transactions(from_date, to_date, company, cost_center)
-	data.append(_row(
-		"<b>" + get_report_link(_("Bank Sales"), "Bank Sales Receipts", from_date_str, to_date_str, company, cost_center) + "</b>",
-		non_cash_data.get("receipts", 0),
-		non_cash_data.get("payments", 0),
-		0,
-		0
-	))
-	
-	# Calculate Cash Balance (only cash mode payments)
-	# Cash Balance = Opening Cash + Cash Receipts (cash mode only) - Cash Payments - Expenses - Internal Transfers (Cash Out) + Internal Transfers (Cash In)
-	# Note: Only cash mode payments are included in cash balance calculation
-	cash_balance = (
-		opening_balance
-		+ cash_receipts_pos  # Cash receipts from POS (cash mode only)
-		+ cash_received_credit_sales  # Cash received from credit sales (cash mode only)
-		- sales_return_cash  # Sales returns including VAT (expense)
-		- payments_petty_cash  # Petty cash payments (expense)
-		- cash_out_internal_transfer  # Cash transferred to bank (Internal Transfer)
-		+ cash_in_internal_transfer  # Cash received from bank (Internal Transfer)
+# Return that was actually refunded (money out) on/before the return's posting
+# date: a Pay-type Payment Entry against the return, or POS refund rows on it.
+# Follows the money on the return itself — the original invoice's settlement is
+# irrelevant (a refunded return is a cash return even if the sale was on credit).
+RETURN_REFUNDED_CONDITION = """(
+	EXISTS (
+		SELECT 1 FROM `tabPayment Entry Reference` ret_per
+		INNER JOIN `tabPayment Entry` ret_pe ON ret_pe.name = ret_per.parent AND ret_pe.docstatus = 1 AND ret_pe.payment_type = 'Pay'
+		WHERE ret_per.reference_doctype = 'Sales Invoice' AND ret_per.reference_name = si.name
+			AND ret_pe.posting_date <= si.posting_date
 	)
-	
-	# Cash Balance (row 13 - bold)
-	data.append(_row("<b>Cash Balance</b>", cash_balance, 0, 0, 0))
-
-	return data
-
-
-def get_opening_cash_balance(from_date, company, cost_center):
-	"""Get opening cash balance from previous day's closing balance"""
-	prev_date = add_days(from_date, -1)
-	
-	# Get all cash transactions up to previous day
-	conditions = "si.posting_date <= %(prev_date)s AND si.docstatus = 1"
-	if company:
-		conditions += " AND si.company = %(company)s"
-	
-	# Get Cash Receipts from POS for previous period (only cash mode payments)
-	cash_receipts_pos_prev = get_cash_receipts_from_pos(None, prev_date, company, cost_center)
-	
-	# Get sales returns
-	sales_return_data = get_sales_returns_cash(None, prev_date, company, cost_center)
-	sales_return_cash_net = sales_return_data.get("net_total", 0)
-	vat_refund_sales_return = sales_return_data.get("vat_amount", 0)
-	# Include VAT in sales return
-	sales_return_cash = sales_return_cash_net + vat_refund_sales_return
-	
-	# Get cash received from credit sales
-	cash_received_credit_sales = get_cash_received_credit_sales(None, prev_date, company, cost_center)
-	
-	# Get petty cash transactions
-	petty_cash_data = get_petty_cash_transactions(None, prev_date, company, cost_center)
-	payments_petty_cash = petty_cash_data.get("payments", 0)
-	receipts_petty_cash = petty_cash_data.get("receipts", 0)
-	
-	# Get Internal Transfer transactions affecting cash accounts (for opening balance)
-	internal_transfer_prev = get_internal_transfer_cash_transactions(None, prev_date, company, cost_center)
-	cash_out_internal_transfer_prev = internal_transfer_prev.get("cash_out", 0)
-	cash_in_internal_transfer_prev = internal_transfer_prev.get("cash_in", 0)
-	
-	# Calculate opening balance (only cash mode payments)
-	# Opening balance = Cash Receipts (cash mode only) - Cash Payments - Expenses - Internal Transfers (Cash Out) + Internal Transfers (Cash In)
-	# Note: Only cash mode payments are included in cash balance calculation
-	opening = (
-		cash_receipts_pos_prev  # Cash receipts from POS (cash mode only)
-		+ cash_received_credit_sales  # Cash received from credit sales (cash mode only)
-		- sales_return_cash  # Sales returns including VAT (expense)
-		- payments_petty_cash  # Petty cash payments (expense)
-		- cash_out_internal_transfer_prev  # Cash transferred to bank (Internal Transfer)
-		+ cash_in_internal_transfer_prev  # Cash received from bank (Internal Transfer)
+	OR EXISTS (
+		SELECT 1 FROM `tabSales Invoice Payment` ret_sip
+		WHERE ret_sip.parent = si.name AND ret_sip.parenttype = 'Sales Invoice'
+			AND ret_sip.base_amount != 0
 	)
-	
-	return flt(opening)
-
-
-# Invoice has a qualifying (on/before invoice date) Receive Payment Entry (any mode) = settled sale
-SETTLED_ON_TIME_CONDITION = """EXISTS (
-	SELECT 1 FROM `tabPayment Entry Reference` st_per
-	INNER JOIN `tabPayment Entry` st_pe ON st_pe.name = st_per.parent AND st_pe.docstatus = 1 AND st_pe.payment_type = 'Receive'
-	WHERE st_per.reference_doctype = 'Sales Invoice' AND st_per.reference_name = si.name
-		AND st_pe.posting_date <= si.posting_date
 )"""
 
-# Amount allocated to the invoice by qualifying (on/before invoice date) Cheque-mode Payment Entries
-CHEQUE_ALLOC_SUBQUERY = """(
-	SELECT COALESCE(SUM(chq_per.allocated_amount), 0)
-	FROM `tabPayment Entry Reference` chq_per
-	INNER JOIN `tabPayment Entry` chq_pe ON chq_pe.name = chq_per.parent AND chq_pe.docstatus = 1 AND chq_pe.payment_type = 'Receive'
-	INNER JOIN `tabMode of Payment` chq_mop ON chq_mop.name = chq_pe.mode_of_payment
-	WHERE chq_per.reference_doctype = 'Sales Invoice' AND chq_per.reference_name = si.name
-		AND chq_pe.posting_date <= si.posting_date
-		AND LOWER(chq_mop.name) LIKE '%%cheque%%'
-)"""
 
-# Amount allocated to the invoice by qualifying (on/before invoice date) non-Cheque Payment Entries
-OTHER_ALLOC_SUBQUERY = """(
-	SELECT COALESCE(SUM(oth_per.allocated_amount), 0)
-	FROM `tabPayment Entry Reference` oth_per
-	INNER JOIN `tabPayment Entry` oth_pe ON oth_pe.name = oth_per.parent AND oth_pe.docstatus = 1 AND oth_pe.payment_type = 'Receive'
-	LEFT JOIN `tabMode of Payment` oth_mop ON oth_mop.name = oth_pe.mode_of_payment
-	WHERE oth_per.reference_doctype = 'Sales Invoice' AND oth_per.reference_name = si.name
-		AND oth_pe.posting_date <= si.posting_date
-		AND (oth_mop.name IS NULL OR LOWER(oth_mop.name) NOT LIKE '%%cheque%%')
-)"""
-
-# Invoice has any submitted Receive Payment Entry (regardless of date)
-HAS_ANY_RECEIVE_PE_CONDITION = """EXISTS (
-	SELECT 1 FROM `tabPayment Entry Reference` any_per
-	INNER JOIN `tabPayment Entry` any_pe ON any_pe.name = any_per.parent AND any_pe.docstatus = 1 AND any_pe.payment_type = 'Receive'
-	WHERE any_per.reference_doctype = 'Sales Invoice' AND any_per.reference_name = si.name
-)"""
-
-# Home credit: Delivery Person selected on the invoice and no payment received yet
-HOME_CREDIT_CONDITION = "COALESCE(si.custom_driver, '') != '' AND NOT " + HAS_ANY_RECEIVE_PE_CONDITION
-
-
-def get_settled_sales_split(from_date, to_date, company, cost_center):
-	"""Get settled sales (Sales Invoices paid on/before invoice date) split between
-	Cash Sales and Cheque Sales by the payment allocation of each mode.
-	A split-payment invoice (e.g. 10 by Cheque + 1.5 by Cash) contributes its amounts
-	proportionally to both rows instead of being classified into a single one."""
+def get_invoices_with_settlement(from_date, to_date, company, cost_center):
+	"""All sales invoices in range with the amounts settled on/before the invoice
+	date per mode kind (cash/bank/cheque). Shared by the summary and DCR Detail."""
 	conditions = "si.docstatus = 1 AND si.is_return = 0"
 	if from_date:
 		conditions += " AND si.posting_date >= %(from_date)s"
@@ -435,135 +149,253 @@ def get_settled_sales_split(from_date, to_date, company, cost_center):
 	if company:
 		conditions += " AND si.company = %(company)s"
 	cost_center_condition = " AND sii.cost_center = %(cost_center)s" if cost_center else ""
-	result = frappe.db.sql("""
+	return frappe.db.sql("""
 		SELECT
 			si.name,
+			si.posting_date,
+			si.customer,
+			si.customer_name,
+			si.custom_driver,
 			si.base_net_total,
 			si.total_taxes_and_charges as vat_amount,
+			si.base_grand_total,
+			si.grand_total,
 			si.discount_amount as discount,
 			SUM(COALESCE(sii.incoming_rate, 0) * sii.stock_qty) as cost,
-			{cheque_alloc} as cheque_alloc,
-			{other_alloc} as other_alloc
+			{cash_alloc} as cash_alloc,
+			{bank_alloc} as bank_alloc,
+			{cheque_alloc} as cheque_alloc
 		FROM `tabSales Invoice` si
 		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
 		WHERE {conditions}
-			AND {settled_condition}
 			{cost_center_condition}
-		GROUP BY si.name, si.base_net_total, si.total_taxes_and_charges, si.discount_amount
-	""".format(conditions=conditions, settled_condition=SETTLED_ON_TIME_CONDITION,
-		cheque_alloc=CHEQUE_ALLOC_SUBQUERY, other_alloc=OTHER_ALLOC_SUBQUERY,
+		GROUP BY si.name, si.posting_date, si.customer, si.customer_name, si.custom_driver,
+			si.base_net_total, si.total_taxes_and_charges, si.base_grand_total, si.grand_total,
+			si.discount_amount
+		ORDER BY si.posting_date, si.name
+	""".format(cash_alloc=SETTLED_CASH_ALLOC_SUBQUERY, bank_alloc=SETTLED_BANK_ALLOC_SUBQUERY,
+		cheque_alloc=SETTLED_CHEQUE_ALLOC_SUBQUERY, conditions=conditions,
 		cost_center_condition=cost_center_condition), {
 		"from_date": from_date,
 		"to_date": to_date,
 		"company": company,
 		"cost_center": cost_center,
 	}, as_dict=True)
-	cash = {"net_total": 0, "vat_amount": 0, "discount": 0, "cost": 0}
-	cheque = {"net_total": 0, "vat_amount": 0, "discount": 0, "cost": 0}
-	for r in result:
-		total_alloc = flt(r.cheque_alloc) + flt(r.other_alloc)
-		cheque_share = flt(r.cheque_alloc) / total_alloc if total_alloc else 0
-		for key, value in (
-			("net_total", r.base_net_total),
-			("vat_amount", r.vat_amount),
-			("discount", r.discount),
-			("cost", r.cost),
-		):
-			cheque[key] += flt(value) * cheque_share
-			cash[key] += flt(value) * (1 - cheque_share)
-	return {"cash": cash, "cheque": cheque}
 
 
-def get_home_credit_sales(from_date, to_date, company, cost_center):
-	"""Get home credit sales: Sales Invoices with a Delivery Person (driver) selected
-	and NO Payment Entry received yet. Once a payment is received the invoice moves
-	to its respective row (Cash/Cheque/Credit Sales)."""
-	conditions = "si.docstatus = 1 AND si.is_return = 0"
-	if from_date:
-		conditions += " AND si.posting_date >= %(from_date)s"
-	if to_date:
-		conditions += " AND si.posting_date <= %(to_date)s"
+def split_invoice_settlement(r):
+	"""Split one invoice's grand total into settled cash/bank/cheque portions and
+	the unsettled remainder. Over-allocation (e.g. write-off riding on the last
+	Payment Entry) is scaled back so portions never exceed the invoice total."""
+	total = flt(r.base_grand_total)
+	if total <= 0:
+		return {"cash": 0, "bank": 0, "cheque": 0, "remainder": 0, "total": total}
+	cash, bank, cheque = flt(r.cash_alloc), flt(r.bank_alloc), flt(r.cheque_alloc)
+	settled = cash + bank + cheque
+	if settled > total:
+		factor = total / settled
+		cash, bank, cheque = cash * factor, bank * factor, cheque * factor
+		settled = total
+	remainder = total - settled
+	if remainder < 0.005:
+		remainder = 0
+	return {"cash": cash, "bank": bank, "cheque": cheque, "remainder": remainder, "total": total}
+
+
+def get_sales_buckets(from_date, to_date, company, cost_center):
+	"""Aggregate the per-invoice settlement splits into the report's sales rows."""
+	buckets = {
+		key: {"net_total": 0, "vat_amount": 0, "discount": 0, "cost": 0}
+		for key in ("cash", "bank", "cheque", "credit", "home_credit")
+	}
+	for r in get_invoices_with_settlement(from_date, to_date, company, cost_center):
+		s = split_invoice_settlement(r)
+		if s["total"] <= 0:
+			continue
+		remainder_bucket = "home_credit" if (r.custom_driver or "").strip() else "credit"
+		shares = {
+			"cash": s["cash"] / s["total"],
+			"bank": s["bank"] / s["total"],
+			"cheque": s["cheque"] / s["total"],
+			remainder_bucket: s["remainder"] / s["total"],
+		}
+		for bucket_key, share in shares.items():
+			if share <= 0:
+				continue
+			b = buckets[bucket_key]
+			b["net_total"] += flt(r.base_net_total) * share
+			b["vat_amount"] += flt(r.vat_amount) * share
+			b["discount"] += flt(r.discount) * share
+			b["cost"] += flt(r.cost) * share
+	return buckets
+
+
+def get_data(filters):
+	data = []
+
+	if not filters.get("from_date") or not filters.get("to_date"):
+		frappe.throw(_("Please select From Date and To Date"))
+
+	from_date = getdate(filters.get("from_date"))
+	to_date = getdate(filters.get("to_date"))
+	company = filters.get("company")
+	cost_center = enforce_user_cost_center(filters.get("cost_center"))
+
+	from_date_str = from_date.strftime("%Y-%m-%d")
+	to_date_str = to_date.strftime("%Y-%m-%d")
+
+	# Opening/Closing straight from the General Ledger cash accounts so both
+	# balances always tie to the branch petty cash ledger (Journal Entries,
+	# POS payments and Internal Transfers are included automatically)
+	opening_balance = get_gl_cash_balance(add_days(from_date, -1), company, cost_center)
+	closing_balance = get_gl_cash_balance(to_date, company, cost_center)
+
+	buckets = get_sales_buckets(from_date, to_date, company, cost_center)
+
+	def bucket_income(b):
+		return b["net_total"] + b["vat_amount"]
+
+	def bucket_margin(b):
+		return b["net_total"] - b["cost"]
+
+	cash_b = buckets["cash"]
+	bank_b = buckets["bank"]
+	cheque_b = buckets["cheque"]
+	credit_b = buckets["credit"]
+	home_b = buckets["home_credit"]
+
+	total_sales_income = sum(bucket_income(b) for b in buckets.values())
+	total_sales_margin = sum(bucket_margin(b) for b in buckets.values())
+	total_sales_discount = sum(b["discount"] for b in buckets.values())
+
+	sales_return_data = get_sales_returns(from_date, to_date, company, cost_center, refunded=True)
+	sales_return_cash = sales_return_data["net_total"] + sales_return_data["vat_amount"]
+
+	credit_return_data = get_sales_returns(from_date, to_date, company, cost_center, refunded=False)
+	credit_return_total = credit_return_data["net_total"] + credit_return_data["vat_amount"]
+
+	credit_purchase = get_credit_purchases(from_date, to_date, company, cost_center).get("total_with_vat", 0)
+
+	cash_received_credit_sales = get_cash_received_credit_sales(from_date, to_date, company, cost_center)
+	cash_receipts_pos = (
+		get_cash_receipts_from_pos(from_date, to_date, company, cost_center)
+		+ get_pos_cash_receipts(from_date, to_date, company, cost_center)
+	)
+
+	petty_cash_approved = get_petty_cash_payments(from_date, to_date, company, cost_center, docstatus=1)
+	petty_cash_unapproved = get_petty_cash_payments(from_date, to_date, company, cost_center, docstatus=0)
+
+	write_off_total = get_write_off_total(from_date, to_date, company, cost_center)
+
+	def _row(particulars, income, expense, discount_adj, margin=0):
+		row = [particulars, income, expense, discount_adj]
+		if _show_margin():
+			row.append(margin)
+		return row
+
+	def _link(label, report_type):
+		return get_report_link(label, report_type, from_date_str, to_date_str, company, cost_center)
+
+	data.append(_row("<b>" + _("Opening Cash Balance") + "</b>", opening_balance, 0, 0, 0))
+	data.append(_row("<b>" + _("Total Sales") + "</b>", total_sales_income, 0, -total_sales_discount, total_sales_margin))
+	data.append(_row(_link("CASH SALES", "Cash Sales"), bucket_income(cash_b), 0, -cash_b["discount"], bucket_margin(cash_b)))
+	data.append(_row(_link("BANK SALES", "Bank Sales"), bucket_income(bank_b), 0, -bank_b["discount"], bucket_margin(bank_b)))
+	data.append(_row(_link("CHEQUE SALES", "Cheque Sales"), bucket_income(cheque_b), 0, -cheque_b["discount"], bucket_margin(cheque_b)))
+	data.append(_row(_link("CREDIT SALES", "Credit Sales"), bucket_income(credit_b), credit_return_total, -credit_b["discount"], bucket_margin(credit_b)))
+	data.append(_row(_link("Home Credit (Delivery)", "Home Credit (Delivery)"), bucket_income(home_b), 0, -home_b["discount"], bucket_margin(home_b)))
+	data.append(_row(_link("Sales Return - Cash", "Sales Return - Cash"), 0, sales_return_cash, 0, 0))
+	data.append(_row(_link("VAT Collected on Cash Sales", "VAT Collected on Cash Sales"), cash_b["vat_amount"], 0, 0, 0))
+	data.append(_row(_link("VAT Collected on Bank Sales", "VAT Collected on Bank Sales"), bank_b["vat_amount"], 0, 0, 0))
+	data.append(_row(_link("VAT Collected on Cheque Sales", "VAT Collected on Cheque Sales"), cheque_b["vat_amount"], 0, 0, 0))
+	data.append(_row(_link("VAT Applied on Credit Sales", "VAT Applied on Credit Sales"), credit_b["vat_amount"], credit_return_data["vat_amount"], 0, 0))
+	data.append(_row(_link("VAT Applied on Home Credit", "VAT Applied on Home Credit"), home_b["vat_amount"], 0, 0, 0))
+	data.append(_row(_link("VAT Refund on Sales Return", "VAT Refund on Sales Return"), 0, sales_return_data["vat_amount"], 0, 0))
+	data.append(_row(_link("Loyalty / Write Off", "Loyalty / Write Off"), 0, write_off_total, 0, 0))
+	data.append(_row(_link("Credit Purchase - DIRECT PURCHASE", "Credit Purchase - DIRECT PURCHASE"), 0, credit_purchase, 0, 0))
+	data.append(_row(_link("Cash Received : Credit Sales", "Cash Received : Credit Sales"), cash_received_credit_sales, 0, 0, 0))
+	data.append(_row(_link("Payments-Petty Cash (Approved)", "Payments-Petty Cash (Approved)"), 0, petty_cash_approved, 0, 0))
+	data.append(_row(_link("Payments-Petty Cash (UnApproved)", "Payments-Petty Cash (UnApproved)"), 0, petty_cash_unapproved, 0, 0))
+	data.append(_row("<b>" + _("Total Receipt-Petty Cash") + "</b>", cash_receipts_pos + cash_received_credit_sales, 0, 0, 0))
+	data.append(_row("<b>" + _("Closing Cash Balance") + "</b>", closing_balance, 0, 0, 0))
+
+	return data
+
+
+def get_branch_petty_cash_accounts(company, cost_center):
+	"""Petty cash accounts of the branch(es) mapped to this cost center, derived
+	from Branch Configuration: the default account (per company) of the branch's
+	Cash-type Modes of Payment. Branches always have their own cash MoP, and its
+	default account is exactly where the payment popup posts the branch's cash."""
+	if not cost_center:
+		return []
+	conditions = "bcc.cost_center = %(cost_center)s AND COALESCE(mopa.default_account, '') != ''"
 	if company:
-		conditions += " AND si.company = %(company)s"
-	cost_center_condition = " AND sii.cost_center = %(cost_center)s" if cost_center else ""
-	result = frappe.db.sql("""
-		SELECT
-			si.name,
-			si.base_net_total,
-			si.total_taxes_and_charges as vat_amount,
-			SUM(COALESCE(sii.incoming_rate, 0) * sii.stock_qty) as cost
-		FROM `tabSales Invoice` si
-		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
+		conditions += " AND mopa.company = %(company)s AND (bc.company = %(company)s OR COALESCE(bc.company, '') = '')"
+	else:
+		conditions += " AND (mopa.company = bc.company OR COALESCE(bc.company, '') = '')"
+	rows = frappe.db.sql("""
+		SELECT DISTINCT mopa.default_account
+		FROM `tabBranch Configuration` bc
+		INNER JOIN `tabBranch Configuration Cost Center` bcc
+			ON bcc.parent = bc.name AND bcc.parenttype = 'Branch Configuration'
+		INNER JOIN `tabBranch Configuration Mode of Payment` bcm
+			ON bcm.parent = bc.name AND bcm.parenttype = 'Branch Configuration'
+		INNER JOIN `tabMode of Payment` mop ON mop.name = bcm.mode_of_payment AND mop.type = 'Cash'
+		INNER JOIN `tabMode of Payment Account` mopa ON mopa.parent = mop.name
 		WHERE {conditions}
-			AND {home_credit_condition}
-			{cost_center_condition}
-		GROUP BY si.name, si.base_net_total, si.total_taxes_and_charges
-	""".format(conditions=conditions, home_credit_condition=HOME_CREDIT_CONDITION, cost_center_condition=cost_center_condition), {
-		"from_date": from_date,
-		"to_date": to_date,
+	""".format(conditions=conditions), {"company": company, "cost_center": cost_center})
+	return [r[0] for r in rows]
+
+
+def get_gl_cash_balance(as_of_date, company, cost_center):
+	"""Opening/Closing Cash Balance from the General Ledger.
+
+	When the cost center maps to a branch with a Petty Cash Account configured
+	(Branch Configuration), the balance is that account's full GL balance with
+	NO cost center condition — the account is branch-specific by definition, so
+	journal entries with a wrong or missing cost center still count, and other
+	cash accounts that merely share the cost center are excluded.
+
+	Fallback (no Petty Cash Account configured, or no cost center filter):
+	all Cash-type accounts, filtered by cost center when given."""
+	petty_cash_accounts = get_branch_petty_cash_accounts(company, cost_center)
+
+	conditions = "gle.is_cancelled = 0 AND gle.posting_date <= %(as_of_date)s"
+	if company:
+		conditions += " AND gle.company = %(company)s"
+
+	params = {
+		"as_of_date": as_of_date,
 		"company": company,
 		"cost_center": cost_center,
-	}, as_dict=True)
-	if result:
-		return {
-			"net_total": sum(flt(r.base_net_total) for r in result),
-			"vat_amount": sum(flt(r.vat_amount or 0) for r in result),
-			"cost": sum(flt(r.cost or 0) for r in result),
-		}
-	return {"net_total": 0, "vat_amount": 0, "cost": 0}
+		"accounts": tuple(petty_cash_accounts) or ("",),
+	}
+
+	if petty_cash_accounts:
+		result = frappe.db.sql("""
+			SELECT COALESCE(SUM(gle.debit - gle.credit), 0) as balance
+			FROM `tabGL Entry` gle
+			WHERE {conditions}
+				AND gle.account IN %(accounts)s
+		""".format(conditions=conditions), params, as_dict=True)
+	else:
+		cost_center_condition = " AND gle.cost_center = %(cost_center)s" if cost_center else ""
+		result = frappe.db.sql("""
+			SELECT COALESCE(SUM(gle.debit - gle.credit), 0) as balance
+			FROM `tabGL Entry` gle
+			INNER JOIN `tabAccount` acc ON acc.name = gle.account
+			WHERE {conditions}
+				AND acc.account_type = 'Cash'
+				{cost_center_condition}
+		""".format(conditions=conditions, cost_center_condition=cost_center_condition), params, as_dict=True)
+	return flt(result[0].balance) if result else 0
 
 
-def get_credit_sales(from_date, to_date, company, cost_center):
-	"""Get credit sales: Sales Invoices that do NOT have a Payment Entry on the same day or before invoice date.
-	Credit sale = invoice not paid on/before invoice date (payment later or not yet).
-	Home Credit invoices (Delivery Person set, no payment yet) are excluded (shown separately)."""
-	conditions = "si.docstatus = 1 AND si.is_return = 0"
-	if from_date:
-		conditions += " AND si.posting_date >= %(from_date)s"
-	if to_date:
-		conditions += " AND si.posting_date <= %(to_date)s"
-	if company:
-		conditions += " AND si.company = %(company)s"
-	cost_center_condition = " AND sii.cost_center = %(cost_center)s" if cost_center else ""
-	# Exclude invoices that have any PE (Receive) with posting_date <= si.posting_date (those are cash sales)
-	result = frappe.db.sql("""
-		SELECT
-			si.name,
-			si.base_net_total,
-			si.total_taxes_and_charges as vat_amount,
-			SUM(COALESCE(sii.incoming_rate, 0) * sii.stock_qty) as cost
-		FROM `tabSales Invoice` si
-		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
-		WHERE {conditions}
-			AND NOT EXISTS (
-				SELECT 1 FROM `tabPayment Entry Reference` per
-				INNER JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1 AND pe.payment_type = 'Receive'
-				WHERE per.reference_doctype = 'Sales Invoice' AND per.reference_name = si.name
-				  AND pe.posting_date <= si.posting_date
-			)
-			AND NOT ({home_credit_condition})
-			{cost_center_condition}
-		GROUP BY si.name, si.base_net_total, si.total_taxes_and_charges
-	""".format(conditions=conditions, home_credit_condition=HOME_CREDIT_CONDITION, cost_center_condition=cost_center_condition), {
-		"from_date": from_date,
-		"to_date": to_date,
-		"company": company,
-		"cost_center": cost_center,
-	}, as_dict=True)
-	if result:
-		total_net = sum(flt(r.base_net_total) for r in result)
-		total_vat = sum(flt(r.vat_amount or 0) for r in result)
-		total_cost = sum(flt(r.cost or 0) for r in result)
-		return {
-			"net_total": total_net,
-			"vat_amount": total_vat,
-			"cost": total_cost,
-		}
-	return {"net_total": 0, "vat_amount": 0, "cost": 0}
-
-
-def get_sales_returns_cash(from_date, to_date, company, cost_center):
-	"""Get sales returns for cash sales (return against invoice that had payment on same day or before)."""
+def get_sales_returns(from_date, to_date, company, cost_center, refunded=True):
+	"""Sales returns split by what happened on the return itself: refunded
+	returns (money out by the return date) are cash returns (Sales Return - Cash
+	row); unrefunded returns only offset the customer's receivable and show as
+	expense on the CREDIT SALES row. Together the two cover every return."""
 	conditions = "si.docstatus = 1 AND si.is_return = 1"
 	if from_date:
 		conditions += " AND si.posting_date >= %(from_date)s"
@@ -572,19 +404,15 @@ def get_sales_returns_cash(from_date, to_date, company, cost_center):
 	if company:
 		conditions += " AND si.company = %(company)s"
 	cost_center_condition = " AND EXISTS (SELECT 1 FROM `tabSales Invoice Item` sii WHERE sii.parent = si.name AND sii.cost_center = %(cost_center)s)" if cost_center else ""
-	# Return is "cash" if the original invoice (return_against) has a PE with posting_date <= original's posting_date
+	return_condition = RETURN_REFUNDED_CONDITION if refunded else "NOT " + RETURN_REFUNDED_CONDITION
 	result = frappe.db.sql("""
 		SELECT SUM(ABS(si.base_net_total)) as net_total, SUM(ABS(si.total_taxes_and_charges)) as vat_amount
 		FROM `tabSales Invoice` si
 		WHERE {conditions}
-			AND EXISTS (
-				SELECT 1 FROM `tabSales Invoice` orig
-				INNER JOIN `tabPayment Entry Reference` per ON per.reference_doctype = 'Sales Invoice' AND per.reference_name = orig.name
-				INNER JOIN `tabPayment Entry` pe ON pe.name = per.parent AND pe.docstatus = 1 AND pe.payment_type = 'Receive'
-				WHERE orig.name = si.return_against AND orig.docstatus = 1 AND pe.posting_date <= orig.posting_date
-			)
+			AND {return_condition}
 			{cost_center_condition}
-	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+	""".format(conditions=conditions, return_condition=return_condition,
+		cost_center_condition=cost_center_condition), {
 		"from_date": from_date,
 		"to_date": to_date,
 		"company": company,
@@ -608,13 +436,13 @@ def get_credit_purchases(from_date, to_date, company, cost_center):
 		conditions += " AND pi.posting_date <= %(to_date)s"
 	if company:
 		conditions += " AND pi.company = %(company)s"
-	
+
 	cost_center_condition = ""
 	if cost_center:
 		cost_center_condition = " AND pii.cost_center = %(cost_center)s"
-	
+
 	result = frappe.db.sql("""
-		SELECT 
+		SELECT
 			SUM(pi.net_total) as net_total,
 			SUM(pi.total_taxes_and_charges) as vat_amount
 		FROM `tabPurchase Invoice` pi
@@ -628,11 +456,10 @@ def get_credit_purchases(from_date, to_date, company, cost_center):
 		"company": company,
 		"cost_center": cost_center
 	}, as_dict=True)
-	
+
 	if result:
 		total_net = sum([flt(r.net_total) for r in result if r.net_total])
 		total_vat = sum([flt(r.vat_amount) for r in result if r.vat_amount])
-		# Return total including VAT
 		total_with_vat = total_net + total_vat
 		return {
 			"net_total": total_net,
@@ -643,8 +470,8 @@ def get_credit_purchases(from_date, to_date, company, cost_center):
 
 
 def get_cash_receipts_from_pos(from_date, to_date, company, cost_center):
-	"""Get cash receipts from cash sales (Payment Entry Receive, Cash, where payment date <= invoice date).
-	Same-day or before payment = cash sale; sum received_amount for those PEs in the date range."""
+	"""Cash received (Payment Entry, Cash mode) on/before the invoice date —
+	the till receipts of same-day (cash) sales."""
 	conditions = "pe.docstatus = 1 AND pe.payment_type = 'Receive'"
 	if from_date:
 		conditions += " AND pe.posting_date >= %(from_date)s"
@@ -654,14 +481,45 @@ def get_cash_receipts_from_pos(from_date, to_date, company, cost_center):
 		conditions += " AND pe.company = %(company)s"
 	cost_center_condition = " AND pe.cost_center = %(cost_center)s" if cost_center else ""
 	result = frappe.db.sql("""
-		SELECT SUM(pe.received_amount) as amount
+		SELECT SUM(per.allocated_amount) as amount
 		FROM `tabPayment Entry` pe
 		INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
 		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
 		INNER JOIN `tabSales Invoice` si ON si.name = per.reference_name AND per.reference_doctype = 'Sales Invoice'
 		WHERE {conditions}
 			AND per.reference_doctype = 'Sales Invoice'
+			AND mop.type = 'Cash'
 			AND pe.posting_date <= si.posting_date
+			{cost_center_condition}
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
+		"from_date": from_date,
+		"to_date": to_date,
+		"company": company,
+		"cost_center": cost_center,
+	}, as_dict=True)
+	if result and result[0].amount:
+		return flt(result[0].amount)
+	return 0
+
+
+def get_pos_cash_receipts(from_date, to_date, company, cost_center):
+	"""Cash collected directly on POS-style invoices (rows in the invoice's own
+	payments table, Cash mode). These have no Payment Entry, so they are counted
+	here to keep the till receipts complete."""
+	conditions = "si.docstatus = 1 AND si.is_return = 0"
+	if from_date:
+		conditions += " AND si.posting_date >= %(from_date)s"
+	if to_date:
+		conditions += " AND si.posting_date <= %(to_date)s"
+	if company:
+		conditions += " AND si.company = %(company)s"
+	cost_center_condition = " AND EXISTS (SELECT 1 FROM `tabSales Invoice Item` sii WHERE sii.parent = si.name AND sii.cost_center = %(cost_center)s)" if cost_center else ""
+	result = frappe.db.sql("""
+		SELECT SUM(sip.base_amount) as amount
+		FROM `tabSales Invoice` si
+		INNER JOIN `tabSales Invoice Payment` sip ON sip.parent = si.name
+		INNER JOIN `tabMode of Payment` mop ON mop.name = sip.mode_of_payment
+		WHERE {conditions}
 			AND mop.type = 'Cash'
 			{cost_center_condition}
 	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
@@ -676,8 +534,8 @@ def get_cash_receipts_from_pos(from_date, to_date, company, cost_center):
 
 
 def get_cash_received_credit_sales(from_date, to_date, company, cost_center):
-	"""Get cash received against credit sales only.
-	Count Payment Entries (Receive, Cash) where payment date is AFTER invoice date (collecting on credit)."""
+	"""Cash received (Payment Entry, Cash mode) after the invoice date —
+	collections against credit and home-credit sales."""
 	conditions = "pe.docstatus = 1 AND pe.payment_type = 'Receive'"
 	if from_date:
 		conditions += " AND pe.posting_date >= %(from_date)s"
@@ -686,7 +544,6 @@ def get_cash_received_credit_sales(from_date, to_date, company, cost_center):
 	if company:
 		conditions += " AND pe.company = %(company)s"
 	cost_center_condition = " AND pe.cost_center = %(cost_center)s" if cost_center else ""
-	# Only Sales Invoice refs where si.posting_date < pe.posting_date (payment after invoice = credit collection)
 	result = frappe.db.sql("""
 		SELECT SUM(per.allocated_amount) as amount
 		FROM `tabPayment Entry` pe
@@ -695,8 +552,8 @@ def get_cash_received_credit_sales(from_date, to_date, company, cost_center):
 		INNER JOIN `tabSales Invoice` si ON si.name = per.reference_name AND per.reference_doctype = 'Sales Invoice'
 		WHERE {conditions}
 			AND per.reference_doctype = 'Sales Invoice'
-			AND si.posting_date < pe.posting_date
 			AND mop.type = 'Cash'
+			AND si.posting_date < pe.posting_date
 			{cost_center_condition}
 	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
 		"from_date": from_date,
@@ -709,27 +566,29 @@ def get_cash_received_credit_sales(from_date, to_date, company, cost_center):
 	return 0
 
 
-def get_petty_cash_transactions(from_date, to_date, company, cost_center):
-	"""Get petty cash payments and receipts
-	Payments: Payment Entry (Pay) + Purchase Invoice (is_paid=1) with Cash mode
-	Receipts: Payment Entry (Receive) + Sales Invoice payments with Cash mode"""
-	
-	conditions = "pe.docstatus = 1"
+def get_petty_cash_payments(from_date, to_date, company, cost_center, docstatus=1):
+	"""Petty cash payments: Payment Entry (Pay, Cash mode, against PI/PO) plus
+	paid Purchase Invoices (is_paid, Cash mode).
+	docstatus 1 = approved (submitted), 0 = unapproved (draft/pending)."""
+	conditions = "pe.docstatus = %(docstatus)s"
 	if from_date:
 		conditions += " AND pe.posting_date >= %(from_date)s"
 	if to_date:
 		conditions += " AND pe.posting_date <= %(to_date)s"
 	if company:
 		conditions += " AND pe.company = %(company)s"
-	
-	cost_center_condition = ""
-	if cost_center:
-		cost_center_condition = " AND pe.cost_center = %(cost_center)s"
-	
-	# Get Payments from Payment Entry (Pay against Purchase Invoice/Purchase Order)
+	cost_center_condition = " AND pe.cost_center = %(cost_center)s" if cost_center else ""
+
+	params = {
+		"from_date": from_date,
+		"to_date": to_date,
+		"company": company,
+		"cost_center": cost_center,
+		"docstatus": docstatus,
+	}
+
 	payments_pe_result = frappe.db.sql("""
-		SELECT 
-			SUM(pe.paid_amount) as amount
+		SELECT SUM(pe.paid_amount) as amount
 		FROM `tabPayment Entry` pe
 		INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
 		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
@@ -738,218 +597,55 @@ def get_petty_cash_transactions(from_date, to_date, company, cost_center):
 			AND per.reference_doctype IN ('Purchase Invoice', 'Purchase Order')
 			AND mop.type = 'Cash'
 			{cost_center_condition}
-	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
-		"from_date": from_date,
-		"to_date": to_date,
-		"company": company,
-		"cost_center": cost_center
-	}, as_dict=True)
-	
-	# Get Payments from Purchase Invoice (is_paid=1 with Cash mode)
-	pi_conditions = "pi.docstatus = 1 AND pi.is_paid = 1"
+	""".format(conditions=conditions, cost_center_condition=cost_center_condition), params, as_dict=True)
+
+	pi_conditions = "pi.docstatus = %(docstatus)s AND pi.is_paid = 1"
 	if from_date:
 		pi_conditions += " AND pi.posting_date >= %(from_date)s"
 	if to_date:
 		pi_conditions += " AND pi.posting_date <= %(to_date)s"
 	if company:
 		pi_conditions += " AND pi.company = %(company)s"
-	
-	pi_cost_center_condition = ""
-	if cost_center:
-		pi_cost_center_condition = " AND pi.cost_center = %(cost_center)s"
-	
+	pi_cost_center_condition = " AND pi.cost_center = %(cost_center)s" if cost_center else ""
+
 	payments_pi_result = frappe.db.sql("""
-		SELECT 
-			SUM(pi.base_paid_amount) as amount
+		SELECT SUM(pi.base_paid_amount) as amount
 		FROM `tabPurchase Invoice` pi
 		INNER JOIN `tabMode of Payment` mop ON mop.name = pi.mode_of_payment
 		WHERE {conditions}
 			AND mop.type = 'Cash'
 			{cost_center_condition}
-	""".format(conditions=pi_conditions, cost_center_condition=pi_cost_center_condition), {
-		"from_date": from_date,
-		"to_date": to_date,
-		"company": company,
-		"cost_center": cost_center
-	}, as_dict=True)
-	
-	# Get Receipts from Payment Entry (Receive against Sales Invoice/Sales Order)
-	receipts_pe_result = frappe.db.sql("""
-		SELECT 
-			SUM(pe.received_amount) as amount
-		FROM `tabPayment Entry` pe
-		INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
-		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
-		WHERE {conditions}
-			AND pe.payment_type = 'Receive'
-			AND per.reference_doctype IN ('Sales Invoice', 'Sales Order')
-			AND mop.type = 'Cash'
-			{cost_center_condition}
-	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
-		"from_date": from_date,
-		"to_date": to_date,
-		"company": company,
-		"cost_center": cost_center
-	}, as_dict=True)
-	
-	# Don't count Sales Invoice Payment in receipts because:
-	# 1. Cash sales (with Sales Invoice Payment) are already counted as income in "CASH SALES"
-	# 2. Credit sales paid later are counted via Payment Entry
-	# So Sales Invoice Payment would cause double counting
-	
-	# Sum all payments
+	""".format(conditions=pi_conditions, cost_center_condition=pi_cost_center_condition), params, as_dict=True)
+
 	payments_pe = flt(payments_pe_result[0].amount) if payments_pe_result and payments_pe_result[0].amount else 0
 	payments_pi = flt(payments_pi_result[0].amount) if payments_pi_result and payments_pi_result[0].amount else 0
-	payments = payments_pe + payments_pi
-	
-	# Sum all receipts (only Payment Entry, not Sales Invoice Payment)
-	receipts_pe = flt(receipts_pe_result[0].amount) if receipts_pe_result and receipts_pe_result[0].amount else 0
-	receipts = receipts_pe
-	
-	return {
-		"payments": payments,
-		"receipts": receipts,
-		"unposted_payments": 0
-	}
+	return payments_pe + payments_pi
 
 
-def get_internal_transfer_cash_transactions(from_date, to_date, company, cost_center):
-	"""Get Internal Transfer Payment Entries affecting cash accounts
-	Cash Out: Internal Transfer where paid_from is Cash account (cash transferred to bank)
-	Cash In: Internal Transfer where paid_to is Cash account (cash received from bank)"""
-	
-	conditions = "pe.docstatus = 1 AND pe.payment_type = 'Internal Transfer'"
+def get_write_off_total(from_date, to_date, company, cost_center):
+	"""Loyalty / small-balance write-off: Payment Entry deduction rows booked to
+	the company's Write Off Account (the payment popup and the PE form's
+	'Write Off Difference Amount' button both create these)."""
+	conditions = "pe.docstatus = 1 AND pe.payment_type = 'Receive'"
 	if from_date:
 		conditions += " AND pe.posting_date >= %(from_date)s"
 	if to_date:
 		conditions += " AND pe.posting_date <= %(to_date)s"
 	if company:
 		conditions += " AND pe.company = %(company)s"
-	
-	cost_center_condition = ""
-	if cost_center:
-		cost_center_condition = " AND pe.cost_center = %(cost_center)s"
-	
-	# Get Cash Out: Internal Transfer where paid_from is Cash account
-	cash_out_result = frappe.db.sql("""
-		SELECT 
-			SUM(pe.paid_amount) as amount
-		FROM `tabPayment Entry` pe
-		INNER JOIN `tabAccount` acc_from ON acc_from.name = pe.paid_from
+	cost_center_condition = " AND COALESCE(ded.cost_center, pe.cost_center) = %(cost_center)s" if cost_center else ""
+	result = frappe.db.sql("""
+		SELECT COALESCE(SUM(ded.amount), 0) as amount
+		FROM `tabPayment Entry Deduction` ded
+		INNER JOIN `tabPayment Entry` pe ON pe.name = ded.parent
+		INNER JOIN `tabCompany` c ON c.name = pe.company
 		WHERE {conditions}
-			AND acc_from.account_type = 'Cash'
+			AND ded.account = c.write_off_account
 			{cost_center_condition}
 	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
 		"from_date": from_date,
 		"to_date": to_date,
 		"company": company,
-		"cost_center": cost_center
+		"cost_center": cost_center,
 	}, as_dict=True)
-	
-	# Get Cash In: Internal Transfer where paid_to is Cash account
-	cash_in_result = frappe.db.sql("""
-		SELECT 
-			SUM(pe.received_amount) as amount
-		FROM `tabPayment Entry` pe
-		INNER JOIN `tabAccount` acc_to ON acc_to.name = pe.paid_to
-		WHERE {conditions}
-			AND acc_to.account_type = 'Cash'
-			{cost_center_condition}
-	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
-		"from_date": from_date,
-		"to_date": to_date,
-		"company": company,
-		"cost_center": cost_center
-	}, as_dict=True)
-	
-	cash_out = flt(cash_out_result[0].amount) if cash_out_result and cash_out_result[0].amount else 0
-	cash_in = flt(cash_in_result[0].amount) if cash_in_result and cash_in_result[0].amount else 0
-	
-	return {
-		"cash_out": cash_out,
-		"cash_in": cash_in
-	}
-
-
-def get_non_cash_transactions(from_date, to_date, company, cost_center):
-	"""Get all transactions where Mode of Payment type is NOT 'Cash' (i.e. goes to/from bank).
-	Returns receipts (income to bank) and payments (expense from bank)."""
-	conditions_pe = "pe.docstatus = 1"
-	if from_date:
-		conditions_pe += " AND pe.posting_date >= %(from_date)s"
-	if to_date:
-		conditions_pe += " AND pe.posting_date <= %(to_date)s"
-	if company:
-		conditions_pe += " AND pe.company = %(company)s"
-	cost_center_condition = " AND pe.cost_center = %(cost_center)s" if cost_center else ""
-
-	params = {"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center}
-
-	# Non-cash receipts: Payment Entry (Receive) where mop.type != 'Cash'
-	receipts_pe = frappe.db.sql("""
-		SELECT SUM(pe.received_amount) as amount
-		FROM `tabPayment Entry` pe
-		INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
-		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
-		WHERE {conditions}
-			AND pe.payment_type = 'Receive'
-			AND per.reference_doctype IN ('Sales Invoice', 'Sales Order')
-			AND (mop.type IS NULL OR mop.type != 'Cash')
-			{cost_center_condition}
-	""".format(conditions=conditions_pe, cost_center_condition=cost_center_condition), params, as_dict=True)
-
-	# Non-cash receipts: Sales Invoice Payment where mop.type != 'Cash'
-	conditions_si = "si.docstatus = 1 AND si.is_return = 0"
-	if from_date:
-		conditions_si += " AND si.posting_date >= %(from_date)s"
-	if to_date:
-		conditions_si += " AND si.posting_date <= %(to_date)s"
-	if company:
-		conditions_si += " AND si.company = %(company)s"
-	si_cost_condition = ""
-	if cost_center:
-		si_cost_condition = " AND EXISTS (SELECT 1 FROM `tabSales Invoice Item` sii WHERE sii.parent = si.name AND sii.cost_center = %(cost_center)s)"
-
-	receipts_si = frappe.db.sql("""
-		SELECT SUM(sip.base_amount) as amount
-		FROM `tabSales Invoice` si
-		INNER JOIN `tabSales Invoice Payment` sip ON sip.parent = si.name
-		INNER JOIN `tabMode of Payment` mop ON mop.name = sip.mode_of_payment
-		WHERE {conditions}
-			AND (mop.type IS NULL OR mop.type != 'Cash')
-			{si_cost_condition}
-	""".format(conditions=conditions_si, si_cost_condition=si_cost_condition), params, as_dict=True)
-
-	# Non-cash payments: Payment Entry (Pay) where mop.type != 'Cash'
-	payments_pe = frappe.db.sql("""
-		SELECT SUM(pe.paid_amount) as amount
-		FROM `tabPayment Entry` pe
-		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
-		WHERE {conditions}
-			AND pe.payment_type = 'Pay'
-			AND (mop.type IS NULL OR mop.type != 'Cash')
-			{cost_center_condition}
-	""".format(conditions=conditions_pe, cost_center_condition=cost_center_condition), params, as_dict=True)
-
-	# Non-cash payments: Purchase Invoice (is_paid) where mop.type != 'Cash'
-	pi_conditions = "pi.docstatus = 1 AND pi.is_paid = 1"
-	if from_date:
-		pi_conditions += " AND pi.posting_date >= %(from_date)s"
-	if to_date:
-		pi_conditions += " AND pi.posting_date <= %(to_date)s"
-	if company:
-		pi_conditions += " AND pi.company = %(company)s"
-	pi_cost_condition = " AND pi.cost_center = %(cost_center)s" if cost_center else ""
-	payments_pi = frappe.db.sql("""
-		SELECT SUM(pi.base_paid_amount) as amount
-		FROM `tabPurchase Invoice` pi
-		INNER JOIN `tabMode of Payment` mop ON mop.name = pi.mode_of_payment
-		WHERE {conditions}
-			AND (mop.type IS NULL OR mop.type != 'Cash')
-			{pi_cost_condition}
-	""".format(conditions=pi_conditions, pi_cost_condition=pi_cost_condition), params, as_dict=True)
-
-	receipts = flt(receipts_pe[0].amount if receipts_pe and receipts_pe[0].amount else 0) + flt(receipts_si[0].amount if receipts_si and receipts_si[0].amount else 0)
-	payments = flt(payments_pe[0].amount if payments_pe and payments_pe[0].amount else 0) + flt(payments_pi[0].amount if payments_pi and payments_pi[0].amount else 0)
-
-	return {"receipts": receipts, "payments": payments}
+	return flt(result[0].amount) if result else 0
