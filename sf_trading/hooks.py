@@ -382,6 +382,7 @@ fixtures = [
 				(
 					"Company-custom_print_formats",
 					"Company-custom_delivery_note_print_format",
+					"Company-custom_max_payment_write_off",
 					"Customer Credit Limit-custom_credit_days",
 					"Customer-custom_commercial_registration_number",
 					"Sales Invoice-inter_company_branch",

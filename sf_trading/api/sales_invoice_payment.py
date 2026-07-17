@@ -192,6 +192,7 @@ def create_pos_payments_for_invoice(
 	cheque_date: str = None,
 	cheque_no: str = None,
 	posting_date: str = None,
+	write_off_amount: float | str = 0,
 ):
 	"""
 	Create Payment Entry records for a submitted POS Sales Invoice, one per mode of payment.
@@ -203,6 +204,11 @@ def create_pos_payments_for_invoice(
 		posting_date: Payment Entry posting and reference date; defaults to the
 			invoice's posting date (submit-time collection). The Receive Payment
 			flow passes the actual payment date.
+		write_off_amount: Small unpaid balance to book as a deduction on the
+			last Payment Entry (same mechanism as the PE form's "Write Off
+			Difference Amount" button). Uses the Company's Write Off Account,
+			capped by the Company's Max Payment Write Off, cost center from the
+			invoice (fallback: company default).
 
 	Returns:
 		List of created Payment Entry names.
@@ -242,6 +248,42 @@ def create_pos_payments_for_invoice(
 	if not valid_rows:
 		frappe.throw(_("No valid payment rows found (non-zero amounts with mode of payment)."))
 
+	# Write-off: validate limit and resolve account/cost center up front,
+	# before any Payment Entry is created.
+	write_off_amount = flt(write_off_amount)
+	if write_off_amount < 0:
+		frappe.throw(_("Write off amount cannot be negative."))
+	write_off_account = None
+	write_off_cost_center = None
+	if write_off_amount > 0:
+		if si.is_return:
+			frappe.throw(_("Write off is not allowed on return invoices."))
+		company_defaults = frappe.db.get_value(
+			"Company",
+			si.company,
+			["write_off_account", "custom_max_payment_write_off", "cost_center"],
+			as_dict=True,
+		)
+		max_write_off = flt(company_defaults.custom_max_payment_write_off)
+		if not max_write_off:
+			frappe.throw(
+				_("Set 'Max Payment Write Off' on company {0} to allow write off in payments.").format(si.company)
+			)
+		if write_off_amount - max_write_off > 0.0001:
+			frappe.throw(
+				_("Write off amount {0} exceeds the company limit of {1}.").format(
+					write_off_amount, max_write_off
+				)
+			)
+		write_off_account = company_defaults.write_off_account
+		if not write_off_account:
+			frappe.throw(_("Set 'Write Off Account' on company {0}.").format(si.company))
+		write_off_cost_center = si.get("cost_center") or company_defaults.cost_center
+		if not write_off_cost_center:
+			frappe.throw(
+				_("Set a Cost Center on the invoice or a default Cost Center on company {0}.").format(si.company)
+			)
+
 	created = []
 
 	from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
@@ -250,7 +292,7 @@ def create_pos_payments_for_invoice(
 	number_format = frappe.db.get_value("Currency", si.currency, "number_format") or "#,###.##"
 	currency_precision = len(number_format.split(".")[-1]) if "." in number_format else 0
 
-	for row in valid_rows:
+	for idx, row in enumerate(valid_rows):
 		# Reload invoice each time so outstanding is up to date after previous payments
 		si.reload()
 		outstanding = frappe.utils.flt(si.outstanding_amount, currency_precision)
@@ -259,11 +301,15 @@ def create_pos_payments_for_invoice(
 		if amount <= 0:
 			continue
 
-		if amount - abs(outstanding) > 0.0001:
+		# The write-off rides on the last Payment Entry: it allocates
+		# payment + write-off against the invoice, balanced by a deduction row.
+		row_write_off = write_off_amount if idx == len(valid_rows) - 1 else 0
+
+		if amount + row_write_off - abs(outstanding) > 0.0001:
 			frappe.throw(
 				_(
-					"Payment amount {0} is greater than outstanding amount {1} for invoice {2}."
-				).format(amount, outstanding, si.name)
+					"Payment amount {0} plus write off is greater than outstanding amount {1} for invoice {2}."
+				).format(amount + row_write_off, outstanding, si.name)
 			)
 
 		pe = get_payment_entry("Sales Invoice", si.name)
@@ -302,10 +348,25 @@ def create_pos_payments_for_invoice(
 			effective_amount = min(amount, abs(ref_outstanding))
 			pe.paid_amount = effective_amount
 			pe.received_amount = effective_amount
-			ref.allocated_amount = -effective_amount if pe.payment_type == "Pay" else effective_amount
+			allocated = min(effective_amount + row_write_off, abs(ref_outstanding))
+			ref.allocated_amount = -allocated if pe.payment_type == "Pay" else allocated
 		else:
+			if row_write_off:
+				frappe.throw(
+					_("Cannot apply write off: no outstanding reference found for invoice {0}.").format(si.name)
+				)
 			pe.paid_amount = amount
 			pe.received_amount = amount
+
+		if row_write_off:
+			pe.append(
+				"deductions",
+				{
+					"account": write_off_account,
+					"cost_center": write_off_cost_center,
+					"amount": row_write_off,
+				},
+			)
 
 		# PDC: posting date = invoice date; reference date = future cheque date
 		if cheque_date:

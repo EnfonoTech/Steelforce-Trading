@@ -893,9 +893,45 @@ function sf_trading_render_dialog(frm) {
 			{ fieldtype: "Section Break", fieldname: "row_" + idx, label: "", hide_border: 1 },
 			{ fieldname: "pay_" + idx, fieldtype: "Currency", label: mode, default: payment.amount || 0, options: "currency", precision: curr_precision },
 			{ fieldtype: "Column Break", fieldname: "cb_" + idx },
-			{ fieldtype: "Button", fieldname: "fill_" + idx, label: mode, click: (function(fi) { return function() { payments.forEach(function(_, i) { d.set_value("pay_" + i, i === idx ? invoice_total : 0); }); }; })("pay_" + idx) }
+			{ fieldtype: "Button", fieldname: "fill_" + idx, label: mode, click: (function(fi) { return function() { payments.forEach(function(_, i) { d.set_value("pay_" + i, i === idx ? invoice_total : 0); }); if (allow_write_off) d.set_value("write_off", 0); }; })("pay_" + idx) }
 		);
 	});
+
+	// Loyalty / small balance write-off: books the unpaid remainder as a
+	// deduction on the last Payment Entry so the invoice closes fully paid.
+	const allow_write_off = !frm.doc.is_return;
+	let wo_config = null;
+	if (allow_write_off) {
+		frappe.db.get_value("Company", frm.doc.company, ["write_off_account", "custom_max_payment_write_off"])
+			.then(function(r) { wo_config = (r && r.message) || {}; });
+		fields.push(
+			{ fieldtype: "Section Break", fieldname: "row_wo", label: "", hide_border: 1 },
+			{ fieldname: "write_off", fieldtype: "Currency", label: __("Write Off"), default: 0, options: "currency", precision: curr_precision },
+			{ fieldtype: "Column Break", fieldname: "cb_wo" }
+		);
+	}
+
+	function validate_write_off(write_off) {
+		if (write_off < 0) {
+			frappe.msgprint({ title: __("Error"), message: __("Write off amount cannot be negative."), indicator: "red" });
+			return false;
+		}
+		if (!write_off) return true;
+		if (!wo_config || !wo_config.write_off_account) {
+			frappe.msgprint({ title: __("Write Off Not Configured"), message: __("Set 'Write Off Account' on company {0}.", [frm.doc.company]), indicator: "red" });
+			return false;
+		}
+		const wo_limit = flt(wo_config.custom_max_payment_write_off);
+		if (!wo_limit) {
+			frappe.msgprint({ title: __("Write Off Not Configured"), message: __("Set 'Max Payment Write Off' on company {0} to allow write off in payments.", [frm.doc.company]), indicator: "red" });
+			return false;
+		}
+		if (write_off - wo_limit > 0.0001) {
+			frappe.msgprint({ title: __("Write Off Limit Exceeded"), message: __("Write off amount {0} exceeds the company limit of {1}.", [format_currency(write_off, currency), format_currency(wo_limit, currency)]), indicator: "red" });
+			return false;
+		}
+		return true;
+	}
 
 	function apply_payments_and_close(vals, submit) {
 		if (!vals) { frappe.msgprint({ title: __("Error"), message: __("Please enter payment amounts."), indicator: "red" }); return; }
@@ -906,7 +942,9 @@ function sf_trading_render_dialog(frm) {
 			if (amt > 0) { payload.push({ mode_of_payment: p.mode_of_payment, amount: amt }); total += amt; }
 		});
 		if (!payload.length) { frappe.msgprint({ title: __("Error"), message: __("Please enter at least one payment amount."), indicator: "red" }); return; }
-		const total_rounded = flt(total, curr_precision);
+		const write_off = allow_write_off ? flt(vals.write_off) || 0 : 0;
+		if (!validate_write_off(write_off)) return;
+		const total_rounded = flt(total + write_off, curr_precision);
 		if (total_rounded - invoice_total > 0.0001) { frappe.msgprint({ title: __("Error"), message: __("Total payment amount {0} cannot be greater than amount to pay {1}.", [format_currency(total_rounded, currency), format_currency(invoice_total, currency)]), indicator: "red" }); return; }
 		if (invoice_total - total_rounded > 0.0001) { frappe.msgprint({ title: __("Incomplete"), message: __("{0} still to be allocated", [format_currency(invoice_total - total_rounded, currency)]), indicator: "red" }); return; }
 
@@ -919,7 +957,7 @@ function sf_trading_render_dialog(frm) {
 			d.hide(); frappe.flags.sf_trading_popup_showing = false;
 			frappe.call({
 				method: "sf_trading.api.sales_invoice_payment.create_pos_payments_for_invoice",
-				args: { sales_invoice: frm.doc.name, payments: JSON.stringify(payload), posting_date: is_registering ? frappe.datetime.get_today() : undefined },
+				args: { sales_invoice: frm.doc.name, payments: JSON.stringify(payload), posting_date: is_registering ? frappe.datetime.get_today() : undefined, write_off_amount: write_off || undefined },
 				freeze: true, freeze_message: __("Creating payments..."),
 				callback: function(r) {
 					if (r && r.message && r.message.length) { frappe.show_alert({ message: __("Created {0} Payment Entries for this invoice", [r.message.length]), indicator: "green" }, 5); frm.reload_doc(); }
@@ -968,11 +1006,18 @@ function sf_trading_render_dialog(frm) {
 			const field = d.fields_dict["pay_" + idx];
 			if (!field || !field.$wrapper) return;
 			field.$wrapper.find("input").off("click.sf_fill_balance").on("click.sf_fill_balance", function() {
-				let other = 0;
+				let other = allow_write_off ? flt(d.get_value("write_off")) || 0 : 0;
 				payments.forEach(function(__, i) { if (i !== idx) other += flt(d.get_value("pay_" + i)) || 0; });
 				d.set_value("pay_" + idx, Math.max(0, flt(invoice_total - other)));
 			});
 		});
+		if (allow_write_off && d.fields_dict.write_off && d.fields_dict.write_off.$wrapper) {
+			d.fields_dict.write_off.$wrapper.find("input").off("click.sf_fill_balance").on("click.sf_fill_balance", function() {
+				let other = 0;
+				payments.forEach(function(__, i) { other += flt(d.get_value("pay_" + i)) || 0; });
+				d.set_value("write_off", Math.max(0, flt(invoice_total - other)));
+			});
+		}
 	});
 }
 
@@ -1011,11 +1056,41 @@ function sf_trading_show_pdc_popup(frm) {
 		error: function() { frappe.flags.sf_trading_popup_showing = false; frappe.msgprint(__("Error loading Cheque payment modes. Please try again.")); },
 	});
 
+	const allow_write_off = !frm.doc.is_return;
+	let wo_config = null;
+	if (allow_write_off) {
+		frappe.db.get_value("Company", frm.doc.company, ["write_off_account", "custom_max_payment_write_off"])
+			.then(function(r) { wo_config = (r && r.message) || {}; });
+	}
+
+	function validate_write_off(write_off) {
+		if (write_off < 0) {
+			frappe.msgprint({ title: __("Error"), message: __("Write off amount cannot be negative."), indicator: "red" });
+			return false;
+		}
+		if (!write_off) return true;
+		if (!wo_config || !wo_config.write_off_account) {
+			frappe.msgprint({ title: __("Write Off Not Configured"), message: __("Set 'Write Off Account' on company {0}.", [frm.doc.company]), indicator: "red" });
+			return false;
+		}
+		const wo_limit = flt(wo_config.custom_max_payment_write_off);
+		if (!wo_limit) {
+			frappe.msgprint({ title: __("Write Off Not Configured"), message: __("Set 'Max Payment Write Off' on company {0} to allow write off in payments.", [frm.doc.company]), indicator: "red" });
+			return false;
+		}
+		if (write_off - wo_limit > 0.0001) {
+			frappe.msgprint({ title: __("Write Off Limit Exceeded"), message: __("Write off amount {0} exceeds the company limit of {1}.", [format_currency(write_off, currency), format_currency(wo_limit, currency)]), indicator: "red" });
+			return false;
+		}
+		return true;
+	}
+
 	function show_cheque_dialog(cheque_modes, cash_modes) {
 		const all_fns = [
 			...cheque_modes.map(function(_, i) { return "chq_" + i; }),
 			...cash_modes.map(function(_, i) { return "csh_" + i; }),
 		];
+		if (allow_write_off) all_fns.push("write_off");
 		const fields = [
 			{ fieldname: "invoice_total", fieldtype: "Currency", label: __("Amount to Pay"), default: invoice_total, read_only: 1, options: "currency", precision },
 			{ fieldtype: "Section Break", label: __("Cheque Details") },
@@ -1044,6 +1119,13 @@ function sf_trading_show_pdc_popup(frm) {
 				);
 			});
 		}
+		if (allow_write_off) {
+			fields.push(
+				{ fieldtype: "Section Break", fieldname: "wo_row", label: "", hide_border: 1 },
+				{ fieldname: "write_off", fieldtype: "Currency", label: __("Write Off"), default: 0, options: "currency", precision },
+				{ fieldtype: "Column Break" }
+			);
+		}
 
 		function apply_and_close(vals, submit) {
 			if (!vals) return;
@@ -1052,8 +1134,10 @@ function sf_trading_show_pdc_popup(frm) {
 			cheque_modes.forEach(function(mode, i) { const amt = flt(vals["chq_" + i]) || 0; if (amt > 0) { cheque_payments.push({ mode_of_payment: mode, amount: amt }); cheque_total += amt; } });
 			cash_modes.forEach(function(mode, i) { const amt = flt(vals["csh_" + i]) || 0; if (amt > 0) { cash_payments.push({ mode_of_payment: mode, amount: amt }); cash_total += amt; } });
 			if (!cheque_payments.length && !cash_payments.length) { frappe.msgprint({ title: __("Error"), message: __("Please enter at least one payment amount."), indicator: "red" }); return; }
+			const write_off = allow_write_off ? flt(vals.write_off) || 0 : 0;
+			if (!validate_write_off(write_off)) return;
 			const cheque_date = vals.cheque_date, cheque_no = (vals.cheque_no || "").trim();
-			const total_rounded = flt(cheque_total + cash_total, precision);
+			const total_rounded = flt(cheque_total + cash_total + write_off, precision);
 			if (total_rounded - invoice_total > 0.0001) { frappe.msgprint({ title: __("Error"), message: __("Total payment {0} exceeds amount to pay {1}.", [format_currency(total_rounded, currency), format_currency(invoice_total, currency)]), indicator: "red" }); return; }
 			if (invoice_total - total_rounded > 0.0001) { frappe.msgprint({ title: __("Incomplete"), message: __("{0} still to be allocated.", [format_currency(invoice_total - total_rounded, currency)]), indicator: "red" }); return; }
 
@@ -1064,11 +1148,13 @@ function sf_trading_show_pdc_popup(frm) {
 					return;
 				}
 				d.hide(); frappe.flags.sf_trading_popup_showing = false;
+				// The write-off rides on the last API call so the final Payment
+				// Entry closes the invoice: the cash call when present, else the cheque call.
 				function create_cash(created) {
 					if (!cash_payments.length) { frappe.show_alert({ message: __("Cheque Payment Entry created."), indicator: "green" }, 5); frm.reload_doc(); return; }
 					frappe.call({
 						method: "sf_trading.api.sales_invoice_payment.create_pos_payments_for_invoice",
-						args: { sales_invoice: frm.doc.name, payments: JSON.stringify(cash_payments) },
+						args: { sales_invoice: frm.doc.name, payments: JSON.stringify(cash_payments), write_off_amount: write_off || undefined },
 						freeze: true, freeze_message: __("Creating Cheque payment..."),
 						callback: function(r) {
 							const n = (created || 0) + ((r && r.message) ? r.message.length : 0);
@@ -1079,7 +1165,7 @@ function sf_trading_show_pdc_popup(frm) {
 				if (cheque_payments.length) {
 					frappe.call({
 						method: "sf_trading.api.sales_invoice_payment.create_pos_payments_for_invoice",
-						args: { sales_invoice: frm.doc.name, payments: JSON.stringify(cheque_payments), cheque_date, cheque_no },
+						args: { sales_invoice: frm.doc.name, payments: JSON.stringify(cheque_payments), cheque_date, cheque_no, write_off_amount: cash_payments.length ? undefined : (write_off || undefined) },
 						freeze: true, freeze_message: __("Creating Cheque payment..."),
 						callback: function(r) { create_cash((r && r.message) ? r.message.length : 0); },
 					});
