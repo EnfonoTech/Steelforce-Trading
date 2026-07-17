@@ -186,7 +186,13 @@ def get_accounts_for_modes(company: str, modes: str | list):
 
 
 @frappe.whitelist()
-def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list, cheque_date: str = None, cheque_no: str = None):
+def create_pos_payments_for_invoice(
+	sales_invoice: str,
+	payments: str | list,
+	cheque_date: str = None,
+	cheque_no: str = None,
+	posting_date: str = None,
+):
 	"""
 	Create Payment Entry records for a submitted POS Sales Invoice, one per mode of payment.
 
@@ -194,6 +200,9 @@ def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list, ch
 		sales_invoice: Sales Invoice name
 		payments: JSON list or Python list of dicts:
 			[{ "mode_of_payment": "Cash", "amount": 100.0 }, ...]
+		posting_date: Payment Entry posting and reference date; defaults to the
+			invoice's posting date (submit-time collection). The Receive Payment
+			flow passes the actual payment date.
 
 	Returns:
 		List of created Payment Entry names.
@@ -304,9 +313,9 @@ def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list, ch
 			pe.reference_no = cheque_no or si.name
 			pe.reference_date = cheque_date
 		else:
-			pe.posting_date = si.posting_date
+			pe.posting_date = posting_date or si.posting_date
 			pe.reference_no = si.name
-			pe.reference_date = si.posting_date
+			pe.reference_date = posting_date or si.posting_date
 
 		pe.insert()
 

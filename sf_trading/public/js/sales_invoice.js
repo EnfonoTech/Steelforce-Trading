@@ -686,6 +686,15 @@ frappe.ui.form.on("Sales Invoice", {
 						sf_trading_open_invoice_print(frm, dn_format);
 					});
 			});
+			if (Math.abs(flt(frm.doc.outstanding_amount)) > 0) {
+				frm.add_custom_button(__("Receive Payment"), function() {
+					if (frm.doc.custom_payment_mode === "Cheque") {
+						sf_trading_show_pdc_popup(frm);
+					} else {
+						sf_trading_show_pos_total_popup(frm);
+					}
+				}).addClass("btn-primary");
+			}
 		}
 
 		if (frm.doc.docstatus === 0 || frm.doc.docstatus === 1) {
@@ -871,6 +880,9 @@ function sf_trading_render_dialog(frm) {
 
 	if (invoice_total <= 0) { frappe.flags.sf_trading_popup_showing = false; frappe.msgprint(__("Invoice total must be greater than zero.")); return; }
 
+	// Opened on an already-submitted invoice (Receive Payment button) — the
+	// Payment Entry is dated today; the submit-time flow keeps the invoice date.
+	const is_registering = frm.doc.docstatus === 1;
 	const fields = [
 		{ fieldname: "invoice_total", fieldtype: "Currency", label: __("Amount to Pay"), default: invoice_total, read_only: 1, options: "currency", precision: curr_precision },
 		{ fieldtype: "Section Break", label: __("Enter Payment Amounts") },
@@ -907,7 +919,7 @@ function sf_trading_render_dialog(frm) {
 			d.hide(); frappe.flags.sf_trading_popup_showing = false;
 			frappe.call({
 				method: "sf_trading.api.sales_invoice_payment.create_pos_payments_for_invoice",
-				args: { sales_invoice: frm.doc.name, payments: JSON.stringify(payload) },
+				args: { sales_invoice: frm.doc.name, payments: JSON.stringify(payload), posting_date: is_registering ? frappe.datetime.get_today() : undefined },
 				freeze: true, freeze_message: __("Creating payments..."),
 				callback: function(r) {
 					if (r && r.message && r.message.length) { frappe.show_alert({ message: __("Created {0} Payment Entries for this invoice", [r.message.length]), indicator: "green" }, 5); frm.reload_doc(); }
@@ -929,12 +941,15 @@ function sf_trading_render_dialog(frm) {
 		}
 	}
 
-	const d = new frappe.ui.Dialog({
+	const dialog_opts = {
 		title: __("Enter Payment Amounts"), fields,
-		primary_action_label: __("Save & Submit"),
+		primary_action_label: is_registering ? __("Receive Payment") : __("Save & Submit"),
 		primary_action: function(vals) { if (vals) apply_payments_and_close(vals, true); },
-		secondary_action_label: __("Save"),
-		secondary_action: function() {
+		onhide: function() { frappe.flags.sf_trading_popup_showing = false; }
+	};
+	if (!is_registering) {
+		dialog_opts.secondary_action_label = __("Save");
+		dialog_opts.secondary_action = function() {
 			const vals = d.get_values();
 			if (frm.doc.docstatus === 0) {
 				d.hide(); frappe.flags.sf_trading_popup_showing = false;
@@ -942,9 +957,9 @@ function sf_trading_render_dialog(frm) {
 				frm.reload_doc(); return;
 			}
 			if (vals) apply_payments_and_close(vals, false);
-		},
-		onhide: function() { frappe.flags.sf_trading_popup_showing = false; }
-	});
+		};
+	}
+	const d = new frappe.ui.Dialog(dialog_opts);
 	d.show();
 
 	frappe.utils.sleep(100).then(function() {
