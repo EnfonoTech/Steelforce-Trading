@@ -1120,22 +1120,42 @@ function sf_trading_show_pdc_popup(frm) {
 // Sales Person auto-populate
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// The field has ignore_user_permissions=1, so frappe won't auto-default it
+// from the User Permission — do it ourselves (dropdown stays unrestricted).
+function set_sales_person_from_user_permission(frm) {
+	if (frm.doc.custom_sales_person) return;
+	const user_permissions = frappe.defaults.get_user_permissions();
+	if (!user_permissions || $.isEmptyObject(user_permissions)) return;
+	const { allowed_records, default_doc } = frappe.perm.filter_allowed_docs_for_doctype(
+		user_permissions["Sales Person"],
+		frm.doc.doctype
+	);
+	const sales_person =
+		default_doc || (allowed_records && allowed_records.length === 1 ? allowed_records[0] : null);
+	if (sales_person) frm.set_value("custom_sales_person", sales_person);
+}
+
 frappe.ui.form.on("Sales Invoice", {
+	onload: function(frm) {
+		if (frm.is_new()) {
+			set_sales_person_from_user_permission(frm);
+		}
+	},
 	customer: function(frm) {
 		if (!frm.doc.customer) return;
-		frm.set_value("custom_sales_person", "");
-		frm.clear_table("sales_team");
-		frm.refresh_field("sales_team");
 		frappe.db.get_doc("Customer", frm.doc.customer).then(function(doc) {
-			if (doc.sales_team && doc.sales_team.length) {
-				frm.set_value("custom_sales_person", doc.sales_team[0].sales_person);
-				doc.sales_team.forEach(function(d) {
-					const row = frm.add_child("sales_team");
-					row.sales_person = d.sales_person;
-					row.allocated_percentage = d.allocated_percentage || 100;
-				});
-				frm.refresh_field("sales_team");
-			}
+			// Customer has no sales team → keep the sales person already on the invoice
+			if (!doc.sales_team || !doc.sales_team.length) return;
+			frm.set_value("custom_sales_person", "");
+			frm.clear_table("sales_team");
+			frm.refresh_field("sales_team");
+			frm.set_value("custom_sales_person", doc.sales_team[0].sales_person);
+			doc.sales_team.forEach(function(d) {
+				const row = frm.add_child("sales_team");
+				row.sales_person = d.sales_person;
+				row.allocated_percentage = d.allocated_percentage || 100;
+			});
+			frm.refresh_field("sales_team");
 		});
 	},
 	custom_sales_person: function(frm) {
