@@ -21,6 +21,8 @@ frappe.query_reports["DCR Detail"] = {
 			label: __("Type"),
 			fieldtype: "Select",
 			options: [
+				"Opening Cash Balance",
+				"Total Sales",
 				"Cash Sales",
 				"Bank Sales",
 				"Cheque Sales",
@@ -40,6 +42,8 @@ frappe.query_reports["DCR Detail"] = {
 				"Payments-Petty Cash (Approved)",
 				"Payments-Petty Cash (UnApproved)",
 				"Payments-Petty Cash (Total Payments)",
+				"Total Receipt-Petty Cash",
+				"Closing Cash Balance",
 				"Cash Receipts (Cash Sales)",
 				"Bank Sales Receipts",
 				"Bank Sales Payments",

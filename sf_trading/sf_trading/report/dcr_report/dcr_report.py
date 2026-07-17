@@ -296,8 +296,8 @@ def get_data(filters):
 	def _link(label, report_type):
 		return get_report_link(label, report_type, from_date_str, to_date_str, company, cost_center)
 
-	data.append(_row("<b>" + _("Opening Cash Balance") + "</b>", opening_balance, 0, 0, 0))
-	data.append(_row("<b>" + _("Total Sales") + "</b>", total_sales_income, 0, -total_sales_discount, total_sales_margin))
+	data.append(_row("<b>" + _link(_("Opening Cash Balance"), "Opening Cash Balance") + "</b>", opening_balance, 0, 0, 0))
+	data.append(_row("<b>" + _link(_("Total Sales"), "Total Sales") + "</b>", total_sales_income, 0, -total_sales_discount, total_sales_margin))
 	data.append(_row(_link("CASH SALES", "Cash Sales"), bucket_income(cash_b), 0, -cash_b["discount"], bucket_margin(cash_b)))
 	data.append(_row(_link("BANK SALES", "Bank Sales"), bucket_income(bank_b), 0, -bank_b["discount"], bucket_margin(bank_b)))
 	data.append(_row(_link("CHEQUE SALES", "Cheque Sales"), bucket_income(cheque_b), 0, -cheque_b["discount"], bucket_margin(cheque_b)))
@@ -315,8 +315,8 @@ def get_data(filters):
 	data.append(_row(_link("Cash Received : Credit Sales", "Cash Received : Credit Sales"), cash_received_credit_sales, 0, 0, 0))
 	data.append(_row(_link("Payments-Petty Cash (Approved)", "Payments-Petty Cash (Approved)"), 0, petty_cash_approved, 0, 0))
 	data.append(_row(_link("Payments-Petty Cash (UnApproved)", "Payments-Petty Cash (UnApproved)"), 0, petty_cash_unapproved, 0, 0))
-	data.append(_row("<b>" + _("Total Receipt-Petty Cash") + "</b>", cash_receipts_pos + cash_received_credit_sales, 0, 0, 0))
-	data.append(_row("<b>" + _("Closing Cash Balance") + "</b>", closing_balance, 0, 0, 0))
+	data.append(_row("<b>" + _link(_("Total Receipt-Petty Cash"), "Total Receipt-Petty Cash") + "</b>", cash_receipts_pos + cash_received_credit_sales, 0, 0, 0))
+	data.append(_row("<b>" + _link(_("Closing Cash Balance"), "Closing Cash Balance") + "</b>", closing_balance, 0, 0, 0))
 
 	return data
 
@@ -567,9 +567,9 @@ def get_cash_received_credit_sales(from_date, to_date, company, cost_center):
 
 
 def get_petty_cash_payments(from_date, to_date, company, cost_center, docstatus=1):
-	"""Petty cash payments: Payment Entry (Pay, Cash mode, against PI/PO) plus
-	paid Purchase Invoices (is_paid, Cash mode).
-	docstatus 1 = approved (submitted), 0 = unapproved (draft/pending)."""
+	"""Petty cash payments: Payment Entry (Pay, Cash mode, party type Supplier —
+	with or without invoice references) plus paid Purchase Invoices (is_paid,
+	Cash mode). docstatus 1 = approved (submitted), 0 = unapproved (draft/pending)."""
 	conditions = "pe.docstatus = %(docstatus)s"
 	if from_date:
 		conditions += " AND pe.posting_date >= %(from_date)s"
@@ -590,11 +590,10 @@ def get_petty_cash_payments(from_date, to_date, company, cost_center, docstatus=
 	payments_pe_result = frappe.db.sql("""
 		SELECT SUM(pe.paid_amount) as amount
 		FROM `tabPayment Entry` pe
-		INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
 		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
 		WHERE {conditions}
 			AND pe.payment_type = 'Pay'
-			AND per.reference_doctype IN ('Purchase Invoice', 'Purchase Order')
+			AND pe.party_type = 'Supplier'
 			AND mop.type = 'Cash'
 			{cost_center_condition}
 	""".format(conditions=conditions, cost_center_condition=cost_center_condition), params, as_dict=True)

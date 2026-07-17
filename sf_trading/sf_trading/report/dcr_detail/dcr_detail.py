@@ -3,17 +3,28 @@
 
 import frappe
 from frappe import _
-from frappe.utils import flt, getdate
+from frappe.utils import add_days, flt, getdate
 
 from sf_trading.sf_trading.report.dcr_report.dcr_report import (
 	RETURN_REFUNDED_CONDITION,
 	enforce_user_cost_center,
+	get_branch_petty_cash_accounts,
+	get_gl_cash_balance,
 	get_invoices_with_settlement,
 	split_invoice_settlement,
 )
 
 
+def _doc_link(doctype, name):
+	"""Clickable link to a document for Data columns that mix doctypes."""
+	from urllib.parse import quote
+	route = doctype.lower().replace(" ", "-")
+	return f'<a href="/app/{route}/{quote(str(name))}">{name}</a>'
+
+
 REPORT_TYPES = [
+	"Opening Cash Balance",
+	"Total Sales",
 	"Cash Sales",
 	"Bank Sales",
 	"Cheque Sales",
@@ -33,6 +44,8 @@ REPORT_TYPES = [
 	"Payments-Petty Cash (Approved)",
 	"Payments-Petty Cash (UnApproved)",
 	"Payments-Petty Cash (Total Payments)",
+	"Total Receipt-Petty Cash",
+	"Closing Cash Balance",
 	"Cash Receipts (Cash Sales)",
 	"Bank Sales Receipts",
 	"Bank Sales Payments",
@@ -60,6 +73,44 @@ def execute(filters=None):
 
 def get_columns(report_type):
 	"""Columns vary by report type."""
+	if report_type == "Opening Cash Balance":
+		return [
+			_("Account") + ":Link/Account:250",
+			_("As Of Date") + ":Date:110",
+			_("Balance") + ":Currency:150",
+		]
+	if report_type == "Closing Cash Balance":
+		return [
+			_("Posting Date") + ":Date:95",
+			_("Voucher Type") + ":Data:130",
+			_("Voucher") + ":Data:170",
+			_("Account") + ":Link/Account:180",
+			_("Against") + ":Data:160",
+			_("Debit") + ":Currency:105",
+			_("Credit") + ":Currency:105",
+			_("Balance") + ":Currency:115",
+		]
+	if report_type == "Total Sales":
+		return [
+			_("Sales Invoice") + ":Link/Sales Invoice:130",
+			_("Posting Date") + ":Date:95",
+			_("Customer") + ":Link/Customer:130",
+			_("Customer Name") + ":Data:150",
+			_("Grand Total") + ":Currency:110",
+			_("Cash") + ":Currency:100",
+			_("Bank") + ":Currency:100",
+			_("Cheque") + ":Currency:100",
+			_("Credit / Home Credit") + ":Currency:130",
+		]
+	if report_type == "Total Receipt-Petty Cash":
+		return [
+			_("Receipt Type") + ":Data:150",
+			_("Document") + ":Data:170",
+			_("Posting Date") + ":Date:95",
+			_("Party") + ":Data:150",
+			_("Mode of Payment") + ":Data:110",
+			_("Amount") + ":Currency:110",
+		]
 	if report_type in ("Cash Sales", "Bank Sales", "Cheque Sales", "Credit Sales", "VAT Collected on Cash Sales", "VAT Collected on Bank Sales", "VAT Collected on Cheque Sales", "VAT Applied on Credit Sales"):
 		return [
 			_("Sales Invoice") + ":Link/Sales Invoice:120",
@@ -170,6 +221,14 @@ def _base_conditions(from_date, to_date, company, cost_center, date_field="si.po
 
 def get_data_for_type(report_type, from_date, to_date, company, cost_center):
 	params = {"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center}
+	if report_type == "Opening Cash Balance":
+		return _detail_cash_balance(params, cost_center, opening=True)
+	if report_type == "Closing Cash Balance":
+		return _detail_closing_movement(params, cost_center)
+	if report_type == "Total Sales":
+		return _detail_total_sales(params, cost_center)
+	if report_type == "Total Receipt-Petty Cash":
+		return _detail_total_receipts(params, cost_center)
 	if report_type in ("Cash Sales", "VAT Collected on Cash Sales"):
 		return _detail_settled_share(params, cost_center, "cash")
 	if report_type in ("Bank Sales", "VAT Collected on Bank Sales"):
@@ -205,6 +264,156 @@ def get_data_for_type(report_type, from_date, to_date, company, cost_center):
 	if report_type == "Internal Transfer (Cash In)":
 		return _detail_internal_transfer_in(params, cost_center)
 	return []
+
+
+def _detail_cash_balance(params, cost_center, opening=True):
+	"""Account-wise GL balance of the branch petty cash accounts (or the
+	Cash-type fallback) as of the opening/closing date — the rows sum to the
+	report's Opening/Closing Cash Balance figure."""
+	as_of = add_days(getdate(params["from_date"]), -1) if opening else getdate(params["to_date"])
+	company = params["company"]
+	accounts = get_branch_petty_cash_accounts(company, cost_center)
+	p = {"as_of_date": as_of, "company": company, "cost_center": cost_center, "accounts": tuple(accounts) or ("",)}
+	conditions = "gle.is_cancelled = 0 AND gle.posting_date <= %(as_of_date)s"
+	if company:
+		conditions += " AND gle.company = %(company)s"
+	if accounts:
+		rows = frappe.db.sql("""
+			SELECT gle.account, COALESCE(SUM(gle.debit - gle.credit), 0) as balance
+			FROM `tabGL Entry` gle
+			WHERE {conditions}
+				AND gle.account IN %(accounts)s
+			GROUP BY gle.account
+			ORDER BY gle.account
+		""".format(conditions=conditions), p, as_dict=True)
+	else:
+		cc_condition = " AND gle.cost_center = %(cost_center)s" if cost_center else ""
+		rows = frappe.db.sql("""
+			SELECT gle.account, COALESCE(SUM(gle.debit - gle.credit), 0) as balance
+			FROM `tabGL Entry` gle
+			INNER JOIN `tabAccount` acc ON acc.name = gle.account
+			WHERE {conditions}
+				AND acc.account_type = 'Cash'
+				{cc_condition}
+			GROUP BY gle.account
+			ORDER BY gle.account
+		""".format(conditions=conditions, cc_condition=cc_condition), p, as_dict=True)
+	return [[r.account, as_of, flt(r.balance)] for r in rows]
+
+
+def _detail_closing_movement(params, cost_center):
+	"""Ledger view of the petty cash account(s): opening balance, every GL entry
+	in the period with a running balance, and the closing balance — shows exactly
+	which entries moved the cash from opening to closing."""
+	from_date = getdate(params["from_date"])
+	to_date = getdate(params["to_date"])
+	company = params["company"]
+
+	opening = get_gl_cash_balance(add_days(from_date, -1), company, cost_center)
+	closing = get_gl_cash_balance(to_date, company, cost_center)
+
+	accounts = get_branch_petty_cash_accounts(company, cost_center)
+	p = dict(params, accounts=tuple(accounts) or ("",))
+	conditions = "gle.is_cancelled = 0 AND gle.posting_date >= %(from_date)s AND gle.posting_date <= %(to_date)s"
+	if company:
+		conditions += " AND gle.company = %(company)s"
+	if accounts:
+		account_condition = "gle.account IN %(accounts)s"
+		join = ""
+	else:
+		account_condition = "acc.account_type = 'Cash'"
+		if cost_center:
+			account_condition += " AND gle.cost_center = %(cost_center)s"
+		join = "INNER JOIN `tabAccount` acc ON acc.name = gle.account"
+	entries = frappe.db.sql("""
+		SELECT gle.posting_date, gle.voucher_type, gle.voucher_no, gle.account, gle.against,
+			gle.debit, gle.credit
+		FROM `tabGL Entry` gle
+		{join}
+		WHERE {conditions}
+			AND {account_condition}
+		ORDER BY gle.posting_date, gle.creation
+	""".format(join=join, conditions=conditions, account_condition=account_condition), p, as_dict=True)
+
+	out = [[add_days(from_date, -1), "", "<b>" + _("Opening Balance") + "</b>", "", "", 0, 0, opening]]
+	balance = opening
+	for e in entries:
+		balance += flt(e.debit) - flt(e.credit)
+		against = (e.against or "").replace("\n", ", ")
+		if len(against) > 60:
+			against = against[:57] + "..."
+		out.append([
+			e.posting_date,
+			e.voucher_type,
+			_doc_link(e.voucher_type, e.voucher_no),
+			e.account,
+			against,
+			flt(e.debit),
+			flt(e.credit),
+			balance,
+		])
+	out.append([to_date, "", "<b>" + _("Closing Balance") + "</b>", "", "", 0, 0, closing])
+	return out
+
+
+def _detail_total_sales(params, cost_center):
+	"""Every invoice in range, once, with its settlement split — the union of
+	the five sales rows."""
+	out = []
+	for r in get_invoices_with_settlement(params["from_date"], params["to_date"], params["company"], cost_center):
+		s = split_invoice_settlement(r)
+		out.append([
+			r.name,
+			r.posting_date,
+			r.get("customer"),
+			r.get("customer_name") or "",
+			flt(r.get("base_grand_total")),
+			s["cash"],
+			s["bank"],
+			s["cheque"],
+			s["remainder"],
+		])
+	return out
+
+
+def _detail_total_receipts(params, cost_center):
+	"""All cash into the till: cash-mode Payment Entries (same-day sales receipts
+	and later credit collections) plus POS cash rows on invoices."""
+	cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "pe.posting_date", "pe")
+	cc = " AND pe.cost_center = %(cost_center)s" if cost_center else ""
+	pe_rows = frappe.db.sql("""
+		SELECT pe.name, pe.posting_date, pe.party, pe.mode_of_payment, per.allocated_amount as amount,
+			CASE WHEN pe.posting_date <= si.posting_date THEN 'Cash Sales Receipt' ELSE 'Credit Collection' END as receipt_type
+		FROM `tabPayment Entry` pe
+		INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
+		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
+		INNER JOIN `tabSales Invoice` si ON si.name = per.reference_name AND per.reference_doctype = 'Sales Invoice'
+		WHERE pe.docstatus = 1 AND pe.payment_type = 'Receive' AND """ + cond + """
+		AND per.reference_doctype = 'Sales Invoice' AND mop.type = 'Cash'
+		""" + cc + """
+		ORDER BY pe.posting_date, pe.name
+	""", params, as_dict=True)
+
+	si_cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "si.posting_date")
+	si_cc = " AND EXISTS (SELECT 1 FROM `tabSales Invoice Item` sii WHERE sii.parent = si.name AND sii.cost_center = %(cost_center)s)" if cost_center else ""
+	sip_rows = frappe.db.sql("""
+		SELECT si.name, si.posting_date, si.customer_name as party, sip.mode_of_payment, sip.base_amount as amount
+		FROM `tabSales Invoice` si
+		INNER JOIN `tabSales Invoice Payment` sip ON sip.parent = si.name
+		INNER JOIN `tabMode of Payment` mop ON mop.name = sip.mode_of_payment
+		WHERE si.docstatus = 1 AND si.is_return = 0 AND """ + si_cond + """
+		AND mop.type = 'Cash'
+		""" + si_cc + """
+		ORDER BY si.posting_date, si.name
+	""", params, as_dict=True)
+
+	out = []
+	for r in pe_rows:
+		out.append([_(r.receipt_type), _doc_link("Payment Entry", r.name), r.posting_date, r.get("party") or "", r.get("mode_of_payment") or "", flt(r.amount)])
+	for r in sip_rows:
+		out.append([_("POS Payment"), _doc_link("Sales Invoice", r.name), r.posting_date, r.get("party") or "", r.get("mode_of_payment") or "", flt(r.amount)])
+	out.sort(key=lambda x: (x[2], x[1]))
+	return out
 
 
 def _scaled_si_row(r, share):
@@ -356,14 +565,13 @@ def _detail_payments_petty_cash(params, cost_center, docstatus=1):
 	params = dict(params, docstatus=docstatus)
 	cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "pe.posting_date", "pe")
 	cc = " AND pe.cost_center = %(cost_center)s" if cost_center else ""
-	# Payment Entry (Pay, Cash, PI/PO)
+	# Payment Entry (Pay, Cash, party type Supplier — references not required)
 	sql_pe = """
 		SELECT 'Payment Entry' as doctype, pe.name, pe.posting_date, pe.party, pe.paid_amount, pe.mode_of_payment
 		FROM `tabPayment Entry` pe
-		INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
 		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
 		WHERE pe.docstatus = %(docstatus)s AND """ + cond + """
-		AND pe.payment_type = 'Pay' AND per.reference_doctype IN ('Purchase Invoice', 'Purchase Order') AND mop.type = 'Cash'
+		AND pe.payment_type = 'Pay' AND pe.party_type = 'Supplier' AND mop.type = 'Cash'
 		""" + cc + """
 		ORDER BY pe.posting_date, pe.name
 	"""
@@ -383,9 +591,9 @@ def _detail_payments_petty_cash(params, cost_center, docstatus=1):
 	rows_pi = frappe.db.sql(sql_pi, params, as_dict=True)
 	out = []
 	for r in rows_pe:
-		out.append([r.doctype, r.name, r.posting_date, r.get("party") or "", flt(r.paid_amount), r.get("mode_of_payment") or ""])
+		out.append([r.doctype, _doc_link(r.doctype, r.name), r.posting_date, r.get("party") or "", flt(r.paid_amount), r.get("mode_of_payment") or ""])
 	for r in rows_pi:
-		out.append([r.doctype, r.name, r.posting_date, r.get("party") or "", flt(r.paid_amount), r.get("mode_of_payment") or ""])
+		out.append([r.doctype, _doc_link(r.doctype, r.name), r.posting_date, r.get("party") or "", flt(r.paid_amount), r.get("mode_of_payment") or ""])
 	out.sort(key=lambda x: (x[2], x[1]))
 	return out
 
@@ -437,9 +645,9 @@ def _detail_bank_sales_payments(params, cost_center):
 	rows_pi = frappe.db.sql(sql_pi, params, as_dict=True)
 	out = []
 	for r in rows_pe:
-		out.append([r.doctype, r.name, r.posting_date, r.get("party") or "", flt(r.paid_amount), r.get("mode_of_payment") or ""])
+		out.append([r.doctype, _doc_link(r.doctype, r.name), r.posting_date, r.get("party") or "", flt(r.paid_amount), r.get("mode_of_payment") or ""])
 	for r in rows_pi:
-		out.append([r.doctype, r.name, r.posting_date, r.get("party") or "", flt(r.paid_amount), r.get("mode_of_payment") or ""])
+		out.append([r.doctype, _doc_link(r.doctype, r.name), r.posting_date, r.get("party") or "", flt(r.paid_amount), r.get("mode_of_payment") or ""])
 	out.sort(key=lambda x: (x[2], x[1]))
 	return out
 
