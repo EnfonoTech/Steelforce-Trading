@@ -304,8 +304,7 @@ def create_pos_payments_for_invoice(sales_invoice: str, payments: str | list, ch
 			pe.reference_no = cheque_no or si.name
 			pe.reference_date = cheque_date
 		else:
-			if not pe.posting_date:
-				pe.posting_date = si.posting_date
+			pe.posting_date = si.posting_date
 			pe.reference_no = si.name
 			pe.reference_date = si.posting_date
 
