@@ -839,6 +839,14 @@ function sf_trading_show_pos_total_popup(frm) {
 					frappe.msgprint(__("No enabled Mode of Payment with default Cash or Bank account for this company. Please set default account in Mode of Payment."));
 					return;
 				}
+				if (frm.doc.docstatus === 1) {
+					// Receive Payment on a submitted invoice: build the dialog rows
+					// locally — touching frm.doc.payments would mark the form Not Saved.
+					sf_trading_render_dialog(frm, modes.map(function(name) {
+						return { mode_of_payment: name, amount: 0 };
+					}));
+					return;
+				}
 				frm.clear_table("payments");
 				modes.forEach(function(name) { const row = frm.add_child("payments"); row.mode_of_payment = name; });
 				frm.refresh_field("payments");
@@ -866,9 +874,9 @@ function sf_trading_get_currency_precision(currency_code) {
 	return cint(frappe.boot.sysdefaults.currency_precision) || 2;
 }
 
-function sf_trading_render_dialog(frm) {
+function sf_trading_render_dialog(frm, payments_list) {
 	if (!frm || !frm.doc) { frappe.flags.sf_trading_popup_showing = false; return; }
-	const payments = frm.doc.payments || [];
+	const payments = payments_list || frm.doc.payments || [];
 	if (!payments.length) { frappe.flags.sf_trading_popup_showing = false; return; }
 
 	const currency = frm.doc.currency || "";
