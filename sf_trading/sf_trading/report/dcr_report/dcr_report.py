@@ -568,8 +568,9 @@ def get_cash_received_credit_sales(from_date, to_date, company, cost_center):
 
 def get_petty_cash_payments(from_date, to_date, company, cost_center, docstatus=1):
 	"""Petty cash payments: Payment Entry (Pay, Cash mode, party type Supplier —
-	with or without invoice references) plus paid Purchase Invoices (is_paid,
-	Cash mode). docstatus 1 = approved (submitted), 0 = unapproved (draft/pending)."""
+	with or without invoice references), paid Purchase Invoices (is_paid, Cash
+	mode), and Journal Entries crediting the branch petty cash account.
+	docstatus 1 = approved (submitted), 0 = unapproved (draft/pending)."""
 	conditions = "pe.docstatus = %(docstatus)s"
 	if from_date:
 		conditions += " AND pe.posting_date >= %(from_date)s"
@@ -616,9 +617,66 @@ def get_petty_cash_payments(from_date, to_date, company, cost_center, docstatus=
 			{cost_center_condition}
 	""".format(conditions=pi_conditions, cost_center_condition=pi_cost_center_condition), params, as_dict=True)
 
+	# Journal Entries paying out of the branch petty cash account (credit side).
+	# Same account resolution as the balances: the branch's derived petty cash
+	# accounts without a cost center condition, else Cash-type accounts.
+	accounts = get_branch_petty_cash_accounts(company, cost_center)
+	params["accounts"] = tuple(accounts) or ("",)
+	je_conditions = "je.docstatus = %(docstatus)s"
+	if from_date:
+		je_conditions += " AND je.posting_date >= %(from_date)s"
+	if to_date:
+		je_conditions += " AND je.posting_date <= %(to_date)s"
+	if company:
+		je_conditions += " AND je.company = %(company)s"
+	if accounts:
+		je_join = ""
+		je_account_condition = "jea.account IN %(accounts)s"
+	else:
+		je_join = "INNER JOIN `tabAccount` acc ON acc.name = jea.account"
+		je_account_condition = "acc.account_type = 'Cash'"
+		if cost_center:
+			je_account_condition += " AND jea.cost_center = %(cost_center)s"
+	payments_je_result = frappe.db.sql("""
+		SELECT SUM(jea.credit) as amount
+		FROM `tabJournal Entry Account` jea
+		INNER JOIN `tabJournal Entry` je ON je.name = jea.parent
+		{je_join}
+		WHERE {je_conditions}
+			AND jea.credit > 0
+			AND {je_account_condition}
+	""".format(je_join=je_join, je_conditions=je_conditions, je_account_condition=je_account_condition), params, as_dict=True)
+
+	# Internal Transfer Payment Entries taking cash out of the petty cash account
+	# (e.g. depositing till cash to the bank)
+	if accounts:
+		it_join = ""
+		it_account_condition = "pe_it.paid_from IN %(accounts)s"
+	else:
+		it_join = "INNER JOIN `tabAccount` acc_it ON acc_it.name = pe_it.paid_from"
+		it_account_condition = "acc_it.account_type = 'Cash'"
+		if cost_center:
+			it_account_condition += " AND pe_it.cost_center = %(cost_center)s"
+	it_conditions = "pe_it.docstatus = %(docstatus)s AND pe_it.payment_type = 'Internal Transfer'"
+	if from_date:
+		it_conditions += " AND pe_it.posting_date >= %(from_date)s"
+	if to_date:
+		it_conditions += " AND pe_it.posting_date <= %(to_date)s"
+	if company:
+		it_conditions += " AND pe_it.company = %(company)s"
+	payments_it_result = frappe.db.sql("""
+		SELECT SUM(pe_it.paid_amount) as amount
+		FROM `tabPayment Entry` pe_it
+		{it_join}
+		WHERE {it_conditions}
+			AND {it_account_condition}
+	""".format(it_join=it_join, it_conditions=it_conditions, it_account_condition=it_account_condition), params, as_dict=True)
+
 	payments_pe = flt(payments_pe_result[0].amount) if payments_pe_result and payments_pe_result[0].amount else 0
 	payments_pi = flt(payments_pi_result[0].amount) if payments_pi_result and payments_pi_result[0].amount else 0
-	return payments_pe + payments_pi
+	payments_je = flt(payments_je_result[0].amount) if payments_je_result and payments_je_result[0].amount else 0
+	payments_it = flt(payments_it_result[0].amount) if payments_it_result and payments_it_result[0].amount else 0
+	return payments_pe + payments_pi + payments_je + payments_it
 
 
 def get_write_off_total(from_date, to_date, company, cost_center):

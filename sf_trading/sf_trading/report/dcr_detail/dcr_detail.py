@@ -589,11 +589,60 @@ def _detail_payments_petty_cash(params, cost_center, docstatus=1):
 		ORDER BY pi.posting_date, pi.name
 	"""
 	rows_pi = frappe.db.sql(sql_pi, params, as_dict=True)
+	# Journal Entries paying out of the branch petty cash account (credit side)
+	accounts = get_branch_petty_cash_accounts(params["company"], cost_center)
+	je_params = dict(params, accounts=tuple(accounts) or ("",))
+	je_cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "je.posting_date", "je")
+	if accounts:
+		je_join = ""
+		je_account_condition = "jea.account IN %(accounts)s"
+	else:
+		je_join = "INNER JOIN `tabAccount` acc ON acc.name = jea.account"
+		je_account_condition = "acc.account_type = 'Cash'"
+		if cost_center:
+			je_account_condition += " AND jea.cost_center = %(cost_center)s"
+	sql_je = """
+		SELECT 'Journal Entry' as doctype, je.name, je.posting_date,
+			COALESCE(NULLIF(je.pay_to_recd_from, ''), jea.party, '') as party,
+			jea.credit as paid_amount, COALESCE(je.mode_of_payment, '') as mode_of_payment
+		FROM `tabJournal Entry Account` jea
+		INNER JOIN `tabJournal Entry` je ON je.name = jea.parent
+		""" + je_join + """
+		WHERE je.docstatus = %(docstatus)s AND """ + je_cond + """
+		AND jea.credit > 0
+		AND """ + je_account_condition + """
+		ORDER BY je.posting_date, je.name
+	"""
+	rows_je = frappe.db.sql(sql_je, je_params, as_dict=True)
+	# Internal Transfer Payment Entries taking cash out of the petty cash account
+	if accounts:
+		it_join = ""
+		it_account_condition = "pe_it.paid_from IN %(accounts)s"
+	else:
+		it_join = "INNER JOIN `tabAccount` acc_it ON acc_it.name = pe_it.paid_from"
+		it_account_condition = "acc_it.account_type = 'Cash'"
+		if cost_center:
+			it_account_condition += " AND pe_it.cost_center = %(cost_center)s"
+	it_cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "pe_it.posting_date", "pe_it")
+	sql_it = """
+		SELECT pe_it.name, pe_it.posting_date, pe_it.paid_to as party,
+			pe_it.paid_amount, COALESCE(pe_it.mode_of_payment, '') as mode_of_payment
+		FROM `tabPayment Entry` pe_it
+		""" + it_join + """
+		WHERE pe_it.docstatus = %(docstatus)s AND pe_it.payment_type = 'Internal Transfer' AND """ + it_cond + """
+		AND """ + it_account_condition + """
+		ORDER BY pe_it.posting_date, pe_it.name
+	"""
+	rows_it = frappe.db.sql(sql_it, je_params, as_dict=True)
 	out = []
 	for r in rows_pe:
 		out.append([r.doctype, _doc_link(r.doctype, r.name), r.posting_date, r.get("party") or "", flt(r.paid_amount), r.get("mode_of_payment") or ""])
 	for r in rows_pi:
 		out.append([r.doctype, _doc_link(r.doctype, r.name), r.posting_date, r.get("party") or "", flt(r.paid_amount), r.get("mode_of_payment") or ""])
+	for r in rows_je:
+		out.append([r.doctype, _doc_link(r.doctype, r.name), r.posting_date, r.get("party") or "", flt(r.paid_amount), r.get("mode_of_payment") or ""])
+	for r in rows_it:
+		out.append([_("Internal Transfer"), _doc_link("Payment Entry", r.name), r.posting_date, r.get("party") or "", flt(r.paid_amount), r.get("mode_of_payment") or ""])
 	out.sort(key=lambda x: (x[2], x[1]))
 	return out
 
