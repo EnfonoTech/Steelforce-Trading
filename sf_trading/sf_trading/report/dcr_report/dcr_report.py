@@ -428,7 +428,12 @@ def get_sales_returns(from_date, to_date, company, cost_center, refunded=True):
 
 def get_credit_purchases(from_date, to_date, company, cost_center):
 	"""Get credit purchases (Purchase Invoices - all invoices regardless of payment status)
-	Returns total including VAT"""
+	Returns total including VAT.
+
+	One aggregate row over `tabPurchase Invoice` with NO join to items. Joining to
+	items repeats the header net_total once per line item and inflates the totals
+	(a 9-line invoice was counted 9x). Cost center is applied via EXISTS so only
+	invoices with a line in that cost center are counted, header value taken once."""
 	conditions = "pi.docstatus = 1"
 	if from_date:
 		conditions += " AND pi.posting_date >= %(from_date)s"
@@ -436,37 +441,32 @@ def get_credit_purchases(from_date, to_date, company, cost_center):
 		conditions += " AND pi.posting_date <= %(to_date)s"
 	if company:
 		conditions += " AND pi.company = %(company)s"
-
-	cost_center_condition = ""
 	if cost_center:
-		cost_center_condition = " AND pii.cost_center = %(cost_center)s"
+		conditions += (
+			" AND EXISTS (SELECT 1 FROM `tabPurchase Invoice Item` pii"
+			" WHERE pii.parent = pi.name AND pii.cost_center = %(cost_center)s)"
+		)
 
-	result = frappe.db.sql("""
-		SELECT
-			SUM(pi.net_total) as net_total,
-			SUM(pi.total_taxes_and_charges) as vat_amount
-		FROM `tabPurchase Invoice` pi
-		LEFT JOIN `tabPurchase Invoice Item` pii ON pii.parent = pi.name
-		WHERE {conditions}
-			{cost_center_condition}
-		GROUP BY pi.name
-	""".format(conditions=conditions, cost_center_condition=cost_center_condition), {
-		"from_date": from_date,
-		"to_date": to_date,
-		"company": company,
-		"cost_center": cost_center
-	}, as_dict=True)
+	result = frappe.db.sql(
+		"SELECT COALESCE(SUM(pi.net_total), 0) as net_total,"
+		" COALESCE(SUM(pi.total_taxes_and_charges), 0) as vat_amount"
+		" FROM `tabPurchase Invoice` pi WHERE " + conditions,
+		{
+			"from_date": from_date,
+			"to_date": to_date,
+			"company": company,
+			"cost_center": cost_center,
+		},
+		as_dict=True,
+	)
 
-	if result:
-		total_net = sum([flt(r.net_total) for r in result if r.net_total])
-		total_vat = sum([flt(r.vat_amount) for r in result if r.vat_amount])
-		total_with_vat = total_net + total_vat
-		return {
-			"net_total": total_net,
-			"vat_amount": total_vat,
-			"total_with_vat": total_with_vat
-		}
-	return {"net_total": 0, "vat_amount": 0, "total_with_vat": 0}
+	total_net = flt(result[0].net_total) if result else 0
+	total_vat = flt(result[0].vat_amount) if result else 0
+	return {
+		"net_total": total_net,
+		"vat_amount": total_vat,
+		"total_with_vat": total_net + total_vat,
+	}
 
 
 def get_cash_receipts_from_pos(from_date, to_date, company, cost_center):
