@@ -133,6 +133,7 @@ def get_columns(report_type):
 			_("Grand Total") + ":Currency:120",
 			_("Discount") + ":Currency:90",
 			_("Write Off") + ":Currency:100",
+			_("Mode of Payment") + ":Link/Mode of Payment:150",
 		]
 	if report_type in ("Home Credit (Delivery)", "VAT Applied on Home Credit"):
 		return [
@@ -460,7 +461,7 @@ def _detail_total_receipts(params, cost_center):
 	return out
 
 
-def _scaled_si_row(r, share, write_off=0):
+def _scaled_si_row(r, share, write_off=0, mode=None):
 	return [
 		r.name,
 		r.posting_date,
@@ -471,6 +472,7 @@ def _scaled_si_row(r, share, write_off=0):
 		flt(r.get("grand_total")) * share,
 		flt(r.get("discount")) * share,
 		flt(write_off),
+		mode or "",
 	]
 
 
@@ -478,7 +480,9 @@ def _detail_settled_share(params, cost_center, kind):
 	"""Invoices with a settled portion of the given kind (cash/bank/cheque),
 	scaled to that portion — same math as the summary rows. The Write Off
 	column is the part of Grand Total that rode on a deduction rather than
-	becoming physical money (Net Total + VAT - Write Off = real Income)."""
+	becoming physical money (Net Total + VAT - Write Off = real Income). Mode
+	of Payment lists every mode of that kind that contributed (split payments
+	can involve more than one)."""
 	out = []
 	for r in get_invoices_with_settlement(params["from_date"], params["to_date"], params["company"], cost_center):
 		s = split_invoice_settlement(r)
@@ -486,7 +490,7 @@ def _detail_settled_share(params, cost_center, kind):
 			continue
 		share = s[kind] / s["total"]
 		if share > 0:
-			out.append(_scaled_si_row(r, share, s.get(kind + "_write_off", 0)))
+			out.append(_scaled_si_row(r, share, s.get(kind + "_write_off", 0), r.get(kind + "_modes")))
 	return out
 
 

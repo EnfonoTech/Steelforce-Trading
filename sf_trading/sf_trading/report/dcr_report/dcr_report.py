@@ -167,6 +167,48 @@ SETTLED_CASH_WRITEOFF_SUBQUERY = _settled_writeoff_subquery("wc", "cash")
 SETTLED_BANK_WRITEOFF_SUBQUERY = _settled_writeoff_subquery("wb", "bank")
 SETTLED_CHEQUE_WRITEOFF_SUBQUERY = _settled_writeoff_subquery("wq", "cheque")
 
+
+def _settled_modes_subquery(prefix, kind):
+	"""Comma-separated distinct Mode of Payment names that contributed to the
+	invoice's on/before-date settlement of the given kind (cash/bank/cheque) —
+	for the DCR Detail drill-down's Mode of Payment column, not used by the
+	summary math. A split payment lists every mode that contributed."""
+	p = prefix
+	pe_cheque = _mode_is_cheque(f"{p}_pe")
+	sip_cheque = _mode_is_cheque(f"{p}_sip")
+	if kind == "cash":
+		pe_mode = f"({p}_mop.type = 'Cash' AND NOT {pe_cheque})"
+		sip_mode = f"({p}_sipm.type = 'Cash' AND NOT {sip_cheque})"
+	elif kind == "bank":
+		pe_mode = f"(COALESCE({p}_mop.type, '') != 'Cash' AND NOT {pe_cheque})"
+		sip_mode = f"(COALESCE({p}_sipm.type, '') != 'Cash' AND NOT {sip_cheque})"
+	else:
+		pe_mode = pe_cheque
+		sip_mode = sip_cheque
+	# CONCAT_WS (not a UNION-derived table) — a derived table can't be
+	# correlated to the outer invoice in MySQL/MariaDB, so each source is its
+	# own correlated scalar subquery, combined at the end. Skips NULLs cleanly.
+	return f"""CONCAT_WS(', ', (
+		SELECT GROUP_CONCAT(DISTINCT {p}_pe.mode_of_payment ORDER BY {p}_pe.mode_of_payment SEPARATOR ', ')
+		FROM `tabPayment Entry Reference` {p}_per
+		INNER JOIN `tabPayment Entry` {p}_pe ON {p}_pe.name = {p}_per.parent AND {p}_pe.docstatus = 1 AND {p}_pe.payment_type = 'Receive'
+		LEFT JOIN `tabMode of Payment` {p}_mop ON {p}_mop.name = {p}_pe.mode_of_payment
+		WHERE {p}_per.reference_doctype = 'Sales Invoice' AND {p}_per.reference_name = si.name
+			AND {p}_pe.posting_date <= si.posting_date
+			AND {pe_mode}
+	), (
+		SELECT GROUP_CONCAT(DISTINCT {p}_sip.mode_of_payment ORDER BY {p}_sip.mode_of_payment SEPARATOR ', ')
+		FROM `tabSales Invoice Payment` {p}_sip
+		LEFT JOIN `tabMode of Payment` {p}_sipm ON {p}_sipm.name = {p}_sip.mode_of_payment
+		WHERE {p}_sip.parent = si.name AND {p}_sip.parenttype = 'Sales Invoice'
+			AND {sip_mode}
+	))"""
+
+
+SETTLED_CASH_MODES_SUBQUERY = _settled_modes_subquery("mc", "cash")
+SETTLED_BANK_MODES_SUBQUERY = _settled_modes_subquery("mb", "bank")
+SETTLED_CHEQUE_MODES_SUBQUERY = _settled_modes_subquery("mq", "cheque")
+
 # Return that was actually refunded (money out) on/before the return's posting
 # date: a Pay-type Payment Entry against the return, or POS refund rows on it.
 # Follows the money on the return itself — the original invoice's settlement is
@@ -251,7 +293,10 @@ def get_invoices_with_settlement(from_date, to_date, company, cost_center):
 			{cheque_alloc} as cheque_alloc,
 			{cash_wo} as cash_write_off,
 			{bank_wo} as bank_write_off,
-			{cheque_wo} as cheque_write_off
+			{cheque_wo} as cheque_write_off,
+			{cash_modes} as cash_modes,
+			{bank_modes} as bank_modes,
+			{cheque_modes} as cheque_modes
 		FROM `tabSales Invoice` si
 		LEFT JOIN `tabSales Invoice Item` sii ON sii.parent = si.name
 		WHERE {conditions}
@@ -263,6 +308,8 @@ def get_invoices_with_settlement(from_date, to_date, company, cost_center):
 	""".format(cash_alloc=SETTLED_CASH_ALLOC_SUBQUERY, bank_alloc=SETTLED_BANK_ALLOC_SUBQUERY,
 		cheque_alloc=SETTLED_CHEQUE_ALLOC_SUBQUERY, cash_wo=SETTLED_CASH_WRITEOFF_SUBQUERY,
 		bank_wo=SETTLED_BANK_WRITEOFF_SUBQUERY, cheque_wo=SETTLED_CHEQUE_WRITEOFF_SUBQUERY,
+		cash_modes=SETTLED_CASH_MODES_SUBQUERY, bank_modes=SETTLED_BANK_MODES_SUBQUERY,
+		cheque_modes=SETTLED_CHEQUE_MODES_SUBQUERY,
 		conditions=conditions, cost_center_condition=cost_center_condition), {
 		"from_date": from_date,
 		"to_date": to_date,
