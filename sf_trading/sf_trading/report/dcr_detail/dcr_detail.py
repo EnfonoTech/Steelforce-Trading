@@ -7,10 +7,12 @@ from frappe.utils import add_days, flt, getdate
 
 from sf_trading.sf_trading.report.dcr_report.dcr_report import (
 	RETURN_REFUNDED_CONDITION,
+	_return_refunded_condition,
 	enforce_user_cost_center,
 	get_branch_petty_cash_accounts,
 	get_gl_cash_balance,
 	get_invoices_with_settlement,
+	get_petty_cash_payments,
 	split_invoice_settlement,
 )
 
@@ -31,6 +33,8 @@ REPORT_TYPES = [
 	"Credit Sales",
 	"Home Credit (Delivery)",
 	"Sales Return - Cash",
+	"Sales Return - Bank",
+	"Sales Return - Cheque",
 	"Sales Return - Credit",
 	"VAT Collected on Cash Sales",
 	"VAT Collected on Bank Sales",
@@ -45,6 +49,7 @@ REPORT_TYPES = [
 	"Payments-Petty Cash (UnApproved)",
 	"Payments-Petty Cash (Total Payments)",
 	"Total Receipt-Petty Cash",
+	"Net Cash Movement",
 	"Closing Cash Balance",
 	"Cash Receipts (Cash Sales)",
 	"Bank Sales Receipts",
@@ -61,8 +66,14 @@ def execute(filters=None):
 		return get_columns("Cash Sales"), []
 	if not filters.get("from_date") or not filters.get("to_date"):
 		frappe.throw(_("Please select From Date and To Date"))
+	if not filters.get("company"):
+		frappe.throw(_("Please select a Company"))
 	from_date = getdate(filters.get("from_date"))
 	to_date = getdate(filters.get("to_date"))
+	# From/To can transiently cross while the user is still editing the date
+	# filters — show an empty report rather than an interrupting error popup.
+	if from_date > to_date:
+		return get_columns(filters.get("report_type")), []
 	company = filters.get("company")
 	cost_center = enforce_user_cost_center(filters.get("cost_center"))
 	report_type = filters.get("report_type")
@@ -79,7 +90,7 @@ def get_columns(report_type):
 			_("As Of Date") + ":Date:110",
 			_("Balance") + ":Currency:150",
 		]
-	if report_type == "Closing Cash Balance":
+	if report_type in ("Closing Cash Balance", "Net Cash Movement"):
 		return [
 			_("Posting Date") + ":Date:95",
 			_("Voucher Type") + ":Data:130",
@@ -121,6 +132,7 @@ def get_columns(report_type):
 			_("VAT") + ":Currency:100",
 			_("Grand Total") + ":Currency:120",
 			_("Discount") + ":Currency:90",
+			_("Write Off") + ":Currency:100",
 		]
 	if report_type in ("Home Credit (Delivery)", "VAT Applied on Home Credit"):
 		return [
@@ -133,7 +145,7 @@ def get_columns(report_type):
 			_("VAT") + ":Currency:100",
 			_("Grand Total") + ":Currency:120",
 		]
-	if report_type in ("Sales Return - Cash", "Sales Return - Credit", "VAT Refund on Sales Return"):
+	if report_type in ("Sales Return - Cash", "Sales Return - Bank", "Sales Return - Cheque", "Sales Return - Credit", "VAT Refund on Sales Return"):
 		return [
 			_("Sales Invoice") + ":Link/Sales Invoice:120",
 			_("Posting Date") + ":Date:100",
@@ -152,7 +164,7 @@ def get_columns(report_type):
 			_("VAT") + ":Currency:100",
 			_("Grand Total") + ":Currency:120",
 		]
-	if report_type in ("Cash Received : Credit Sales", "Cash Receipts (Cash Sales)"):
+	if report_type == "Cash Receipts (Cash Sales)":
 		return [
 			_("Payment Entry") + ":Link/Payment Entry:120",
 			_("Posting Date") + ":Date:100",
@@ -160,6 +172,16 @@ def get_columns(report_type):
 			_("Received Amount") + ":Currency:120",
 			_("Mode of Payment") + ":Data:120",
 			_("Reference") + ":Link/Sales Invoice:120",
+		]
+	if report_type == "Cash Received : Credit Sales":
+		return [
+			_("Payment Entry") + ":Link/Payment Entry:130",
+			_("Posting Date") + ":Date:100",
+			_("Party") + ":Data:150",
+			_("Mode of Payment") + ":Data:110",
+			_("Type") + ":Data:130",
+			_("Sales Invoice(s)") + ":Data:180",
+			_("Amount") + ":Currency:120",
 		]
 	if report_type in ("Payments-Petty Cash (Total Payments)", "Payments-Petty Cash (Approved)", "Payments-Petty Cash (UnApproved)"):
 		return [
@@ -223,7 +245,7 @@ def get_data_for_type(report_type, from_date, to_date, company, cost_center):
 	params = {"from_date": from_date, "to_date": to_date, "company": company, "cost_center": cost_center}
 	if report_type == "Opening Cash Balance":
 		return _detail_cash_balance(params, cost_center, opening=True)
-	if report_type == "Closing Cash Balance":
+	if report_type in ("Closing Cash Balance", "Net Cash Movement"):
 		return _detail_closing_movement(params, cost_center)
 	if report_type == "Total Sales":
 		return _detail_total_sales(params, cost_center)
@@ -239,10 +261,16 @@ def get_data_for_type(report_type, from_date, to_date, company, cost_center):
 		return _detail_remainder_share(params, cost_center, with_driver=False)
 	if report_type in ("Home Credit (Delivery)", "VAT Applied on Home Credit"):
 		return _detail_remainder_share(params, cost_center, with_driver=True)
-	if report_type in ("Sales Return - Cash", "VAT Refund on Sales Return"):
-		return _detail_sales_return(params, cost_center, refunded=True)
+	if report_type == "Sales Return - Cash":
+		return _detail_sales_return(params, cost_center, kind="cash")
+	if report_type == "Sales Return - Bank":
+		return _detail_sales_return(params, cost_center, kind="bank")
+	if report_type == "Sales Return - Cheque":
+		return _detail_sales_return(params, cost_center, kind="cheque")
 	if report_type == "Sales Return - Credit":
-		return _detail_sales_return(params, cost_center, refunded=False)
+		return _detail_sales_return(params, cost_center, kind="credit")
+	if report_type == "VAT Refund on Sales Return":
+		return _detail_sales_return(params, cost_center, kind="refunded_any")
 	if report_type == "Loyalty / Write Off":
 		return _detail_write_off(params, cost_center)
 	if report_type == "Credit Purchase - DIRECT PURCHASE":
@@ -268,8 +296,10 @@ def get_data_for_type(report_type, from_date, to_date, company, cost_center):
 
 def _detail_cash_balance(params, cost_center, opening=True):
 	"""Account-wise GL balance of the branch petty cash accounts (or the
-	Cash-type fallback) as of the opening/closing date — the rows sum to the
-	report's Opening/Closing Cash Balance figure."""
+	Cash-type fallback) as of the opening/closing date, plus a row for
+	still-pending UnApproved petty cash as of that date (no GL entry yet, but
+	treated as already gone from the till) — the rows sum to the report's
+	Opening/Closing Cash Balance figure exactly."""
 	as_of = add_days(getdate(params["from_date"]), -1) if opening else getdate(params["to_date"])
 	company = params["company"]
 	accounts = get_branch_petty_cash_accounts(company, cost_center)
@@ -298,19 +328,26 @@ def _detail_cash_balance(params, cost_center, opening=True):
 			GROUP BY gle.account
 			ORDER BY gle.account
 		""".format(conditions=conditions, cc_condition=cc_condition), p, as_dict=True)
-	return [[r.account, as_of, flt(r.balance)] for r in rows]
+	out = [[r.account, as_of, flt(r.balance)] for r in rows]
+	unapproved = get_petty_cash_payments(None, as_of, company, cost_center, docstatus=0)
+	if unapproved:
+		out.append([_("Less: UnApproved Petty Cash (pending)"), as_of, -flt(unapproved)])
+	return out
 
 
 def _detail_closing_movement(params, cost_center):
 	"""Ledger view of the petty cash account(s): opening balance, every GL entry
-	in the period with a running balance, and the closing balance — shows exactly
-	which entries moved the cash from opening to closing."""
+	in the period with a running balance, a bridge row for the net change in
+	still-pending UnApproved petty cash, and the closing balance — shows
+	exactly what moved the cash from (adjusted) opening to (adjusted) closing."""
 	from_date = getdate(params["from_date"])
 	to_date = getdate(params["to_date"])
 	company = params["company"]
 
-	opening = get_gl_cash_balance(add_days(from_date, -1), company, cost_center)
-	closing = get_gl_cash_balance(to_date, company, cost_center)
+	unapproved_open = get_petty_cash_payments(None, add_days(from_date, -1), company, cost_center, docstatus=0)
+	unapproved_close = get_petty_cash_payments(None, to_date, company, cost_center, docstatus=0)
+	opening = get_gl_cash_balance(add_days(from_date, -1), company, cost_center) - unapproved_open
+	closing = get_gl_cash_balance(to_date, company, cost_center) - unapproved_close
 
 	accounts = get_branch_petty_cash_accounts(company, cost_center)
 	p = dict(params, accounts=tuple(accounts) or ("",))
@@ -351,6 +388,13 @@ def _detail_closing_movement(params, cost_center):
 			flt(e.debit),
 			flt(e.credit),
 			balance,
+		])
+	unapproved_change = unapproved_close - unapproved_open
+	if unapproved_change:
+		balance -= unapproved_change
+		out.append([
+			to_date, "", _("Change in UnApproved Petty Cash (pending)"), "", "",
+			0, 0, balance,
 		])
 	out.append([to_date, "", "<b>" + _("Closing Balance") + "</b>", "", "", 0, 0, closing])
 	return out
@@ -416,7 +460,7 @@ def _detail_total_receipts(params, cost_center):
 	return out
 
 
-def _scaled_si_row(r, share):
+def _scaled_si_row(r, share, write_off=0):
 	return [
 		r.name,
 		r.posting_date,
@@ -426,12 +470,15 @@ def _scaled_si_row(r, share):
 		flt(r.get("vat_amount")) * share,
 		flt(r.get("grand_total")) * share,
 		flt(r.get("discount")) * share,
+		flt(write_off),
 	]
 
 
 def _detail_settled_share(params, cost_center, kind):
 	"""Invoices with a settled portion of the given kind (cash/bank/cheque),
-	scaled to that portion — same math as the summary rows."""
+	scaled to that portion — same math as the summary rows. The Write Off
+	column is the part of Grand Total that rode on a deduction rather than
+	becoming physical money (Net Total + VAT - Write Off = real Income)."""
 	out = []
 	for r in get_invoices_with_settlement(params["from_date"], params["to_date"], params["company"], cost_center):
 		s = split_invoice_settlement(r)
@@ -439,7 +486,7 @@ def _detail_settled_share(params, cost_center, kind):
 			continue
 		share = s[kind] / s["total"]
 		if share > 0:
-			out.append(_scaled_si_row(r, share))
+			out.append(_scaled_si_row(r, share, s.get(kind + "_write_off", 0)))
 	return out
 
 
@@ -471,10 +518,18 @@ def _detail_remainder_share(params, cost_center, with_driver):
 	return out
 
 
-def _detail_sales_return(params, cost_center, refunded=True):
+def _detail_sales_return(params, cost_center, kind):
+	"""kind='cash'/'bank'/'cheque': returns refunded via that mode.
+	kind='credit': unrefunded returns. kind='refunded_any': every refunded
+	return regardless of mode (used by the combined VAT Refund drill-down)."""
 	cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "si.posting_date")
 	cc = " AND EXISTS (SELECT 1 FROM `tabSales Invoice Item` sii WHERE sii.parent = si.name AND sii.cost_center = %(cost_center)s)" if cost_center else ""
-	return_condition = RETURN_REFUNDED_CONDITION if refunded else "NOT " + RETURN_REFUNDED_CONDITION
+	if kind == "credit":
+		return_condition = "NOT " + RETURN_REFUNDED_CONDITION
+	elif kind == "refunded_any":
+		return_condition = RETURN_REFUNDED_CONDITION
+	else:
+		return_condition = _return_refunded_condition(kind)
 	sql = """
 		SELECT si.name, si.posting_date, si.return_against, si.customer,
 			ABS(si.base_net_total) as base_net_total, ABS(si.total_taxes_and_charges) as total_taxes_and_charges
@@ -489,7 +544,7 @@ def _detail_sales_return(params, cost_center, refunded=True):
 
 
 def _detail_write_off(params, cost_center):
-	"""Payment Entry deduction rows booked to the company's Write Off Account."""
+	"""Every Payment Entry deduction row on a Receive PE, any account."""
 	cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "pe.posting_date", "pe")
 	cc = " AND COALESCE(ded.cost_center, pe.cost_center) = %(cost_center)s" if cost_center else ""
 	sql = """
@@ -498,9 +553,7 @@ def _detail_write_off(params, cost_center):
 			 WHERE wo_per.parent = pe.name AND wo_per.reference_doctype = 'Sales Invoice' LIMIT 1) as reference_name
 		FROM `tabPayment Entry Deduction` ded
 		INNER JOIN `tabPayment Entry` pe ON pe.name = ded.parent
-		INNER JOIN `tabCompany` c ON c.name = pe.company
 		WHERE pe.docstatus = 1 AND pe.payment_type = 'Receive' AND """ + cond + """
-		AND ded.account = c.write_off_account
 		""" + cc + """
 		ORDER BY pe.posting_date, pe.name
 	"""
@@ -526,21 +579,75 @@ def _detail_credit_purchase(params, cost_center):
 
 
 def _detail_cash_received_credit_sales(params, cost_center):
+	"""One row per Payment Entry: its actual received_amount attributed to
+	credit-collection references (share method, matching
+	get_cash_received_credit_sales) labelled "Credit Collection", plus any
+	advance/unallocated portion of a Cash-mode Receive PE labelled "Advance" —
+	together these sum exactly to the summary row."""
 	cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "pe.posting_date", "pe")
 	cc = " AND pe.cost_center = %(cost_center)s" if cost_center else ""
-	sql = """
-		SELECT pe.name, pe.posting_date, pe.party, pe.received_amount, pe.mode_of_payment, per.reference_name
+
+	collection_rows = frappe.db.sql("""
+		SELECT pe.name, pe.posting_date, pe.party, pe.received_amount, pe.mode_of_payment,
+			GROUP_CONCAT(DISTINCT per.reference_name ORDER BY per.reference_name SEPARATOR ', ') as refs,
+			SUM(per.allocated_amount) as total_alloc,
+			SUM(CASE WHEN si.posting_date < pe.posting_date THEN per.allocated_amount ELSE 0 END) as credit_alloc
 		FROM `tabPayment Entry` pe
 		INNER JOIN `tabPayment Entry Reference` per ON per.parent = pe.name
 		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
 		INNER JOIN `tabSales Invoice` si ON si.name = per.reference_name AND per.reference_doctype = 'Sales Invoice'
 		WHERE pe.docstatus = 1 AND pe.payment_type = 'Receive' AND """ + cond + """
-		AND per.reference_doctype = 'Sales Invoice' AND si.posting_date < pe.posting_date AND mop.type = 'Cash'
+		AND per.reference_doctype = 'Sales Invoice' AND mop.type = 'Cash'
+		""" + cc + """
+		GROUP BY pe.name, pe.posting_date, pe.party, pe.received_amount, pe.mode_of_payment
+		ORDER BY pe.posting_date, pe.name
+	""", params, as_dict=True)
+
+	advance_rows = frappe.db.sql("""
+		SELECT pe.name, pe.posting_date, pe.party, pe.received_amount, pe.mode_of_payment,
+			COALESCE((SELECT SUM(per.allocated_amount) FROM `tabPayment Entry Reference` per
+				WHERE per.parent = pe.name AND per.reference_doctype = 'Sales Invoice'), 0) as total_alloc
+		FROM `tabPayment Entry` pe
+		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
+		WHERE pe.docstatus = 1 AND pe.payment_type = 'Receive' AND """ + cond + """
+		AND mop.type = 'Cash'
 		""" + cc + """
 		ORDER BY pe.posting_date, pe.name
-	"""
-	rows = frappe.db.sql(sql, params, as_dict=True)
-	return [[r.name, r.posting_date, r.get("party") or "", flt(r.received_amount), r.get("mode_of_payment") or "", r.get("reference_name") or ""] for r in rows]
+	""", params, as_dict=True)
+
+	je_cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "je.posting_date", "je")
+	je_cc = " AND jea.cost_center = %(cost_center)s" if cost_center else ""
+	je_rows = frappe.db.sql("""
+		SELECT jea.parent as name, je.posting_date, jea.party, jea.debit as amount, jea.reference_name as si_name
+		FROM `tabJournal Entry Account` jea
+		INNER JOIN `tabJournal Entry` je ON je.name = jea.parent
+		INNER JOIN `tabAccount` acc ON acc.name = jea.account
+		INNER JOIN `tabSales Invoice` si ON si.name = jea.reference_name
+		WHERE je.docstatus = 1 AND """ + je_cond + """
+		AND jea.reference_type = 'Sales Invoice' AND acc.account_type = 'Cash'
+		AND si.posting_date < je.posting_date
+		""" + je_cc + """
+		ORDER BY je.posting_date, jea.parent
+	""", params, as_dict=True)
+
+	out = []
+	for r in collection_rows:
+		total_alloc = flt(r.total_alloc)
+		share = (flt(r.credit_alloc) / total_alloc) if total_alloc else 0
+		if share <= 0:
+			continue
+		out.append([r.name, r.posting_date, r.get("party") or "", r.get("mode_of_payment") or "",
+			_("Credit Collection"), r.get("refs") or "", flt(r.received_amount) * share])
+	for r in advance_rows:
+		advance = flt(r.received_amount) - flt(r.total_alloc)
+		if advance > 0.0001:
+			out.append([r.name, r.posting_date, r.get("party") or "", r.get("mode_of_payment") or "",
+				_("Advance"), "", advance])
+	for r in je_rows:
+		out.append([r.name, r.posting_date, r.get("party") or "", _("Journal Entry"),
+			_("Credit Collection (JE)"), r.get("si_name") or "", flt(r.amount)])
+	out.sort(key=lambda x: (x[1], x[0]))
+	return out
 
 
 def _detail_cash_receipts_cash_sales(params, cost_center):
