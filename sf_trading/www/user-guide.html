@@ -436,430 +436,48 @@
     <div class="logo-row">
       <div class="logo-icon">SF</div>
       <div>
-        <h1>Steel Force Payments</h1>
-        <p>sf_trading</p>
+        <h1>SF Trading</h1>
+        <p>User Guide</p>
       </div>
     </div>
   </div>
-
-  <nav class="sidebar-nav">
-    <div class="nav-group-label">Getting Started</div>
-    <a href="#overview" class="nav-item">What this does</a>
-    <a href="#access" class="nav-item">Access &amp; roles</a>
-
-    <div class="nav-group-label">Daily Work</div>
-    <a href="#single" class="nav-item">Raise one advice</a>
-    <a href="#builder" class="nav-item">Batch by supplier</a>
-    <a href="#from-list" class="nav-item">From the invoice list</a>
-    <a href="#approval" class="nav-item">Approval</a>
-    <a href="#payment-entry" class="nav-item">Payment Entry</a>
-
-    <div class="nav-group-label">Automation</div>
-    <a href="#automation" class="nav-item">Scheduled runs</a>
-    <a href="#thresholds" class="nav-item">Guards &amp; thresholds</a>
-
-    <div class="nav-group-label">Reference</div>
-    <a href="#reports" class="nav-item">Reports</a>
-    <a href="#statuses" class="nav-item">Statuses</a>
-    <a href="#skips" class="nav-item">Why a party was skipped</a>
-    <a href="#troubleshooting" class="nav-item">Troubleshooting</a>
+  <nav class="sidebar-nav" id="guide-index">
+    <div class="nav-group-label">On this page</div>
   </nav>
-
-  <div class="sidebar-footer">
-    Enfono Technologies · Steel Force Trading WLL
-  </div>
+  <div class="sidebar-footer">Enfono Technologies</div>
 </aside>
 
 <main class="main">
-
   <div class="page-header">
     <div class="tag">User Guide</div>
-    <h1>Supplier Payments — Payment Advice</h1>
-    <p class="section-subtitle">Pay many invoices of one supplier with a single approved document,
-      by hand or on a schedule.</p>
+    <h1>{{ title }}</h1>
+    <p class="section-subtitle">Steel Force Trading WLL · sf_trading</p>
     <div class="meta">
-      <div class="meta-item">App: sf_trading</div>
-      <div class="meta-item">Module: Sf Trading</div>
-      <div class="meta-item">Updated: 26 July 2026</div>
+      <div class="meta-item">Rendered from docs/USER_GUIDE.md</div>
+      <div class="meta-item">{{ frappe.utils.formatdate(frappe.utils.nowdate(), "d MMMM yyyy") }}</div>
     </div>
   </div>
 
-  <!-- ── overview ─────────────────────────────────────────────────────────── -->
-  <section id="overview" class="section">
-    <h2 class="section-title">What this does</h2>
-    <p>A <b>Payment Advice</b> authorises payment against several outstanding documents of one
-      supplier, in one document, with one approval. ERPNext's own Payment Request cannot do this —
-      a Payment Request covers a single document, so "pay these nine invoices for this supplier"
-      had nowhere to live.</p>
-
-    <div class="flow-diagram">
-      <div class="flow-node">Outstanding invoices</div>
-      <div class="flow-arrow">→</div>
-      <div class="flow-node">Payment Advice</div>
-      <div class="flow-arrow">→</div>
-      <div class="flow-node">Approval</div>
-      <div class="flow-arrow">→</div>
-      <div class="flow-node">Payment Entry</div>
-      <div class="flow-arrow">→</div>
-      <div class="flow-node">Invoice paid</div>
-    </div>
-
-    <div class="info-box">
-      <b>It is not limited to Purchase Invoices.</b> An advice can reference Purchase Invoices,
-      Sales Invoices, Journal Entries, Expense Claims, Purchase Orders and Sales Orders. In
-      practice a supplier's outstanding list often includes Journal Entries as well as invoices,
-      and those come through automatically.
-    </div>
-
-    <p>Outstanding figures are not calculated by this app. They come from the same ERPNext engine
-      the Payment Entry form uses, so part-payments, credit notes and return invoices are already
-      netted off before you see them.</p>
-  </section>
-
-  <!-- ── access ───────────────────────────────────────────────────────────── -->
-  <section id="access" class="section">
-    <h2 class="section-title">Access &amp; roles</h2>
-
-    <div class="access-box">
-      <div class="access-item"><b>Payment Advice</b> — Accounts Manager, Accountant, Finance
-        Manager, HO Accounts, Purchase Manager, System Manager</div>
-      <div class="access-item"><b>Payment Advice Builder</b> — same list, at
-        <span class="path">/app/payment-advice-builder</span></div>
-      <div class="access-item"><b>Payment Automation Settings</b> — Accounts Manager, Finance
-        Manager, System Manager</div>
-    </div>
-
-    <table class="roles-table">
-      <thead><tr><th>Role</th><th>Prepare</th><th>Approve</th><th>Configure automation</th></tr></thead>
-      <tbody>
-        <tr><td>Accounts User</td><td class="perm-yes">Yes</td><td class="perm-no">No</td><td class="perm-no">No</td></tr>
-        <tr><td>Accountant</td><td class="perm-yes">Yes</td><td class="perm-no">No</td><td class="perm-no">No</td></tr>
-        <tr><td>Finance Manager</td><td class="perm-yes">Yes</td><td class="perm-yes">Yes</td><td class="perm-yes">Yes</td></tr>
-        <tr><td>Accounts Manager</td><td class="perm-yes">Yes</td><td class="perm-no">No</td><td class="perm-yes">Yes</td></tr>
-      </tbody>
-    </table>
-  </section>
-
-  <!-- ── single advice ────────────────────────────────────────────────────── -->
-  <section id="single" class="section">
-    <h2 class="section-title">Raise one advice</h2>
-    <p class="section-subtitle">Use this when you are paying a single supplier.</p>
-
-    <div class="step">
-      <div class="step-left"><div class="step-num">1</div><div class="step-line"></div></div>
-      <div class="step-body">
-        <b>New Payment Advice.</b> Set Company, Party Type (Supplier) and the Party. Every other
-        picker — bank account, cost centre, project — is filtered to that company automatically.
-      </div>
-    </div>
-
-    <div class="step">
-      <div class="step-left"><div class="step-num">2</div><div class="step-line"></div></div>
-      <div class="step-body">
-        <b>Get Outstanding Documents.</b> The dialog offers the same filters as the Payment Entry
-        form: posting-date range, due-date range, outstanding amount window, cost centre, and
-        whether to include orders to be billed. Rows already on the advice are never added twice.
-      </div>
-    </div>
-
-    <div class="step">
-      <div class="step-left"><div class="step-num">3</div><div class="step-line"></div></div>
-      <div class="step-body">
-        <b>Set Payment Amount.</b> This is what you are authorising. It is spread across the
-        references from the oldest down. A row beyond the authorised amount stays on the advice
-        with zero allocated, so you can still see the full picture. The headline above the table
-        shows, for example, <i>"2,464.713 of 3,000.000 allocated across 18 of 21 references"</i>.
-      </div>
-    </div>
-
-    <div class="step">
-      <div class="step-left"><div class="step-num">4</div><div class="step-line"></div></div>
-      <div class="step-body">
-        <b>Submit.</b> If an approval workflow is switched on, use the workflow actions instead
-        (see <a href="#approval">Approval</a>). Otherwise only the user linked to the selected
-        Approver may submit.
-      </div>
-    </div>
-
-    <div class="callout">
-      An invoice can only sit on <b>one</b> live advice. If it is already on another advice —
-      even a draft — you will be told which one, so nothing gets paid twice.
-    </div>
-  </section>
-
-  <!-- ── builder ──────────────────────────────────────────────────────────── -->
-  <section id="builder" class="section">
-    <h2 class="section-title">Batch by supplier — the Builder</h2>
-    <p class="section-subtitle"><span class="path">/app/payment-advice-builder</span> — one sweep,
-      one advice per supplier.</p>
-
-    <div class="step">
-      <div class="step-left"><div class="step-num">1</div><div class="step-line"></div></div>
-      <div class="step-body">
-        <b>Set the filters.</b>
-        <div class="filters-label">Available filters</div>
-        <span class="filter-tag">Company</span>
-        <span class="filter-tag">Party Type</span>
-        <span class="filter-tag">Party</span>
-        <span class="filter-tag">Due on or before</span>
-        <span class="filter-tag">Ageing over N days</span>
-        <span class="filter-tag">Min advice total</span>
-        <span class="filter-tag">Cost Center</span>
-        <span class="filter-tag">Branch</span>
-        <span class="filter-tag">Include on-hold parties</span>
-      </div>
-    </div>
-
-    <div class="step">
-      <div class="step-left"><div class="step-num">2</div><div class="step-line"></div></div>
-      <div class="step-body">
-        <b>Fetch Outstanding.</b> Suppliers come back grouped, biggest first, each showing invoice
-        count, oldest ageing, currency and total. Anything unpayable is listed separately with the
-        reason (see <a href="#skips">Why a party was skipped</a>).
-      </div>
-    </div>
-
-    <div class="step">
-      <div class="step-left"><div class="step-num">3</div><div class="step-line"></div></div>
-      <div class="step-body">
-        <b>Tick what you are paying.</b> Tick a whole supplier, or individual invoices inside it.
-        The footer keeps a running count and total.
-      </div>
-    </div>
-
-    <div class="step">
-      <div class="step-left"><div class="step-num">4</div><div class="step-line"></div></div>
-      <div class="step-body">
-        <b>Advice Options</b> (optional) — mode of payment, company bank account, approver, cost
-        centre, remarks, and whether to submit. Set once, applied to every advice in the batch.
-      </div>
-    </div>
-
-    <div class="step">
-      <div class="step-left"><div class="step-num">5</div></div>
-      <div class="step-body">
-        <b>Create Advices.</b> You confirm a count and a total first. Each advice is created as a
-        <span class="badge grey">Draft</span> unless you chose to submit. The result panel links
-        every advice, and lists anything skipped with its reason. Batches over 15 suppliers run in
-        the background and chime when finished.
-      </div>
-    </div>
-  </section>
-
-  <!-- ── from list ────────────────────────────────────────────────────────── -->
-  <section id="from-list" class="section">
-    <h2 class="section-title">From the Purchase Invoice list</h2>
-    <p>Tick invoices in the Purchase Invoice list → <b>Actions → Create Payment Advice (by
-      supplier)</b>. Invoices are grouped by supplier and one draft advice is raised per supplier.
-      Anything already on a live advice is skipped and named, not silently dropped.</p>
-    <div class="info-box">All ticked invoices must belong to one company. Invoices with nothing
-      outstanding are ignored.</div>
-  </section>
-
-  <!-- ── approval ─────────────────────────────────────────────────────────── -->
-  <section id="approval" class="section">
-    <h2 class="section-title">Approval</h2>
-    <p>There are two modes. Which one applies depends on whether the PM Workflow is switched on.</p>
-
-    <h3 class="section-subtitle">Without a workflow</h3>
-    <p>Only the user linked to the <b>Approver</b> Employee on the advice may submit it. A System
-      Manager can release a stuck advice.</p>
-
-    <h3 class="section-subtitle">With the PM Workflow (recommended)</h3>
-    <div class="flow-diagram">
-      <div class="flow-node">Draft</div>
-      <div class="flow-arrow">→</div>
-      <div class="flow-node">Pending Approval</div>
-      <div class="flow-arrow">→</div>
-      <div class="flow-node">Approved</div>
-    </div>
-    <table class="nav-table">
-      <thead><tr><th>Action</th><th>From → To</th><th>Who</th><th>Requires</th></tr></thead>
-      <tbody>
-        <tr><td>Send for Approval</td><td>Draft → Pending Approval</td><td>Accounts User</td><td>—</td></tr>
-        <tr><td>Approve</td><td>Pending Approval → Approved</td><td>Finance Manager</td><td>An attachment</td></tr>
-        <tr><td>Reject</td><td>Pending Approval → Rejected</td><td>Finance Manager</td><td>A comment</td></tr>
-        <tr><td>Send for Approval</td><td>Rejected → Pending Approval</td><td>Accounts User</td><td>—</td></tr>
-      </tbody>
-    </table>
-    <p>Reminders go out after 3 days, escalation after 7. The person who prepares an advice cannot
-      approve it. While the workflow is active, the single-approver rule steps aside and scheduled
-      runs stop at drafts — the approvers stay in control.</p>
-  </section>
-
-  <!-- ── payment entry ────────────────────────────────────────────────────── -->
-  <section id="payment-entry" class="section">
-    <h2 class="section-title">Creating the Payment Entry</h2>
-    <p>On a submitted advice press <b>Create Payment Entry</b>. The advice's allocations become the
-      Payment Entry's references, and ERPNext completes the rest (base amounts, party balance,
-      unallocated amount).</p>
-
-    <table class="field-table">
-      <thead><tr><th>Event</th><th>What happens to the advice</th></tr></thead>
-      <tbody>
-        <tr><td class="field-name">Payment Entry submitted</td><td>Advice is stamped with the Payment Entry and date; status becomes <span class="badge green">Paid</span> or <span class="badge amber">Partly Paid</span>; every reference row's status and outstanding refresh</td></tr>
-        <tr><td class="field-name">Payment Entry cancelled</td><td>Stamp is cleared, advice returns to <span class="badge blue">Approved</span>, rows refresh — a corrected Payment Entry can then be raised</td></tr>
-        <tr><td class="field-name">Advice cancelled</td><td>Blocked while its Payment Entry is still submitted. Cancel the Payment Entry first</td></tr>
-      </tbody>
-    </table>
-
-    <div class="info-box">Two submitted Payment Entries can never claim the same advice, and each
-      invoice shows its advice under <b>Connections</b> on the invoice itself.</div>
-  </section>
-
-  <!-- ── automation ───────────────────────────────────────────────────────── -->
-  <section id="automation" class="section">
-    <h2 class="section-title">Scheduled runs</h2>
-    <p class="section-subtitle">Payment Automation Settings — one configuration per company and
-      party type.</p>
-
-    <p>A run does as much as you allow, and each step needs the one before it:</p>
-    <div class="badge-grid">
-      <span class="badge blue">1 · Create Payment Advice</span>
-      <span class="badge purple">2 · Submit Payment Advice</span>
-      <span class="badge amber">3 · Create Payment Entry</span>
-      <span class="badge red">4 · Submit Payment Entry</span>
-    </div>
-
-    <p>The form spells the plan out in words, for example: <i>"Will create advices → submit advices
-      on Mon, Tue at 07:00"</i>. Set the weekdays and the time; the run fires on the first
-      scheduler tick at or after that time and only once a day.</p>
-
-    <div class="step">
-      <div class="step-left"><div class="step-num">✓</div><div class="step-line"></div></div>
-      <div class="step-body"><b>Dry Run</b> works out exactly what would happen and reports it
-        without creating anything. Use it first, always.</div>
-    </div>
-    <div class="step">
-      <div class="step-left"><div class="step-num">▶</div></div>
-      <div class="step-body"><b>Run Now</b> ignores the schedule and runs immediately.</div>
-    </div>
-
-    <div class="callout">
-      Start with <b>step 1 only</b> and Dry Run ticked. Read the summary, then enable more. Step 4
-      moves money.
-    </div>
-
-    <p>Each run reports through the chime, the desk bell, and email where an outgoing email account
-      exists. Quiet runs stay quiet unless you ask to be told about them.</p>
-  </section>
-
-  <!-- ── thresholds ───────────────────────────────────────────────────────── -->
-  <section id="thresholds" class="section">
-    <h2 class="section-title">Guards &amp; thresholds</h2>
-    <table class="field-table">
-      <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
-      <tbody>
-        <tr><td class="field-name">Due date offset</td><td>Include invoices due within this many days. 0 = due today or earlier</td></tr>
-        <tr><td class="field-name">Minimum amount</td><td>Skip a supplier whose total is below this. Rounding residue is real: live data holds invoices outstanding 0.005</td></tr>
-        <tr><td class="field-name">Ageing over</td><td>Only invoices older than N days past due</td></tr>
-        <tr><td class="field-name">Max parties per run</td><td>Hard cap, so a wrong filter cannot raise hundreds of advices</td></tr>
-        <tr><td class="field-name">Advice threshold</td><td>Skip any supplier whose total would exceed this</td></tr>
-        <tr><td class="field-name">Submit threshold</td><td>Above this, advices are left as drafts even with auto-submit on</td></tr>
-        <tr><td class="field-name">Payment Entry threshold</td><td>Above this, Payment Entries are left as drafts</td></tr>
-        <tr><td class="field-name">Exclude foreign currency</td><td>Skip suppliers with invoices outside the company currency</td></tr>
-        <tr><td class="field-name">Ignore hold / blocked</td><td>Off (recommended) means an on-hold supplier is skipped</td></tr>
-      </tbody>
-    </table>
-    <div class="info-box">A single supplier can be excluded from every run by ticking
-      <b>Disable Automatic Payment</b> on the Supplier — no configuration change needed.</div>
-  </section>
-
-  <!-- ── reports ──────────────────────────────────────────────────────────── -->
-  <section id="reports" class="section">
-    <h2 class="section-title">Reports</h2>
-    <div class="report-cards">
-      <div class="report-card">
-        <div class="report-icon ic-blue">SD</div>
-        <b>Supplier Due Payment Report</b>
-        <p>Outstanding supplier payables by due date, with overdue days and ageing buckets. Now also
-          shows the <b>Payment Advice</b> and its status for each invoice.</p>
-      </div>
-      <div class="report-card">
-        <div class="report-icon ic-teal">IO</div>
-        <b>Invoice Due &amp; Overdue Report</b>
-        <p>Sales and Purchase together, overdue-only by default, with the same Payment Advice
-          columns.</p>
-      </div>
-      <div class="report-card">
-        <div class="report-icon ic-purple">PA</div>
-        <b>Payment Advice list</b>
-        <p>Colour-coded by status, an <i>auto</i> pill on advices the scheduler raised, and an
-          <b>Awaiting Payment Entry</b> button for the approved-but-unpaid queue.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ── statuses ─────────────────────────────────────────────────────────── -->
-  <section id="statuses" class="section">
-    <h2 class="section-title">Statuses</h2>
-    <div class="badge-grid">
-      <span class="badge grey">Draft — being prepared</span>
-      <span class="badge orange">Pending Approval — approver selected, not yet submitted</span>
-      <span class="badge blue">Approved — submitted, no Payment Entry yet</span>
-      <span class="badge amber">Partly Paid — Payment Entry covers part of it</span>
-      <span class="badge green">Paid — fully covered</span>
-      <span class="badge red">Cancelled</span>
-    </div>
-  </section>
-
-  <!-- ── skips ────────────────────────────────────────────────────────────── -->
-  <section id="skips" class="section">
-    <h2 class="section-title">Why a party was skipped</h2>
-    <table class="field-table">
-      <thead><tr><th>Message</th><th>Meaning &amp; fix</th></tr></thead>
-      <tbody>
-        <tr><td class="field-name">No default payable account</td><td>The supplier has no payable account and none is set on the company. Set one on the Supplier</td></tr>
-        <tr><td class="field-name">Already allocated on a live Payment Advice</td><td>Those invoices are on another advice. Open it, or cancel it to free them</td></tr>
-        <tr><td class="field-name">Below the minimum advice total</td><td>Rounding residue. Lower the minimum if you really want to pay it</td></tr>
-        <tr><td class="field-name">Party is on hold</td><td>ERPNext hold is in force. Release the supplier, or tick "Include on-hold parties"</td></tr>
-        <tr><td class="field-name">Party is disabled</td><td>Re-enable the supplier first</td></tr>
-        <tr><td class="field-name">Automation disabled on the party</td><td><b>Disable Automatic Payment</b> is ticked on the Supplier</td></tr>
-        <tr><td class="field-name">Over the per-run cap</td><td>Max parties per run reached; the rest come next run, or raise the cap</td></tr>
-        <tr><td class="field-name">Advices left as drafts — a PM Workflow governs approval</td><td>Working as intended: approvers submit, not the scheduler</td></tr>
-      </tbody>
-    </table>
-  </section>
-
-  <!-- ── troubleshooting ──────────────────────────────────────────────────── -->
-  <section id="troubleshooting" class="section">
-    <h2 class="section-title">Troubleshooting</h2>
-    <table class="field-table">
-      <thead><tr><th>Symptom</th><th>Cause &amp; fix</th></tr></thead>
-      <tbody>
-        <tr><td class="field-name">Bank, IBAN and SWIFT are blank on the advice</td><td>The supplier has no Bank Account record. Create one and the details fetch automatically</td></tr>
-        <tr><td class="field-name">"Payment Amount exceeds the total payable"</td><td>You authorised more than the references add up to. Fetch more invoices or lower the amount</td></tr>
-        <tr><td class="field-name">The invoice picker is empty</td><td>Set the Company first — the picker is filtered to it, and to submitted invoices only</td></tr>
-        <tr><td class="field-name">"Cancel Payment Entry … before cancelling this advice"</td><td>Cancel the Payment Entry, then the advice</td></tr>
-        <tr><td class="field-name">No chime when a run finishes</td><td>Click anywhere on the page once per session — browsers block sound until you interact</td></tr>
-        <tr><td class="field-name">No email summary</td><td>No outgoing Email Account is configured. Chime and bell still work; email starts once one exists</td></tr>
-        <tr><td class="field-name">The scheduled run never fires</td><td>Check Enabled, the weekday ticks, the time, and that at least step 1 is on</td></tr>
-      </tbody>
-    </table>
-    <div class="divider"></div>
-    <p class="section-subtitle">Questions: Enfono Technologies — support@enfono.com</p>
-  </section>
-
+  <div class="content-body section">
+    {{ guide_html }}
+  </div>
 </main>
 
-<!-- ── Sidebar active state on scroll ─────────────────────────── -->
 <script>
-  const sections = document.querySelectorAll('section[id]');
-  const navItems = document.querySelectorAll('.nav-item');
-
-  const observer = new IntersectionObserver(entries => {
-    entries.forEach(e => {
-      if (e.isIntersecting) {
-        navItems.forEach(n => n.classList.remove('active'));
-        const active = document.querySelector(`.nav-item[href="#${e.target.id}"]`);
-        if (active) active.classList.add('active');
-      }
-    });
-  }, { rootMargin: '-20% 0px -70% 0px' });
-
-  sections.forEach(s => observer.observe(s));
+// build the sidebar index from the rendered headings, same idea as the desk page
+document.addEventListener("DOMContentLoaded", function () {
+  var nav = document.getElementById("guide-index");
+  document.querySelectorAll(".content-body h2, .content-body h3").forEach(function (h, i) {
+    var id = "sec-" + i;
+    h.id = id;
+    var a = document.createElement("a");
+    a.className = "nav-item";
+    a.href = "#" + id;
+    a.textContent = h.textContent;
+    if (h.tagName === "H3") { a.style.paddingLeft = "1.9rem"; a.style.fontSize = "0.8rem"; }
+    nav.appendChild(a);
+  });
+});
 </script>
-
 </body>
 </html>
-

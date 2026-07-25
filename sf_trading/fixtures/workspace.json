@@ -1,7 +1,7 @@
 [
  {
   "charts": [],
-  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Supplier Payments</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Advice\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Advice Builder\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Automation Settings\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Supplier Payments Guide\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Reports</b></span>\", \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Payables\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cash & Cheques\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Masters\", \"col\": 4}}]",
+  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Supplier Payments</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Advice\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Advice Builder\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Automation Settings\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"SF Trading User Guide\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Reports</b></span>\", \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Payables\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cash & Cheques\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Masters\", \"col\": 4}}]",
   "creation": "2026-07-26 12:30:00.000000",
   "docstatus": 0,
   "doctype": "Workspace",
@@ -171,8 +171,8 @@
    },
    {
     "color": "Grey",
-    "label": "Supplier Payments Guide",
-    "link_to": "payment-advice-guide",
+    "label": "SF Trading User Guide",
+    "link_to": "sf-trading-user-guide",
     "type": "Page"
    }
   ],
