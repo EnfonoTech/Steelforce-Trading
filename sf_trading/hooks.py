@@ -587,7 +587,10 @@ fixtures = [
 	},
 	{
 		"doctype": "Custom Field",
-		"filters": [["name", "in", ("Payment Entry-custom_zatca_payment_means_code",)]],
+		"filters": [["name", "in", (
+			"Payment Entry-custom_zatca_payment_means_code",
+			"Journal Entry-custom_loyalty_sales_invoice",
+		)]],
 	},
 	{
 		"doctype": "Notification",
