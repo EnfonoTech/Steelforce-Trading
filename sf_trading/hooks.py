@@ -582,5 +582,13 @@ fixtures = [
 			"Stock Entry Detail-s_warehouse-ignore_user_permissions",
 			"Stock Entry Detail-t_warehouse-ignore_user_permissions",
 		)]]
-	}
+	},
+	{
+		"doctype": "Custom Field",
+		"filters": [["name", "in", ("Payment Entry-custom_zatca_payment_means_code",)]],
+	},
+	{
+		"doctype": "Notification",
+		"filters": [["name", "in", ("Supplier Payment Due Reminder",)]],
+	},
 ]
