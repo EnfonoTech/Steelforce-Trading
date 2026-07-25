@@ -189,6 +189,11 @@ _SP_HOOK = "sf_trading.api.selling_price_validation.validate_selling_price"
 _PTT_HOOK = "sf_trading.purchase_tax_template.set_template_by_currency"
 
 doc_events = {
+	"Payment Entry": {
+		"validate": "sf_trading.api.payment_advice_hooks.validate_payment_entry_advice",
+		"on_submit": "sf_trading.api.payment_advice_hooks.on_payment_entry_submit",
+		"on_cancel": "sf_trading.api.payment_advice_hooks.on_payment_entry_cancel",
+	},
 	"Customer": {
 		"validate": [
 			"sf_trading.api.customer_override.validate",
@@ -590,6 +595,7 @@ fixtures = [
 		"filters": [["name", "in", (
 			"Payment Entry-custom_zatca_payment_means_code",
 			"Journal Entry-custom_loyalty_sales_invoice",
+			"Payment Entry-custom_payment_advice",
 		)]],
 	},
 	{
