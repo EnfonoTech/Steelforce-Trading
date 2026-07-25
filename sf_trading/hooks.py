@@ -599,6 +599,7 @@ fixtures = [
 			"Payment Entry-custom_zatca_payment_means_code",
 			"Journal Entry-custom_loyalty_sales_invoice",
 			"Payment Entry-custom_payment_advice",
+			"Supplier-custom_disable_auto_payment",
 		)]],
 	},
 	{
@@ -611,5 +612,10 @@ fixtures = [
 scheduler_events = {
 	"daily": [
 		"sf_trading.api.overdue_notifications.notify_overdue_invoices",
+	],
+	# every tick: each Payment Automation Settings row names its own weekday + time,
+	# and the engine fences itself with last_execution
+	"all": [
+		"sf_trading.api.payment_automation.run_due_automations",
 	],
 }
