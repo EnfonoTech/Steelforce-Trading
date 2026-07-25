@@ -43,6 +43,15 @@ frappe.ui.form.on("Payment Advice", {
 		}));
 	},
 
+	onload(frm) {
+		// the DocType carries no company default: ":Company" would make Frappe run
+		// SELECT company FROM tabCompany, which fails every insert. Default it here instead.
+		if (frm.is_new() && !frm.doc.company) {
+			const company = frappe.defaults.get_user_default("Company");
+			if (company) frm.set_value("company", company);
+		}
+	},
+
 	refresh(frm) {
 		frm.trigger("toggle_buttons");
 		frm.trigger("show_allocation_summary");
@@ -248,12 +257,68 @@ frappe.ui.form.on("Payment Advice", {
 	payment_amount(frm) {
 		frm.trigger("show_allocation_summary");
 	},
+
+	recalculate_payment_amount(frm) {
+		// while drafting, keep the authorised amount equal to what the rows now total, unless
+		// the user has deliberately typed a smaller figure
+		const payable = (frm.doc.payment_advice_reference || []).reduce(
+			(sum, d) => sum + flt(d.net_payable_amount),
+			0
+		);
+		if (!frm.doc.payment_amount || flt(frm.doc.payment_amount) > payable) {
+			frm.set_value("payment_amount", payable);
+		}
+		frm.trigger("show_allocation_summary");
+	},
 });
 
 frappe.ui.form.on("Payment Advice Reference", {
+	// Manual entry, the way Payment Entry does it: choose the document and the row fills
+	// itself — amount, outstanding, ageing, currency, cost centre, live status — with the
+	// company/party/duplicate checks applied at the moment of picking.
+	reference_record(frm, cdt, cdn) {
+		const row = locals[cdt][cdn];
+		if (!row.reference_doctype || !row.reference_record) return;
+
+		if (!frm.doc.company || !frm.doc.party) {
+			frappe.msgprint(__("Set Company and Party before adding references."));
+			frappe.model.set_value(cdt, cdn, "reference_record", null);
+			return;
+		}
+
+		frappe.call({
+			method: "sf_trading.sf_trading.doctype.payment_advice.payment_advice.get_reference_details",
+			args: {
+				reference_doctype: row.reference_doctype,
+				reference_record: row.reference_record,
+				company: frm.doc.company,
+				party_type: frm.doc.party_type,
+				party: frm.doc.party,
+			},
+			callback(r) {
+				if (!r.message) return;
+				Object.keys(r.message).forEach((field) => {
+					frappe.model.set_value(cdt, cdn, field, r.message[field]);
+				});
+				frm.trigger("recalculate_payment_amount");
+			},
+			error() {
+				// the server explained why; clear the pick so the row is not half-filled
+				frappe.model.set_value(cdt, cdn, "reference_record", null);
+			},
+		});
+	},
+
+	reference_doctype(frm, cdt, cdn) {
+		// changing the type invalidates whatever was picked
+		frappe.model.set_value(cdt, cdn, "reference_record", null);
+	},
+
 	payment_advice_reference_remove(frm) {
+		frm.trigger("recalculate_payment_amount");
 		frm.trigger("show_allocation_summary");
 	},
+
 	net_payable_amount(frm) {
 		frm.trigger("show_allocation_summary");
 	},

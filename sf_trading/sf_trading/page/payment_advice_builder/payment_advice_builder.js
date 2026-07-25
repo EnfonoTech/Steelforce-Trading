@@ -49,8 +49,20 @@ class PaymentAdviceBuilder {
 			fieldtype: "Select",
 			options: ["Supplier", "Customer"].join("\n"),
 			default: "Supplier",
+			change: () => {
+				if (this.filters.party) this.filters.party.set_value("");
+				this.render_empty(__("Party type changed — fetch again."));
+			},
 		});
-		add({ fieldname: "party", label: __("Party"), fieldtype: "Dynamic Link", options: "party_type" });
+		// A Dynamic Link outside a form has no doc to read `options` from, so it must be told
+		// which doctype to query. frappe's ControlDynamicLink calls df.get_options(this) when
+		// present — without it the party picker returned nothing at all.
+		add({
+			fieldname: "party",
+			label: __("Party"),
+			fieldtype: "Dynamic Link",
+			get_options: () => this.filters.party_type.get_value() || "Supplier",
+		});
 		add({
 			fieldname: "due_before",
 			label: __("Due On or Before"),

@@ -533,6 +533,97 @@ def create_payment_entry(payment_advice: str, submit: int = 0):
 
 
 @frappe.whitelist()
+def get_reference_details(reference_doctype: str, reference_record: str, company: str = None,
+                         party_type: str = None, party: str = None):
+    """Details for ONE manually-picked reference row.
+
+    Payment Entry fills a reference row the moment you choose the document; the advice grid now
+    does the same instead of waiting for a save. Validation lives here too, so a wrong company
+    or party is refused at the moment of picking rather than at submit.
+    """
+    frappe.has_permission("Payment Advice", "write", throw=True)
+
+    if reference_doctype not in ALLOWED_REFERENCE_DOCTYPES:
+        frappe.throw(
+            _("%s cannot be referenced on a Payment Advice.") % _(reference_doctype)
+        )
+    if not frappe.db.exists(reference_doctype, reference_record):
+        frappe.throw(
+            _("%(dt)s %(name)s does not exist.")
+            % {"dt": _(reference_doctype), "name": frappe.bold(reference_record)}
+        )
+
+    meta = frappe.get_meta(reference_doctype)
+    wanted = [f for f in (
+        "posting_date", "due_date", "grand_total", "outstanding_amount", "currency",
+        "conversion_rate", "cost_center", "status", "docstatus", "company", "bill_no",
+    ) if f == "docstatus" or meta.has_field(f)]
+    values = frappe.db.get_value(reference_doctype, reference_record, wanted, as_dict=True) or frappe._dict()
+
+    if cint(values.get("docstatus")) != 1:
+        frappe.throw(_("%s is not submitted.") % frappe.bold(reference_record))
+
+    if company and values.get("company") and values.get("company") != company:
+        frappe.throw(
+            _("%(name)s belongs to company %(other)s.")
+            % {"name": frappe.bold(reference_record), "other": frappe.bold(values.get("company"))}
+        )
+
+    if party and party_type:
+        party_field = {"Supplier": "supplier", "Customer": "customer", "Employee": "employee"}.get(party_type)
+        if party_field and meta.has_field(party_field):
+            row_party = frappe.db.get_value(reference_doctype, reference_record, party_field)
+            if row_party and row_party != party:
+                frappe.throw(
+                    _("%(name)s belongs to %(other)s, not %(party)s.")
+                    % {
+                        "name": frappe.bold(reference_record),
+                        "other": frappe.bold(row_party),
+                        "party": frappe.bold(party),
+                    }
+                )
+
+    # already spoken for?
+    clash = frappe.get_all(
+        "Payment Advice Reference",
+        filters={
+            "reference_record": reference_record,
+            "parenttype": "Payment Advice",
+            "docstatus": ["!=", 2],
+            "allocated_amount": [">", 0],
+        },
+        fields=["parent"],
+        limit=1,
+    )
+    if clash:
+        frappe.throw(
+            _("%(name)s is already allocated on Payment Advice %(advice)s.")
+            % {"name": frappe.bold(reference_record), "advice": frappe.bold(clash[0].parent)}
+        )
+
+    total = flt(values.get("grand_total"))
+    outstanding = flt(values.get("outstanding_amount")) if meta.has_field("outstanding_amount") else total
+    if outstanding <= 0:
+        frappe.throw(_("%s has nothing outstanding.") % frappe.bold(reference_record))
+
+    today = getdate(nowdate())
+    due = getdate(values.get("due_date") or values.get("posting_date") or today)
+
+    return {
+        "bill_no": values.get("bill_no"),
+        "date": values.get("posting_date"),
+        "amount": total,
+        "settled_amount": flt(total - outstanding, 3),
+        "net_payable_amount": outstanding,
+        "ageing": max(0, (today - due).days),
+        "currency": values.get("currency") or frappe.db.get_default("currency"),
+        "exchange_rate": flt(values.get("conversion_rate")) or 1.0,
+        "cost_center": values.get("cost_center"),
+        "reference_status": values.get("status"),
+    }
+
+
+@frappe.whitelist()
 def get_outstanding_documents(
     company: str,
     party_type: str,

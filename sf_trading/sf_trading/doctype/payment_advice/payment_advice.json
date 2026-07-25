@@ -100,8 +100,7 @@
    "fieldtype": "Column Break"
   },
   {
-   "default": ":Company",
-   "description": "Payment Entry is created for this company.",
+   "description": "Payment Entry is created for this company. Defaults to your user's company on a new advice.",
    "fieldname": "company",
    "fieldtype": "Link",
    "in_standard_filter": 1,
