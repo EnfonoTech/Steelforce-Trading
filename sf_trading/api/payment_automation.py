@@ -250,6 +250,25 @@ def _create(setting, groups, summary):
     if not cint(setting.auto_submit_advice):
         return
 
+    # An approval workflow outranks the automation: raising drafts is helpful, submitting
+    # them behind the approvers' backs is not. Say so in the summary rather than silently
+    # doing nothing or blowing up on the workflow's permissions.
+    from sf_trading.sf_trading.doctype.payment_advice.payment_advice import (
+        workflow_controls_submission,
+    )
+
+    if workflow_controls_submission(setting.company):
+        summary.skipped.append(
+            {
+                "party": None,
+                "reason": "workflow_controls_submission",
+                "label": _(
+                    "Advices left as drafts — a PM Workflow governs Payment Advice approval"
+                ),
+            }
+        )
+        return
+
     for created in summary.advices:
         try:
             _advance_one(setting, created, summary)

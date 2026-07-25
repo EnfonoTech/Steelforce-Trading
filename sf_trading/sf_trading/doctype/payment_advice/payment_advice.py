@@ -334,6 +334,13 @@ class PaymentAdvice(Document):
             self.status = STATUS_APPROVED
 
     def validate_approver(self):
+        # When a PM Workflow governs Payment Advice, IT decides who may submit: an Accountant
+        # approving someone else's advice is the whole point of a workflow, and this rule
+        # would reject exactly that. Standing down here rather than in the workflow keeps a
+        # site without permission_manager working unchanged.
+        if workflow_controls_submission(self.company):
+            return
+
         if not self.approver:
             frappe.throw(_("Select an Approver before submitting."))
 
@@ -351,6 +358,23 @@ class PaymentAdvice(Document):
         frappe.throw(
             _("Only %s (the selected Approver) can submit this advice.") % frappe.bold(approver_user)
         )
+
+
+def workflow_controls_submission(company=None):
+    """True when a PM Workflow is active for Payment Advice on this site.
+
+    Imported lazily so sf_trading keeps working on a bench without permission_manager.
+    """
+    try:
+        from sf_trading.api.payment_advice_workflow import has_active_workflow
+    except Exception:
+        return False
+
+    try:
+        return has_active_workflow(company)
+    except Exception:
+        # never let an approval-mode probe block a save
+        return False
 
 
 # ── Payment Entry creation ───────────────────────────────────────────────────────

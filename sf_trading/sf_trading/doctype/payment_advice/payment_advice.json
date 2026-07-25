@@ -15,6 +15,7 @@
   "company",
   "mode_of_payment",
   "status",
+  "workflow_state",
   "auto_generated",
   "party_section",
   "party_type",
@@ -123,6 +124,18 @@
    "in_standard_filter": 1,
    "label": "Status",
    "options": "Draft\nPending Approval\nApproved\nPartly Paid\nPaid\nCancelled",
+   "read_only": 1
+  },
+  {
+   "allow_on_submit": 1,
+   "description": "Maintained by the PM Workflow when one is active for Payment Advice.",
+   "fieldname": "workflow_state",
+   "fieldtype": "Link",
+   "hidden": 0,
+   "in_standard_filter": 1,
+   "label": "Workflow State",
+   "no_copy": 1,
+   "options": "Workflow State",
    "read_only": 1
   },
   {
