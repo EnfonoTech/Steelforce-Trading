@@ -46,6 +46,8 @@ app_include_js = [
 	f"/assets/sf_trading/js/workflow_approval_shortcut.js?{_v}",
 	f"/assets/sf_trading/js/item_search_cache_buster.js?{_v}",
 	f"/assets/sf_trading/js/company_print_format.js?{_v}",
+	# ── Overdue-invoice alert: chime + toast + desktop notification ──
+	f"/assets/sf_trading/js/sf_overdue_alert.js?{_v}",
 ]
 
 # doctype_js: loaded only when that specific doctype form opens
@@ -592,3 +594,10 @@ fixtures = [
 		"filters": [["name", "in", ("Supplier Payment Due Reminder",)]],
 	},
 ]
+
+# ─── Scheduler ────────────────────────────────────────────────────────────────
+scheduler_events = {
+	"daily": [
+		"sf_trading.api.overdue_notifications.notify_overdue_invoices",
+	],
+}
