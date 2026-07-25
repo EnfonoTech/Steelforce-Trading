@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Steel Force Payments — User Guide — User Guide</title>
+  <!-- Enfono standard: branded favicon on every www page. Point at a small (~96px)
+       client logo. Host in site public files (/files/<name>.png) or app assets
+       (/assets/<app>/images/<name>.png). Replace generic Frappe/Vite/Expo icons. -->
+  <link rel="icon" type="image/png" href="/files/app-favicon.png" />
+  <style>
+    /* ── Reset & Base ──────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      font-size: 15px;
+      line-height: 1.7;
+      color: #1a1a2e;
+      background: #f5f6fa;
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* ── Sidebar ────────────────────────────────────────────────────────── */
+    .sidebar {
+      width: 260px;
+      min-height: 100vh;
+      background: #1a1a2e;
+      color: #c8cfe8;
+      position: fixed;
+      top: 0; left: 0;
+      overflow-y: auto;
+      display: flex;
+      flex-direction: column;
+      z-index: 100;
+    }
+    .sidebar-brand {
+      padding: 24px 20px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .sidebar-brand .logo-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 4px;
+    }
+    .sidebar-brand .logo-icon {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      border-radius: 8px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .sidebar-brand .logo-icon svg { width: 20px; height: 20px; stroke: #fff; fill: none; }
+    .sidebar-brand h1 { font-size: 15px; font-weight: 700; color: #fff; letter-spacing: -0.3px; }
+    .sidebar-brand p  { font-size: 11px; color: #6b7299; margin-top: 2px; }
+
+    .sidebar-nav { padding: 12px 0; flex: 1; }
+    .nav-group-label {
+      font-size: 10px; font-weight: 700; letter-spacing: 1.2px;
+      text-transform: uppercase; color: #4a5180;
+      padding: 12px 20px 4px;
+    }
+    .nav-item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 20px;
+      color: #9ba3c8;
+      text-decoration: none;
+      font-size: 13.5px;
+      border-left: 3px solid transparent;
+      transition: all 0.15s;
+    }
+    .nav-item:hover, .nav-item.active {
+      background: rgba(255,255,255,0.06);
+      color: #fff;
+      border-left-color: #2563eb;
+    }
+    .nav-item svg { width: 16px; height: 16px; stroke: currentColor; fill: none; flex-shrink: 0; }
+
+    .sidebar-footer {
+      padding: 16px 20px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      font-size: 11px;
+      color: #4a5180;
+    }
+    .sidebar-footer a { color: #6b7299; text-decoration: none; }
+
+    /* ── Main Content ───────────────────────────────────────────────────── */
+    .main {
+      margin-left: 260px;
+      flex: 1;
+      padding: 0;
+      min-height: 100vh;
+    }
+
+    .page-header {
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+      color: #fff;
+      padding: 48px 48px 40px;
+      position: relative;
+      overflow: hidden;
+    }
+    .page-header::after {
+      content: '';
+      position: absolute;
+      right: -60px; top: -60px;
+      width: 300px; height: 300px;
+      background: radial-gradient(circle, rgba(37,99,235,0.3) 0%, transparent 70%);
+      border-radius: 50%;
+    }
+    .page-header .tag {
+      display: inline-block;
+      background: rgba(37,99,235,0.3);
+      border: 1px solid rgba(37,99,235,0.5);
+      color: #93c5fd;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      padding: 3px 10px;
+      border-radius: 20px;
+      margin-bottom: 12px;
+    }
+    .page-header h1 { font-size: 32px; font-weight: 800; letter-spacing: -0.5px; margin-bottom: 8px; }
+    .page-header p  { font-size: 15px; color: #93afd4; max-width: 560px; }
+    .page-header .meta {
+      display: flex; gap: 20px; margin-top: 20px; flex-wrap: wrap;
+    }
+    .page-header .meta-item {
+      display: flex; align-items: center; gap: 6px;
+      font-size: 12px; color: #64748b;
+    }
+    .page-header .meta-item svg { width: 14px; height: 14px; stroke: #4a7fb5; fill: none; }
+
+    .content-body { padding: 40px 48px; max-width: 900px; }
+
+    /* ── Section ───────────────────────────────────────────────────────── */
+    .section { margin-bottom: 56px; scroll-margin-top: 24px; }
+    .section-title {
+      display: flex; align-items: center; gap: 12px;
+      font-size: 22px; font-weight: 800;
+      color: #1a1a2e; margin-bottom: 6px;
+      letter-spacing: -0.3px;
+    }
+    .section-title .icon-wrap {
+      width: 38px; height: 38px;
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .section-title .icon-wrap svg { width: 20px; height: 20px; stroke: #fff; fill: none; }
+    .section-subtitle {
+      color: #64748b; font-size: 14px; margin-bottom: 24px;
+      padding-left: 50px;
+    }
+
+    /* ── Flow Steps ─────────────────────────────────────────────────────── */
+    .steps { position: relative; }
+    .step {
+      display: flex; gap: 20px;
+      margin-bottom: 8px;
+      position: relative;
+    }
+    .step-left {
+      display: flex; flex-direction: column; align-items: center;
+      flex-shrink: 0; width: 36px;
+    }
+    .step-num {
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 13px; font-weight: 800;
+      flex-shrink: 0; position: relative; z-index: 1;
+    }
+    .step-line {
+      width: 2px; flex: 1; min-height: 20px;
+      background: #e2e8f0; margin-top: 4px; margin-bottom: 4px;
+    }
+    .step:last-child .step-line { display: none; }
+    .step-body {
+      background: #fff;
+      border: 1px solid #e8ecf4;
+      border-radius: 12px;
+      padding: 16px 20px;
+      flex: 1;
+      margin-bottom: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .step-body h3 {
+      font-size: 14px; font-weight: 700;
+      color: #1a1a2e; margin-bottom: 8px;
+    }
+    .step-body p { font-size: 13.5px; color: #475569; margin-bottom: 6px; }
+    .step-body ul { padding-left: 18px; }
+    .step-body li { font-size: 13.5px; color: #475569; margin-bottom: 3px; }
+    .step-body li strong { color: #1e293b; }
+
+    /* ── Info box ───────────────────────────────────────────────────────── */
+    .info-box {
+      border-radius: 10px;
+      padding: 14px 16px;
+      margin: 12px 0;
+      font-size: 13px;
+      display: flex; gap: 10px; align-items: flex-start;
+    }
+    .info-box svg { width: 16px; height: 16px; flex-shrink: 0; margin-top: 1px; }
+    .info-box.blue  { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; }
+    .info-box.blue svg { stroke: #2563eb; fill: none; }
+    .info-box.green { background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; }
+    .info-box.green svg { stroke: #16a34a; fill: none; }
+    .info-box.amber { background: #fffbeb; border: 1px solid #fde68a; color: #92400e; }
+    .info-box.amber svg { stroke: #d97706; fill: none; }
+    .info-box.red   { background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; }
+    .info-box.red svg { stroke: #dc2626; fill: none; }
+
+    /* ── Field Table ─────────────────────────────────────────────────────── */
+    .field-table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 12px 0; }
+    .field-table th {
+      background: #f1f5f9;
+      padding: 8px 12px;
+      text-align: left;
+      font-weight: 700;
+      color: #475569;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      border-bottom: 1px solid #e2e8f0;
+    }
+    .field-table td {
+      padding: 9px 12px;
+      border-bottom: 1px solid #f1f5f9;
+      vertical-align: top;
+    }
+    .field-table tr:last-child td { border-bottom: none; }
+    .field-table tr:hover td { background: #f8fafc; }
+    .field-table .field-name { font-weight: 600; color: #1e293b; }
+    .field-table .field-auto {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: #eff6ff; color: #1d4ed8;
+      font-size: 10px; font-weight: 700; letter-spacing: 0.5px;
+      padding: 2px 6px; border-radius: 4px; text-transform: uppercase;
+    }
+    .field-table .field-req {
+      display: inline-flex; align-items: center; gap: 4px;
+      background: #fef2f2; color: #dc2626;
+      font-size: 10px; font-weight: 700;
+      padding: 2px 6px; border-radius: 4px;
+    }
+
+    /* ── Status Badges ───────────────────────────────────────────────────── */
+    .badge-grid { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 7px;
+      padding: 6px 14px; border-radius: 20px;
+      font-size: 13px; font-weight: 600;
+    }
+    .badge .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .badge.grey   { background: #f1f5f9; color: #475569; }
+    .badge.grey .dot   { background: #94a3b8; }
+    .badge.blue   { background: #eff6ff; color: #1e40af; }
+    .badge.blue .dot   { background: #3b82f6; }
+    .badge.purple { background: #f5f3ff; color: #5b21b6; }
+    .badge.purple .dot { background: #7c3aed; }
+    .badge.orange { background: #fffbeb; color: #92400e; }
+    .badge.orange .dot { background: #f59e0b; }
+    .badge.green  { background: #f0fdf4; color: #166534; }
+    .badge.green .dot  { background: #16a34a; }
+    .badge.red    { background: #fef2f2; color: #991b1b; }
+    .badge.red .dot    { background: #ef4444; }
+
+    /* ── Report Cards ────────────────────────────────────────────────────── */
+    .report-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; margin: 16px 0; }
+    .report-card {
+      background: #fff;
+      border: 1px solid #e8ecf4;
+      border-radius: 12px;
+      padding: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .report-card .report-icon {
+      width: 40px; height: 40px;
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      margin-bottom: 12px;
+    }
+    .report-card .report-icon svg { width: 22px; height: 22px; stroke: #fff; fill: none; }
+    .report-card h3 { font-size: 15px; font-weight: 700; color: #1a1a2e; margin-bottom: 6px; }
+    .report-card p  { font-size: 13px; color: #64748b; line-height: 1.5; margin-bottom: 10px; }
+    .report-card .filters-label { font-size: 11px; font-weight: 700; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px; }
+    .filter-tag {
+      display: inline-block;
+      background: #f1f5f9;
+      color: #475569;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      margin: 2px;
+    }
+
+    /* ── Navigation table ────────────────────────────────────────────────── */
+    .nav-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+    .nav-table td { padding: 10px 14px; border-bottom: 1px solid #f1f5f9; }
+    .nav-table tr:last-child td { border-bottom: none; }
+    .nav-table .path {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      color: #2563eb;
+      background: #eff6ff;
+      padding: 3px 8px;
+      border-radius: 5px;
+    }
+    .nav-table tr:hover td { background: #f8fafc; }
+
+    /* ── Flow Diagram ────────────────────────────────────────────────────── */
+    .flow-diagram {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-wrap: wrap;
+      margin: 16px 0;
+    }
+    .flow-node {
+      padding: 8px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .flow-arrow {
+      font-size: 18px;
+      color: #94a3b8;
+    }
+
+    /* ── Callout blocks ──────────────────────────────────────────────────── */
+    .callout {
+      border-left: 4px solid;
+      padding: 14px 18px;
+      border-radius: 0 10px 10px 0;
+      margin: 16px 0;
+      font-size: 13.5px;
+    }
+    .callout.blue  { border-color: #3b82f6; background: #eff6ff; color: #1e3a8a; }
+    .callout.green { border-color: #16a34a; background: #f0fdf4; color: #14532d; }
+    .callout h4    { font-size: 13px; font-weight: 700; margin-bottom: 4px; }
+
+    /* ── Code ────────────────────────────────────────────────────────────── */
+    code {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      background: #f1f5f9;
+      color: #0f172a;
+      font-size: 12.5px;
+      padding: 1px 6px;
+      border-radius: 4px;
+    }
+
+    /* ── Access box ──────────────────────────────────────────────────────── */
+    .access-box {
+      background: #1a1a2e;
+      border-radius: 12px;
+      padding: 24px;
+      color: #e2e8f0;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      margin: 16px 0;
+    }
+    .access-box .access-item label {
+      display: block;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      color: #4a5180;
+      margin-bottom: 4px;
+    }
+    .access-box .access-item value {
+      display: block;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 14px;
+      color: #93c5fd;
+    }
+    .access-box .access-item value.url { color: #34d399; text-decoration: none; }
+
+    /* ── Roles table ────────────────────────────────────────────────────── */
+    .roles-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .roles-table th {
+      background: #1a1a2e; color: #9ba3c8;
+      padding: 10px 14px;
+      text-align: left;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .roles-table td { padding: 9px 14px; border-bottom: 1px solid #f1f5f9; }
+    .roles-table tr:hover td { background: #f8fafc; }
+    .perm-yes { color: #16a34a; font-weight: 700; }
+    .perm-no  { color: #d1d5db; }
+
+    /* ── Divider ─────────────────────────────────────────────────────────── */
+    .divider { border: none; border-top: 1px solid #e8ecf4; margin: 40px 0; }
+
+    /* ── Color coding for section icons ─────────────────────────────────── */
+    .ic-blue   { background: linear-gradient(135deg, #3b82f6, #1d4ed8); }
+    .ic-purple { background: linear-gradient(135deg, #7c3aed, #4c1d95); }
+    .ic-teal   { background: linear-gradient(135deg, #0891b2, #0e7490); }
+    .ic-green  { background: linear-gradient(135deg, #16a34a, #14532d); }
+    .ic-amber  { background: linear-gradient(135deg, #d97706, #92400e); }
+    .ic-rose   { background: linear-gradient(135deg, #e11d48, #9f1239); }
+    .ic-indigo { background: linear-gradient(135deg, #4f46e5, #312e81); }
+
+    /* ── Print ───────────────────────────────────────────────────────────── */
+    @media print {
+      .sidebar { display: none; }
+      .main { margin-left: 0; }
+      .page-header { background: #1a1a2e !important; -webkit-print-color-adjust: exact; }
+    }
+
+    /* ── Responsive ──────────────────────────────────────────────────────── */
+    @media (max-width: 768px) {
+      .sidebar { width: 100%; min-height: auto; position: relative; }
+      .main { margin-left: 0; }
+      .content-body { padding: 24px 20px; }
+      .page-header { padding: 32px 24px; }
+      .access-box { grid-template-columns: 1fr; }
+      .report-cards { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ════════════════════════════════════════════════════════
+     SIDEBAR
+═══════════════════════════════════════════════════════════ -->
+<aside class="sidebar">
+  <div class="sidebar-brand">
+    <div class="logo-row">
+      <div class="logo-icon">SF</div>
+      <div>
+        <h1>Steel Force Payments</h1>
+        <p>sf_trading</p>
+      </div>
+    </div>
+  </div>
+
+  <nav class="sidebar-nav">
+    <div class="nav-group-label">Getting Started</div>
+    <a href="#overview" class="nav-item">What this does</a>
+    <a href="#access" class="nav-item">Access &amp; roles</a>
+
+    <div class="nav-group-label">Daily Work</div>
+    <a href="#single" class="nav-item">Raise one advice</a>
+    <a href="#builder" class="nav-item">Batch by supplier</a>
+    <a href="#from-list" class="nav-item">From the invoice list</a>
+    <a href="#approval" class="nav-item">Approval</a>
+    <a href="#payment-entry" class="nav-item">Payment Entry</a>
+
+    <div class="nav-group-label">Automation</div>
+    <a href="#automation" class="nav-item">Scheduled runs</a>
+    <a href="#thresholds" class="nav-item">Guards &amp; thresholds</a>
+
+    <div class="nav-group-label">Reference</div>
+    <a href="#reports" class="nav-item">Reports</a>
+    <a href="#statuses" class="nav-item">Statuses</a>
+    <a href="#skips" class="nav-item">Why a party was skipped</a>
+    <a href="#troubleshooting" class="nav-item">Troubleshooting</a>
+  </nav>
+
+  <div class="sidebar-footer">
+    Enfono Technologies · Steel Force Trading WLL
+  </div>
+</aside>
+
+<main class="main">
+
+  <div class="page-header">
+    <div class="tag">User Guide</div>
+    <h1>Supplier Payments — Payment Advice</h1>
+    <p class="section-subtitle">Pay many invoices of one supplier with a single approved document,
+      by hand or on a schedule.</p>
+    <div class="meta">
+      <div class="meta-item">App: sf_trading</div>
+      <div class="meta-item">Module: Sf Trading</div>
+      <div class="meta-item">Updated: 26 July 2026</div>
+    </div>
+  </div>
+
+  <!-- ── overview ─────────────────────────────────────────────────────────── -->
+  <section id="overview" class="section">
+    <h2 class="section-title">What this does</h2>
+    <p>A <b>Payment Advice</b> authorises payment against several outstanding documents of one
+      supplier, in one document, with one approval. ERPNext's own Payment Request cannot do this —
+      a Payment Request covers a single document, so "pay these nine invoices for this supplier"
+      had nowhere to live.</p>
+
+    <div class="flow-diagram">
+      <div class="flow-node">Outstanding invoices</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node">Payment Advice</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node">Approval</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node">Payment Entry</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node">Invoice paid</div>
+    </div>
+
+    <div class="info-box">
+      <b>It is not limited to Purchase Invoices.</b> An advice can reference Purchase Invoices,
+      Sales Invoices, Journal Entries, Expense Claims, Purchase Orders and Sales Orders. In
+      practice a supplier's outstanding list often includes Journal Entries as well as invoices,
+      and those come through automatically.
+    </div>
+
+    <p>Outstanding figures are not calculated by this app. They come from the same ERPNext engine
+      the Payment Entry form uses, so part-payments, credit notes and return invoices are already
+      netted off before you see them.</p>
+  </section>
+
+  <!-- ── access ───────────────────────────────────────────────────────────── -->
+  <section id="access" class="section">
+    <h2 class="section-title">Access &amp; roles</h2>
+
+    <div class="access-box">
+      <div class="access-item"><b>Payment Advice</b> — Accounts Manager, Accountant, Finance
+        Manager, HO Accounts, Purchase Manager, System Manager</div>
+      <div class="access-item"><b>Payment Advice Builder</b> — same list, at
+        <span class="path">/app/payment-advice-builder</span></div>
+      <div class="access-item"><b>Payment Automation Settings</b> — Accounts Manager, Finance
+        Manager, System Manager</div>
+    </div>
+
+    <table class="roles-table">
+      <thead><tr><th>Role</th><th>Prepare</th><th>Approve</th><th>Configure automation</th></tr></thead>
+      <tbody>
+        <tr><td>Accounts User</td><td class="perm-yes">Yes</td><td class="perm-no">No</td><td class="perm-no">No</td></tr>
+        <tr><td>Accountant</td><td class="perm-yes">Yes</td><td class="perm-no">No</td><td class="perm-no">No</td></tr>
+        <tr><td>Finance Manager</td><td class="perm-yes">Yes</td><td class="perm-yes">Yes</td><td class="perm-yes">Yes</td></tr>
+        <tr><td>Accounts Manager</td><td class="perm-yes">Yes</td><td class="perm-no">No</td><td class="perm-yes">Yes</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ── single advice ────────────────────────────────────────────────────── -->
+  <section id="single" class="section">
+    <h2 class="section-title">Raise one advice</h2>
+    <p class="section-subtitle">Use this when you are paying a single supplier.</p>
+
+    <div class="step">
+      <div class="step-left"><div class="step-num">1</div><div class="step-line"></div></div>
+      <div class="step-body">
+        <b>New Payment Advice.</b> Set Company, Party Type (Supplier) and the Party. Every other
+        picker — bank account, cost centre, project — is filtered to that company automatically.
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-left"><div class="step-num">2</div><div class="step-line"></div></div>
+      <div class="step-body">
+        <b>Get Outstanding Documents.</b> The dialog offers the same filters as the Payment Entry
+        form: posting-date range, due-date range, outstanding amount window, cost centre, and
+        whether to include orders to be billed. Rows already on the advice are never added twice.
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-left"><div class="step-num">3</div><div class="step-line"></div></div>
+      <div class="step-body">
+        <b>Set Payment Amount.</b> This is what you are authorising. It is spread across the
+        references from the oldest down. A row beyond the authorised amount stays on the advice
+        with zero allocated, so you can still see the full picture. The headline above the table
+        shows, for example, <i>"2,464.713 of 3,000.000 allocated across 18 of 21 references"</i>.
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-left"><div class="step-num">4</div><div class="step-line"></div></div>
+      <div class="step-body">
+        <b>Submit.</b> If an approval workflow is switched on, use the workflow actions instead
+        (see <a href="#approval">Approval</a>). Otherwise only the user linked to the selected
+        Approver may submit.
+      </div>
+    </div>
+
+    <div class="callout">
+      An invoice can only sit on <b>one</b> live advice. If it is already on another advice —
+      even a draft — you will be told which one, so nothing gets paid twice.
+    </div>
+  </section>
+
+  <!-- ── builder ──────────────────────────────────────────────────────────── -->
+  <section id="builder" class="section">
+    <h2 class="section-title">Batch by supplier — the Builder</h2>
+    <p class="section-subtitle"><span class="path">/app/payment-advice-builder</span> — one sweep,
+      one advice per supplier.</p>
+
+    <div class="step">
+      <div class="step-left"><div class="step-num">1</div><div class="step-line"></div></div>
+      <div class="step-body">
+        <b>Set the filters.</b>
+        <div class="filters-label">Available filters</div>
+        <span class="filter-tag">Company</span>
+        <span class="filter-tag">Party Type</span>
+        <span class="filter-tag">Party</span>
+        <span class="filter-tag">Due on or before</span>
+        <span class="filter-tag">Ageing over N days</span>
+        <span class="filter-tag">Min advice total</span>
+        <span class="filter-tag">Cost Center</span>
+        <span class="filter-tag">Branch</span>
+        <span class="filter-tag">Include on-hold parties</span>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-left"><div class="step-num">2</div><div class="step-line"></div></div>
+      <div class="step-body">
+        <b>Fetch Outstanding.</b> Suppliers come back grouped, biggest first, each showing invoice
+        count, oldest ageing, currency and total. Anything unpayable is listed separately with the
+        reason (see <a href="#skips">Why a party was skipped</a>).
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-left"><div class="step-num">3</div><div class="step-line"></div></div>
+      <div class="step-body">
+        <b>Tick what you are paying.</b> Tick a whole supplier, or individual invoices inside it.
+        The footer keeps a running count and total.
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-left"><div class="step-num">4</div><div class="step-line"></div></div>
+      <div class="step-body">
+        <b>Advice Options</b> (optional) — mode of payment, company bank account, approver, cost
+        centre, remarks, and whether to submit. Set once, applied to every advice in the batch.
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="step-left"><div class="step-num">5</div></div>
+      <div class="step-body">
+        <b>Create Advices.</b> You confirm a count and a total first. Each advice is created as a
+        <span class="badge grey">Draft</span> unless you chose to submit. The result panel links
+        every advice, and lists anything skipped with its reason. Batches over 15 suppliers run in
+        the background and chime when finished.
+      </div>
+    </div>
+  </section>
+
+  <!-- ── from list ────────────────────────────────────────────────────────── -->
+  <section id="from-list" class="section">
+    <h2 class="section-title">From the Purchase Invoice list</h2>
+    <p>Tick invoices in the Purchase Invoice list → <b>Actions → Create Payment Advice (by
+      supplier)</b>. Invoices are grouped by supplier and one draft advice is raised per supplier.
+      Anything already on a live advice is skipped and named, not silently dropped.</p>
+    <div class="info-box">All ticked invoices must belong to one company. Invoices with nothing
+      outstanding are ignored.</div>
+  </section>
+
+  <!-- ── approval ─────────────────────────────────────────────────────────── -->
+  <section id="approval" class="section">
+    <h2 class="section-title">Approval</h2>
+    <p>There are two modes. Which one applies depends on whether the PM Workflow is switched on.</p>
+
+    <h3 class="section-subtitle">Without a workflow</h3>
+    <p>Only the user linked to the <b>Approver</b> Employee on the advice may submit it. A System
+      Manager can release a stuck advice.</p>
+
+    <h3 class="section-subtitle">With the PM Workflow (recommended)</h3>
+    <div class="flow-diagram">
+      <div class="flow-node">Draft</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node">Pending Approval</div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-node">Approved</div>
+    </div>
+    <table class="nav-table">
+      <thead><tr><th>Action</th><th>From → To</th><th>Who</th><th>Requires</th></tr></thead>
+      <tbody>
+        <tr><td>Send for Approval</td><td>Draft → Pending Approval</td><td>Accounts User</td><td>—</td></tr>
+        <tr><td>Approve</td><td>Pending Approval → Approved</td><td>Finance Manager</td><td>An attachment</td></tr>
+        <tr><td>Reject</td><td>Pending Approval → Rejected</td><td>Finance Manager</td><td>A comment</td></tr>
+        <tr><td>Send for Approval</td><td>Rejected → Pending Approval</td><td>Accounts User</td><td>—</td></tr>
+      </tbody>
+    </table>
+    <p>Reminders go out after 3 days, escalation after 7. The person who prepares an advice cannot
+      approve it. While the workflow is active, the single-approver rule steps aside and scheduled
+      runs stop at drafts — the approvers stay in control.</p>
+  </section>
+
+  <!-- ── payment entry ────────────────────────────────────────────────────── -->
+  <section id="payment-entry" class="section">
+    <h2 class="section-title">Creating the Payment Entry</h2>
+    <p>On a submitted advice press <b>Create Payment Entry</b>. The advice's allocations become the
+      Payment Entry's references, and ERPNext completes the rest (base amounts, party balance,
+      unallocated amount).</p>
+
+    <table class="field-table">
+      <thead><tr><th>Event</th><th>What happens to the advice</th></tr></thead>
+      <tbody>
+        <tr><td class="field-name">Payment Entry submitted</td><td>Advice is stamped with the Payment Entry and date; status becomes <span class="badge green">Paid</span> or <span class="badge amber">Partly Paid</span>; every reference row's status and outstanding refresh</td></tr>
+        <tr><td class="field-name">Payment Entry cancelled</td><td>Stamp is cleared, advice returns to <span class="badge blue">Approved</span>, rows refresh — a corrected Payment Entry can then be raised</td></tr>
+        <tr><td class="field-name">Advice cancelled</td><td>Blocked while its Payment Entry is still submitted. Cancel the Payment Entry first</td></tr>
+      </tbody>
+    </table>
+
+    <div class="info-box">Two submitted Payment Entries can never claim the same advice, and each
+      invoice shows its advice under <b>Connections</b> on the invoice itself.</div>
+  </section>
+
+  <!-- ── automation ───────────────────────────────────────────────────────── -->
+  <section id="automation" class="section">
+    <h2 class="section-title">Scheduled runs</h2>
+    <p class="section-subtitle">Payment Automation Settings — one configuration per company and
+      party type.</p>
+
+    <p>A run does as much as you allow, and each step needs the one before it:</p>
+    <div class="badge-grid">
+      <span class="badge blue">1 · Create Payment Advice</span>
+      <span class="badge purple">2 · Submit Payment Advice</span>
+      <span class="badge amber">3 · Create Payment Entry</span>
+      <span class="badge red">4 · Submit Payment Entry</span>
+    </div>
+
+    <p>The form spells the plan out in words, for example: <i>"Will create advices → submit advices
+      on Mon, Tue at 07:00"</i>. Set the weekdays and the time; the run fires on the first
+      scheduler tick at or after that time and only once a day.</p>
+
+    <div class="step">
+      <div class="step-left"><div class="step-num">✓</div><div class="step-line"></div></div>
+      <div class="step-body"><b>Dry Run</b> works out exactly what would happen and reports it
+        without creating anything. Use it first, always.</div>
+    </div>
+    <div class="step">
+      <div class="step-left"><div class="step-num">▶</div></div>
+      <div class="step-body"><b>Run Now</b> ignores the schedule and runs immediately.</div>
+    </div>
+
+    <div class="callout">
+      Start with <b>step 1 only</b> and Dry Run ticked. Read the summary, then enable more. Step 4
+      moves money.
+    </div>
+
+    <p>Each run reports through the chime, the desk bell, and email where an outgoing email account
+      exists. Quiet runs stay quiet unless you ask to be told about them.</p>
+  </section>
+
+  <!-- ── thresholds ───────────────────────────────────────────────────────── -->
+  <section id="thresholds" class="section">
+    <h2 class="section-title">Guards &amp; thresholds</h2>
+    <table class="field-table">
+      <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td class="field-name">Due date offset</td><td>Include invoices due within this many days. 0 = due today or earlier</td></tr>
+        <tr><td class="field-name">Minimum amount</td><td>Skip a supplier whose total is below this. Rounding residue is real: live data holds invoices outstanding 0.005</td></tr>
+        <tr><td class="field-name">Ageing over</td><td>Only invoices older than N days past due</td></tr>
+        <tr><td class="field-name">Max parties per run</td><td>Hard cap, so a wrong filter cannot raise hundreds of advices</td></tr>
+        <tr><td class="field-name">Advice threshold</td><td>Skip any supplier whose total would exceed this</td></tr>
+        <tr><td class="field-name">Submit threshold</td><td>Above this, advices are left as drafts even with auto-submit on</td></tr>
+        <tr><td class="field-name">Payment Entry threshold</td><td>Above this, Payment Entries are left as drafts</td></tr>
+        <tr><td class="field-name">Exclude foreign currency</td><td>Skip suppliers with invoices outside the company currency</td></tr>
+        <tr><td class="field-name">Ignore hold / blocked</td><td>Off (recommended) means an on-hold supplier is skipped</td></tr>
+      </tbody>
+    </table>
+    <div class="info-box">A single supplier can be excluded from every run by ticking
+      <b>Disable Automatic Payment</b> on the Supplier — no configuration change needed.</div>
+  </section>
+
+  <!-- ── reports ──────────────────────────────────────────────────────────── -->
+  <section id="reports" class="section">
+    <h2 class="section-title">Reports</h2>
+    <div class="report-cards">
+      <div class="report-card">
+        <div class="report-icon ic-blue">SD</div>
+        <b>Supplier Due Payment Report</b>
+        <p>Outstanding supplier payables by due date, with overdue days and ageing buckets. Now also
+          shows the <b>Payment Advice</b> and its status for each invoice.</p>
+      </div>
+      <div class="report-card">
+        <div class="report-icon ic-teal">IO</div>
+        <b>Invoice Due &amp; Overdue Report</b>
+        <p>Sales and Purchase together, overdue-only by default, with the same Payment Advice
+          columns.</p>
+      </div>
+      <div class="report-card">
+        <div class="report-icon ic-purple">PA</div>
+        <b>Payment Advice list</b>
+        <p>Colour-coded by status, an <i>auto</i> pill on advices the scheduler raised, and an
+          <b>Awaiting Payment Entry</b> button for the approved-but-unpaid queue.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── statuses ─────────────────────────────────────────────────────────── -->
+  <section id="statuses" class="section">
+    <h2 class="section-title">Statuses</h2>
+    <div class="badge-grid">
+      <span class="badge grey">Draft — being prepared</span>
+      <span class="badge orange">Pending Approval — approver selected, not yet submitted</span>
+      <span class="badge blue">Approved — submitted, no Payment Entry yet</span>
+      <span class="badge amber">Partly Paid — Payment Entry covers part of it</span>
+      <span class="badge green">Paid — fully covered</span>
+      <span class="badge red">Cancelled</span>
+    </div>
+  </section>
+
+  <!-- ── skips ────────────────────────────────────────────────────────────── -->
+  <section id="skips" class="section">
+    <h2 class="section-title">Why a party was skipped</h2>
+    <table class="field-table">
+      <thead><tr><th>Message</th><th>Meaning &amp; fix</th></tr></thead>
+      <tbody>
+        <tr><td class="field-name">No default payable account</td><td>The supplier has no payable account and none is set on the company. Set one on the Supplier</td></tr>
+        <tr><td class="field-name">Already allocated on a live Payment Advice</td><td>Those invoices are on another advice. Open it, or cancel it to free them</td></tr>
+        <tr><td class="field-name">Below the minimum advice total</td><td>Rounding residue. Lower the minimum if you really want to pay it</td></tr>
+        <tr><td class="field-name">Party is on hold</td><td>ERPNext hold is in force. Release the supplier, or tick "Include on-hold parties"</td></tr>
+        <tr><td class="field-name">Party is disabled</td><td>Re-enable the supplier first</td></tr>
+        <tr><td class="field-name">Automation disabled on the party</td><td><b>Disable Automatic Payment</b> is ticked on the Supplier</td></tr>
+        <tr><td class="field-name">Over the per-run cap</td><td>Max parties per run reached; the rest come next run, or raise the cap</td></tr>
+        <tr><td class="field-name">Advices left as drafts — a PM Workflow governs approval</td><td>Working as intended: approvers submit, not the scheduler</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ── troubleshooting ──────────────────────────────────────────────────── -->
+  <section id="troubleshooting" class="section">
+    <h2 class="section-title">Troubleshooting</h2>
+    <table class="field-table">
+      <thead><tr><th>Symptom</th><th>Cause &amp; fix</th></tr></thead>
+      <tbody>
+        <tr><td class="field-name">Bank, IBAN and SWIFT are blank on the advice</td><td>The supplier has no Bank Account record. Create one and the details fetch automatically</td></tr>
+        <tr><td class="field-name">"Payment Amount exceeds the total payable"</td><td>You authorised more than the references add up to. Fetch more invoices or lower the amount</td></tr>
+        <tr><td class="field-name">The invoice picker is empty</td><td>Set the Company first — the picker is filtered to it, and to submitted invoices only</td></tr>
+        <tr><td class="field-name">"Cancel Payment Entry … before cancelling this advice"</td><td>Cancel the Payment Entry, then the advice</td></tr>
+        <tr><td class="field-name">No chime when a run finishes</td><td>Click anywhere on the page once per session — browsers block sound until you interact</td></tr>
+        <tr><td class="field-name">No email summary</td><td>No outgoing Email Account is configured. Chime and bell still work; email starts once one exists</td></tr>
+        <tr><td class="field-name">The scheduled run never fires</td><td>Check Enabled, the weekday ticks, the time, and that at least step 1 is on</td></tr>
+      </tbody>
+    </table>
+    <div class="divider"></div>
+    <p class="section-subtitle">Questions: Enfono Technologies — support@enfono.com</p>
+  </section>
+
+</main>
+
+<!-- ── Sidebar active state on scroll ─────────────────────────── -->
+<script>
+  const sections = document.querySelectorAll('section[id]');
+  const navItems = document.querySelectorAll('.nav-item');
+
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        navItems.forEach(n => n.classList.remove('active'));
+        const active = document.querySelector(`.nav-item[href="#${e.target.id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-20% 0px -70% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+</script>
+
+</body>
+</html>
+
