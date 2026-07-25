@@ -30,7 +30,14 @@ frappe.ui.form.on("Payment Advice", {
 			filters: {
 				name: [
 					"in",
-					["Purchase Invoice", "Sales Invoice", "Journal Entry", "Expense Claim"],
+					[
+						"Purchase Invoice",
+						"Sales Invoice",
+						"Journal Entry",
+						"Expense Claim",
+						"Purchase Order",
+						"Sales Order",
+					],
 				],
 			},
 		}));
@@ -61,13 +68,68 @@ frappe.ui.form.on("Payment Advice", {
 	},
 
 	fetch_outstanding(frm) {
-		frappe.call({
-			method: "sf_trading.sf_trading.doctype.payment_advice.payment_advice.get_outstanding_references",
-			args: {
-				party_type: frm.doc.party_type,
-				party: frm.doc.party,
-				company: frm.doc.company,
+		// same filter set the Payment Entry form offers, so the two behave alike
+		const d = new frappe.ui.Dialog({
+			title: __("Get Outstanding Documents"),
+			size: "large",
+			fields: [
+				{
+					fieldtype: "Section Break",
+					label: __("Posting Date"),
+				},
+				{ fieldname: "from_posting_date", fieldtype: "Date", label: __("From") },
+				{ fieldtype: "Column Break" },
+				{ fieldname: "to_posting_date", fieldtype: "Date", label: __("To") },
+				{ fieldtype: "Section Break", label: __("Due Date") },
+				{ fieldname: "from_due_date", fieldtype: "Date", label: __("From") },
+				{ fieldtype: "Column Break" },
+				{ fieldname: "to_due_date", fieldtype: "Date", label: __("To") },
+				{ fieldtype: "Section Break", label: __("Outstanding Amount") },
+				{ fieldname: "from_amount", fieldtype: "Currency", label: __("Greater Than") },
+				{ fieldtype: "Column Break" },
+				{ fieldname: "to_amount", fieldtype: "Currency", label: __("Less Than") },
+				{ fieldtype: "Section Break" },
+				{
+					fieldname: "cost_center",
+					fieldtype: "Link",
+					label: __("Cost Center"),
+					options: "Cost Center",
+					get_query: () => ({ filters: { company: frm.doc.company, is_group: 0 } }),
+				},
+				{ fieldtype: "Column Break" },
+				{
+					fieldname: "get_outstanding_invoices",
+					fieldtype: "Check",
+					label: __("Outstanding Invoices"),
+					default: 1,
+				},
+				{
+					fieldname: "get_orders_to_be_billed",
+					fieldtype: "Check",
+					label: __("Orders To Be Billed"),
+					default: 0,
+				},
+			],
+			primary_action_label: __("Get Documents"),
+			primary_action(values) {
+				d.hide();
+				frm.events.pull_outstanding(frm, values);
 			},
+		});
+		d.show();
+	},
+
+	pull_outstanding(frm, filters) {
+		frappe.call({
+			method: "sf_trading.sf_trading.doctype.payment_advice.payment_advice.get_outstanding_documents",
+			args: Object.assign(
+				{
+					company: frm.doc.company,
+					party_type: frm.doc.party_type,
+					party: frm.doc.party,
+				},
+				filters || {}
+			),
 			freeze: true,
 			freeze_message: __("Fetching outstanding documents…"),
 			callback(r) {

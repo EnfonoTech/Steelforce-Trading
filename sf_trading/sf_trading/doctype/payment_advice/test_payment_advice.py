@@ -11,11 +11,13 @@ from frappe.tests.utils import FrappeTestCase
 from frappe.utils import flt, nowdate
 
 from sf_trading.sf_trading.doctype.payment_advice.payment_advice import (
+    ALLOWED_REFERENCE_DOCTYPES,
     STATUS_APPROVED,
     STATUS_DRAFT,
     STATUS_PENDING,
     get_company_account,
     get_payment_type,
+    shape_reference_rows,
 )
 
 
@@ -143,3 +145,164 @@ class TestPaymentAdvice(FrappeTestCase):
         meta = frappe.get_meta("Payment Advice Reference")
         self.assertTrue(meta.has_field("allocated_amount"))
         self.assertTrue(meta.has_field("ageing"))  # was misspelled "aeging" upstream
+
+
+class TestOutstandingMapping(FrappeTestCase):
+    """shape_reference_rows() maps ERPNext's outstanding rows onto advice references.
+
+    Key shapes verified against live data: the engine returns voucher_type, voucher_no,
+    bill_no, currency, due_date, exchange_rate, invoice_amount, outstanding_amount,
+    posting_date — but NOT payment_term (unless term-allocated) and NOT total_amount.
+    """
+
+    def _voucher(self, **kw):
+        row = {
+            "voucher_type": "Purchase Invoice",
+            "voucher_no": "PINV-TEST-001",
+            "invoice_amount": 1000.0,
+            "outstanding_amount": 400.0,
+            "posting_date": "2026-01-01",
+            "due_date": "2026-01-31",
+            "currency": "BHD",
+            "exchange_rate": 1.0,
+            "bill_no": "SUP-77",
+        }
+        row.update(kw)
+        return row
+
+    def test_maps_core_fields(self):
+        rows = shape_reference_rows([self._voucher()])
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["reference_doctype"], "Purchase Invoice")
+        self.assertEqual(row["reference_record"], "PINV-TEST-001")
+        self.assertEqual(row["net_payable_amount"], 400.0)
+        self.assertEqual(row["amount"], 1000.0)
+        self.assertEqual(row["settled_amount"], 600.0)
+        self.assertEqual(row["bill_no"], "SUP-77")
+        self.assertEqual(row["currency"], "BHD")
+
+    def test_missing_payment_term_and_total_amount_are_safe(self):
+        """The engine omits both for ordinary invoices — mapping must not raise."""
+        voucher = self._voucher()
+        voucher.pop("bill_no")
+        rows = shape_reference_rows([voucher])
+        self.assertIsNone(rows[0]["payment_term"])
+        self.assertEqual(rows[0]["amount"], 1000.0)
+
+    def test_total_amount_used_when_invoice_amount_absent(self):
+        voucher = self._voucher(invoice_amount=None, total_amount=750.0)
+        rows = shape_reference_rows([voucher])
+        self.assertEqual(rows[0]["amount"], 750.0)
+
+    def test_zero_outstanding_dropped(self):
+        rows = shape_reference_rows([self._voucher(outstanding_amount=0)])
+        self.assertEqual(rows, [])
+
+    def test_disallowed_doctype_dropped(self):
+        rows = shape_reference_rows([self._voucher(voucher_type="Delivery Note")])
+        self.assertEqual(rows, [])
+        self.assertNotIn("Delivery Note", ALLOWED_REFERENCE_DOCTYPES)
+
+    def test_amount_window(self):
+        vouchers = [
+            self._voucher(voucher_no="A", outstanding_amount=50),
+            self._voucher(voucher_no="B", outstanding_amount=300),
+            self._voucher(voucher_no="C", outstanding_amount=900),
+        ]
+        rows = shape_reference_rows(vouchers, from_amount=100, to_amount=500)
+        self.assertEqual([r["reference_record"] for r in rows], ["B"])
+
+    def test_sorted_worst_first(self):
+        vouchers = [
+            self._voucher(voucher_no="NEW", due_date="2026-07-01", outstanding_amount=100),
+            self._voucher(voucher_no="OLD", due_date="2024-01-01", outstanding_amount=100),
+        ]
+        rows = shape_reference_rows(vouchers)
+        self.assertEqual(rows[0]["reference_record"], "OLD")
+        self.assertGreater(rows[0]["ageing"], rows[1]["ageing"])
+
+    def test_ageing_never_negative_for_future_due_dates(self):
+        rows = shape_reference_rows([self._voucher(due_date="2099-01-01")])
+        self.assertEqual(rows[0]["ageing"], 0)
+
+
+class TestReferenceIntegrity(FrappeTestCase):
+    """Dynamic Link guards: the form filters the pickers, the server enforces the rules."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.company = frappe.db.get_single_value("Global Defaults", "default_company") or frappe.db.get_value(
+            "Company", {}, "name"
+        )
+
+    def _advice_with(self, rows):
+        advice = frappe.new_doc("Payment Advice")
+        advice.update(
+            {
+                "company": self.company,
+                "party_type": "Supplier",
+                "party": frappe.db.get_value("Supplier", {}, "name"),
+                "transaction_date": nowdate(),
+                "payment_amount": 1,
+            }
+        )
+        for row in rows:
+            advice.append("payment_advice_reference", row)
+        return advice
+
+    def test_rejects_unknown_reference_doctype(self):
+        advice = self._advice_with(
+            [{"reference_doctype": "Delivery Note", "reference_record": "DN-0001"}]
+        )
+        with self.assertRaises(frappe.ValidationError):
+            advice.validate_references()
+
+    def test_rejects_blank_reference(self):
+        advice = self._advice_with([{"reference_doctype": "Purchase Invoice"}])
+        with self.assertRaises(frappe.ValidationError):
+            advice.validate_references()
+
+    def test_rejects_duplicate_reference_rows(self):
+        pinv = frappe.db.get_value(
+            "Purchase Invoice", {"docstatus": 1, "outstanding_amount": [">", 0]}, "name"
+        )
+        if not pinv:
+            self.skipTest("no outstanding Purchase Invoice on this site")
+        supplier, company = frappe.db.get_value("Purchase Invoice", pinv, ["supplier", "company"])
+        advice = self._advice_with(
+            [
+                {"reference_doctype": "Purchase Invoice", "reference_record": pinv},
+                {"reference_doctype": "Purchase Invoice", "reference_record": pinv},
+            ]
+        )
+        advice.party = supplier
+        advice.company = company
+        with self.assertRaises(frappe.ValidationError):
+            advice.validate_references()
+
+    def test_rejects_reference_of_another_party(self):
+        rows = frappe.get_all(
+            "Purchase Invoice",
+            filters={"docstatus": 1, "outstanding_amount": [">", 0]},
+            fields=["name", "supplier", "company"],
+            limit=20,
+        )
+        pair = None
+        for row in rows:
+            other = next((r for r in rows if r.supplier != row.supplier), None)
+            if other:
+                pair = (row, other)
+                break
+        if not pair:
+            self.skipTest("need invoices from two different suppliers")
+
+        mine, theirs = pair
+        advice = self._advice_with(
+            [{"reference_doctype": "Purchase Invoice", "reference_record": theirs.name}]
+        )
+        advice.party = mine.supplier
+        advice.company = mine.company
+        with self.assertRaises(frappe.ValidationError):
+            advice.validate_references()

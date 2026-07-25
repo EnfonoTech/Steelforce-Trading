@@ -8,11 +8,14 @@
  "field_order": [
   "reference_doctype",
   "reference_record",
+  "bill_no",
   "date",
   "ageing",
   "amount",
   "settled_amount",
   "net_payable_amount",
+  "reference_status",
+  "payment_term",
   "allocated_amount",
   "cost_center",
   "job_number",
@@ -43,6 +46,15 @@
    "label": "Reference Record",
    "options": "reference_doctype",
    "reqd": 1
+  },
+  {
+   "columns": 1,
+   "description": "The party's own document number, as recorded on the referenced voucher.",
+   "fieldname": "bill_no",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Supplier Invoice No",
+   "read_only": 1
   },
   {
    "columns": 1,
@@ -81,6 +93,23 @@
    "fieldtype": "Currency",
    "in_list_view": 1,
    "label": "Net Payable Amount",
+   "read_only": 1
+  },
+  {
+   "columns": 1,
+   "description": "Live status of the referenced voucher, refreshed when the advice is saved and after its Payment Entry is submitted or cancelled.",
+   "fieldname": "reference_status",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Voucher Status",
+   "read_only": 1
+  },
+  {
+   "description": "Set when the source invoice allocates by payment terms; carried to the Payment Entry reference.",
+   "fieldname": "payment_term",
+   "fieldtype": "Link",
+   "label": "Payment Term",
+   "options": "Payment Term",
    "read_only": 1
   },
   {

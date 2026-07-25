@@ -15,6 +15,10 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
+from sf_trading.sf_trading.doctype.payment_advice.payment_advice import (
+    refresh_reference_status,
+)
+
 ADVICE_FIELD = "custom_payment_advice"
 
 STATUS_APPROVED = "Approved"
@@ -68,6 +72,9 @@ def on_payment_entry_submit(doc, method=None):
         update_modified=False,
     )
 
+    # invoices have just been part/fully paid by this PE — pull their new status through
+    refresh_reference_status(advice.name)
+
 
 def on_payment_entry_cancel(doc, method=None):
     """Reverse the stamp so a fresh Payment Entry can be raised for the same advice."""
@@ -91,6 +98,9 @@ def on_payment_entry_cancel(doc, method=None):
         },
         update_modified=False,
     )
+
+    # the cancellation restored the invoices' outstanding — reflect that on the advice
+    refresh_reference_status(advice.name)
 
 
 def validate_payment_entry_advice(doc, method=None):

@@ -38,6 +38,17 @@ from erpnext.setup.utils import get_exchange_rate
 PAY_PARTY_TYPES = ("Supplier", "Employee")
 RECEIVE_PARTY_TYPES = ("Customer",)
 
+# Reference types a Payment Advice may point at. Enforced server-side as well as in the
+# form, because a Dynamic Link accepts any DocType name over the API otherwise.
+ALLOWED_REFERENCE_DOCTYPES = (
+    "Purchase Invoice",
+    "Sales Invoice",
+    "Journal Entry",
+    "Expense Claim",
+    "Purchase Order",
+    "Sales Order",
+)
+
 STATUS_DRAFT = "Draft"
 STATUS_PENDING = "Pending Approval"
 STATUS_APPROVED = "Approved"
@@ -55,6 +66,7 @@ PARTY_NAME_FIELD = {
 class PaymentAdvice(Document):
     # ── lifecycle ────────────────────────────────────────────────────────────────
     def validate(self):
+        self.validate_references()
         self.set_party_name()
         self.set_reference_details()
         self.compute_totals()
@@ -78,6 +90,123 @@ class PaymentAdvice(Document):
                     % frappe.bold(self.payment_entry)
                 )
         self.db_set("status", STATUS_CANCELLED, update_modified=False)
+        # the vouchers are free again — make sure their status on this advice reads true
+        refresh_reference_status(self.name)
+
+    # ── reference integrity ──────────────────────────────────────────────────────
+    def validate_references(self):
+        """Dynamic Link safety: right doctype, right company, right party, no doubles.
+
+        The form filters these pickers, but a Dynamic Link will accept anything over the
+        API, so every rule is enforced here too.
+        """
+        seen = {}
+
+        for row in self.payment_advice_reference:
+            if not (row.reference_doctype and row.reference_record):
+                frappe.throw(
+                    _("Row #%s: select both a reference type and a reference document.") % row.idx
+                )
+
+            if row.reference_doctype not in ALLOWED_REFERENCE_DOCTYPES:
+                frappe.throw(
+                    _("Row #%(idx)s: %(dt)s cannot be referenced on a Payment Advice.")
+                    % {"idx": row.idx, "dt": _(row.reference_doctype)}
+                )
+
+            if not frappe.db.exists(row.reference_doctype, row.reference_record):
+                frappe.throw(
+                    _("Row #%(idx)s: %(dt)s %(name)s does not exist.")
+                    % {
+                        "idx": row.idx,
+                        "dt": _(row.reference_doctype),
+                        "name": frappe.bold(row.reference_record),
+                    }
+                )
+
+            key = (row.reference_doctype, row.reference_record)
+            if key in seen:
+                frappe.throw(
+                    _("Row #%(idx)s: %(name)s is already on row #%(other)s.")
+                    % {"idx": row.idx, "name": frappe.bold(row.reference_record), "other": seen[key]}
+                )
+            seen[key] = row.idx
+
+            meta = frappe.get_meta(row.reference_doctype)
+            values = frappe.db.get_value(
+                row.reference_doctype,
+                row.reference_record,
+                ["docstatus", "company"] + ([self.party_field()] if meta.has_field(self.party_field()) else []),
+                as_dict=True,
+            ) or frappe._dict()
+
+            if cint(values.get("docstatus")) != 1:
+                frappe.throw(
+                    _("Row #%(idx)s: %(name)s is not submitted.")
+                    % {"idx": row.idx, "name": frappe.bold(row.reference_record)}
+                )
+
+            if values.get("company") and values.get("company") != self.company:
+                frappe.throw(
+                    _("Row #%(idx)s: %(name)s belongs to company %(other)s, not %(company)s.")
+                    % {
+                        "idx": row.idx,
+                        "name": frappe.bold(row.reference_record),
+                        "other": frappe.bold(values.get("company")),
+                        "company": frappe.bold(self.company),
+                    }
+                )
+
+            row_party = values.get(self.party_field())
+            if row_party and row_party != self.party:
+                frappe.throw(
+                    _("Row #%(idx)s: %(name)s belongs to %(other)s, not %(party)s.")
+                    % {
+                        "idx": row.idx,
+                        "name": frappe.bold(row.reference_record),
+                        "other": frappe.bold(row_party),
+                        "party": frappe.bold(self.party),
+                    }
+                )
+
+        self.validate_not_advised_elsewhere()
+
+    def party_field(self):
+        return {"Supplier": "supplier", "Customer": "customer", "Employee": "employee"}.get(
+            self.party_type, "supplier"
+        )
+
+    def validate_not_advised_elsewhere(self):
+        """Stop the same voucher being paid twice through two live advices."""
+        records = [r.reference_record for r in self.payment_advice_reference if r.reference_record]
+        if not records:
+            return
+
+        clashes = frappe.get_all(
+            "Payment Advice Reference",
+            filters={
+                "reference_record": ["in", records],
+                "parenttype": "Payment Advice",
+                "parent": ["!=", self.name or ""],
+                "docstatus": 1,
+            },
+            fields=["parent", "reference_record", "allocated_amount"],
+        )
+
+        for clash in clashes:
+            if flt(clash.allocated_amount) <= 0:
+                continue
+            advice_status = frappe.db.get_value("Payment Advice", clash.parent, "status")
+            if advice_status in (STATUS_CANCELLED,):
+                continue
+            frappe.throw(
+                _("%(name)s is already allocated on Payment Advice %(advice)s (%(status)s).")
+                % {
+                    "name": frappe.bold(clash.reference_record),
+                    "advice": frappe.bold(clash.parent),
+                    "status": advice_status,
+                }
+            )
 
     # ── derivation ───────────────────────────────────────────────────────────────
     def set_party_name(self):
@@ -124,6 +253,9 @@ class PaymentAdvice(Document):
             due = source("due_date") if meta.has_field("due_date") else None
             due = getdate(due or row.date or today)
             row.ageing = max(0, (today - due).days)
+
+            # live status of the voucher, so the advice never shows a stale picture
+            row.reference_status = source("status") if meta.has_field("status") else None
 
             rate = flt(row.exchange_rate) or 1.0
             row.amount_in_currency = flt(flt(row.amount) / rate, 3)
@@ -373,58 +505,170 @@ def create_payment_entry(payment_advice: str, submit: int = 0):
 
 
 @frappe.whitelist()
-def get_outstanding_references(party_type: str, party: str, company: str, due_before: str = None):
-    """Outstanding documents for a party, shaped for the references table."""
-    if not frappe.has_permission("Payment Advice", "write"):
-        frappe.throw(_("Not permitted"), frappe.PermissionError)
+def get_outstanding_documents(
+    company: str,
+    party_type: str,
+    party: str,
+    party_account: str = None,
+    from_posting_date: str = None,
+    to_posting_date: str = None,
+    from_due_date: str = None,
+    to_due_date: str = None,
+    cost_center: str = None,
+    from_amount: float = None,
+    to_amount: float = None,
+    get_outstanding_invoices: int = 1,
+    get_orders_to_be_billed: int = 0,
+):
+    """Outstanding vouchers for a party, using ERPNext's own Payment Entry engine.
 
-    if party_type == "Employee":
-        return []
+    Delegates to `erpnext…payment_entry.get_outstanding_reference_documents`, which is the
+    same code the Payment Entry form's "Get Outstanding Invoices" runs. That buys the real
+    behaviour rather than an approximation of it: Payment Ledger based outstanding (so
+    part-payments, credit notes and return invoices are already netted), payment-term
+    splitting, supplier block-status checks, accounting-dimension filters, and the party
+    permission check it performs internally.
 
-    doctype = "Purchase Invoice" if party_type in PAY_PARTY_TYPES else "Sales Invoice"
-    party_field = "supplier" if party_type == "Supplier" else "customer"
+    Returns rows shaped for the Payment Advice Reference table.
+    """
+    frappe.has_permission("Payment Advice", "write", throw=True)
 
-    filters = {
-        "docstatus": 1,
-        "company": company,
-        party_field: party,
-        "outstanding_amount": [">", 0],
-    }
-    if due_before:
-        filters["due_date"] = ["<=", getdate(due_before)]
-
-    rows = frappe.get_all(
-        doctype,
-        filters=filters,
-        fields=[
-            "name",
-            "posting_date",
-            "due_date",
-            "grand_total",
-            "outstanding_amount",
-            "currency",
-            "conversion_rate",
-            "cost_center",
-        ],
-        order_by="due_date asc",
+    from erpnext.accounts.doctype.payment_entry.payment_entry import (
+        get_outstanding_reference_documents,
     )
 
+    if not company:
+        frappe.throw(_("Company is required."))
+    if not (party_type and party):
+        frappe.throw(_("Party Type and Party are required."))
+    if party_type not in PAY_PARTY_TYPES + RECEIVE_PARTY_TYPES:
+        frappe.throw(_("Unsupported Party Type: %s") % party_type)
+
+    party_account = party_account or get_party_account(party_type, party, company)
+    if not party_account:
+        frappe.throw(
+            _("No default account is set for %(party_type)s %(party)s.")
+            % {"party_type": _(party_type), "party": frappe.bold(party)}
+        )
+
+    args = {
+        "company": company,
+        "party_type": party_type,
+        "party": party,
+        "party_account": party_account,
+        "payment_type": get_payment_type(party_type),
+        "posting_date": nowdate(),
+        "get_outstanding_invoices": cint(get_outstanding_invoices),
+        "get_orders_to_be_billed": cint(get_orders_to_be_billed),
+        "cost_center": cost_center,
+        "from_posting_date": from_posting_date,
+        "to_posting_date": to_posting_date,
+        "from_due_date": from_due_date,
+        "to_due_date": to_due_date,
+    }
+
+    vouchers = get_outstanding_reference_documents(args) or []
+    return shape_reference_rows(
+        vouchers, cost_center=cost_center, from_amount=from_amount, to_amount=to_amount
+    )
+
+
+def shape_reference_rows(vouchers, cost_center=None, from_amount=None, to_amount=None):
+    """Map ERPNext's outstanding rows onto Payment Advice Reference rows.
+
+    Verified against live data: the engine returns account, bill_no, currency, due_date,
+    exchange_rate, invoice_amount, outstanding_amount, payment_amount, posting_date,
+    voucher_no, voucher_type. `payment_term` appears only for term-allocated invoices and
+    `total_amount` not at all, so both are read defensively. Only cost_center and status
+    need a extra lookup, since the engine does not carry them.
+    """
     today = getdate(nowdate())
-    return [
-        {
-            "reference_doctype": doctype,
-            "reference_record": r.name,
-            "date": r.posting_date,
-            "amount": flt(r.grand_total),
-            "settled_amount": flt(flt(r.grand_total) - flt(r.outstanding_amount), 3),
-            "net_payable_amount": flt(r.outstanding_amount),
-            "ageing": max(0, (today - getdate(r.due_date or r.posting_date)).days),
-            "currency": r.currency,
-            "exchange_rate": flt(r.conversion_rate) or 1.0,
-            "cost_center": r.cost_center,
-        }
-        for r in rows
-    ]
+    default_currency = frappe.db.get_default("currency")
+    rows = []
+
+    for voucher in vouchers:
+        voucher = frappe._dict(voucher)
+        outstanding = flt(voucher.get("outstanding_amount"))
+        if outstanding <= 0:
+            continue
+        if from_amount and outstanding < flt(from_amount):
+            continue
+        if to_amount and outstanding > flt(to_amount):
+            continue
+
+        doctype = voucher.get("voucher_type")
+        name = voucher.get("voucher_no")
+        if doctype not in ALLOWED_REFERENCE_DOCTYPES or not name:
+            continue
+
+        meta = frappe.get_meta(doctype)
+        lookup = [f for f in ("cost_center", "status") if meta.has_field(f)]
+        extra = (
+            frappe.db.get_value(doctype, name, lookup, as_dict=True) if lookup else None
+        ) or frappe._dict()
+
+        invoice_amount = flt(voucher.get("invoice_amount")) or flt(voucher.get("total_amount"))
+        due_date = voucher.get("due_date") or voucher.get("posting_date")
+
+        rows.append(
+            {
+                "reference_doctype": doctype,
+                "reference_record": name,
+                "bill_no": voucher.get("bill_no"),
+                "date": voucher.get("posting_date"),
+                "amount": invoice_amount,
+                "settled_amount": flt(invoice_amount - outstanding, 3),
+                "net_payable_amount": outstanding,
+                "ageing": max(0, (today - getdate(due_date)).days) if due_date else 0,
+                "payment_term": voucher.get("payment_term"),
+                "currency": voucher.get("currency") or default_currency,
+                "exchange_rate": flt(voucher.get("exchange_rate")) or 1.0,
+                "cost_center": extra.get("cost_center") or cost_center,
+                "reference_status": extra.get("status"),
+            }
+        )
+
+    rows.sort(key=lambda r: (-r["ageing"], -r["net_payable_amount"]))
+    return rows
+
+
+def refresh_reference_status(advice_name):
+    """Re-read every referenced voucher's status and outstanding on a submitted advice.
+
+    Child rows are written with `frappe.db.set_value` — never `parent.save()`, which would
+    re-validate the submitted document and reject fields lacking allow_on_submit.
+    """
+    rows = frappe.get_all(
+        "Payment Advice Reference",
+        filters={"parent": advice_name, "parenttype": "Payment Advice"},
+        fields=["name", "reference_doctype", "reference_record", "amount"],
+    )
+
+    for row in rows:
+        if not (row.reference_doctype and row.reference_record):
+            continue
+        if not frappe.db.exists(row.reference_doctype, row.reference_record):
+            continue
+
+        meta = frappe.get_meta(row.reference_doctype)
+        updates = {}
+
+        if meta.has_field("status"):
+            updates["reference_status"] = frappe.db.get_value(
+                row.reference_doctype, row.reference_record, "status"
+            )
+
+        if meta.has_field("outstanding_amount"):
+            outstanding = flt(
+                frappe.db.get_value(row.reference_doctype, row.reference_record, "outstanding_amount")
+            )
+            updates["net_payable_amount"] = outstanding
+            updates["settled_amount"] = flt(flt(row.amount) - outstanding, 3)
+
+        if updates:
+            frappe.db.set_value(
+                "Payment Advice Reference", row.name, updates, update_modified=False
+            )
 
 
 def get_due_cutoff(days=0):
