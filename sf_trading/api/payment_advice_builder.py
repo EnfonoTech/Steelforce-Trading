@@ -101,10 +101,9 @@ def _candidate_parties(filters):
     parties = frappe.get_all(
         doctype,
         filters=conditions,
-        fields=[party_field + " as party"],
         group_by=party_field,
         order_by=party_field,
-        pluck="party",
+        pluck=party_field,
     )
 
     if filters.get("party_group"):

@@ -1,7 +1,6 @@
 {
  "actions": [],
  "allow_rename": 1,
- "autoname": "format:PAS-{company}-{party_type}",
  "creation": "2026-07-26 11:00:00.000000",
  "doctype": "DocType",
  "editable_grid": 1,
@@ -367,6 +366,7 @@
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "Payment Automation Settings",
+ "naming_rule": "By script",
  "owner": "Administrator",
  "permissions": [
   {

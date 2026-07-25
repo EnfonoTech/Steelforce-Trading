@@ -188,7 +188,10 @@ class PaymentAdvice(Document):
                 "reference_record": ["in", records],
                 "parenttype": "Payment Advice",
                 "parent": ["!=", self.name or ""],
-                "docstatus": 1,
+                # anything not cancelled holds the voucher — a draft advice counts, which is
+                # what the builder already assumed. Submitted-only would let a hand-typed
+                # advice duplicate an invoice already sitting on someone's draft.
+                "docstatus": ["!=", 2],
             },
             fields=["parent", "reference_record", "allocated_amount"],
         )
@@ -197,14 +200,15 @@ class PaymentAdvice(Document):
             if flt(clash.allocated_amount) <= 0:
                 continue
             advice_status = frappe.db.get_value("Payment Advice", clash.parent, "status")
-            if advice_status in (STATUS_CANCELLED,):
+            if advice_status == STATUS_CANCELLED:
                 continue
             frappe.throw(
-                _("%(name)s is already allocated on Payment Advice %(advice)s (%(status)s).")
+                _("%(name)s is already allocated on Payment Advice %(advice)s (%(status)s). "
+                  "Cancel or remove it there first.")
                 % {
                     "name": frappe.bold(clash.reference_record),
                     "advice": frappe.bold(clash.parent),
-                    "status": advice_status,
+                    "status": advice_status or _("Draft"),
                 }
             )
 
@@ -674,3 +678,51 @@ def refresh_reference_status(advice_name):
 def get_due_cutoff(days=0):
     """Cut-off date for "due within N days" — used by the automation layer."""
     return add_days(getdate(nowdate()), cint(days))
+
+def get_advice_map(records, include_cancelled=False):
+    """Map voucher name -> the Payment Advice holding it, for reports and list views.
+
+    Returns {} when the DocType is not installed yet, so a report that shows this column
+    keeps working on a site where the fixture has not migrated (the same guard the Loyalty
+    Rewards Report needed).
+    """
+    if not records:
+        return {}
+    if not frappe.db.exists("DocType", "Payment Advice Reference"):
+        return {}
+
+    filters = {
+        "reference_record": ["in", list(records)],
+        "parenttype": "Payment Advice",
+    }
+    if not include_cancelled:
+        filters["docstatus"] = ["!=", 2]
+
+    rows = frappe.get_all(
+        "Payment Advice Reference",
+        filters=filters,
+        fields=["reference_record", "parent", "allocated_amount"],
+        order_by="modified desc",
+    )
+
+    advices = {}
+    statuses = {}
+    for row in rows:
+        if row.reference_record in advices:
+            continue  # newest advice wins
+        advices[row.reference_record] = row.parent
+
+    if advices:
+        statuses = dict(
+            frappe.get_all(
+                "Payment Advice",
+                filters={"name": ["in", list(set(advices.values()))]},
+                fields=["name", "status"],
+                as_list=True,
+            )
+        )
+
+    return {
+        record: {"advice": advice, "status": statuses.get(advice)}
+        for record, advice in advices.items()
+    }

@@ -12,7 +12,25 @@ from frappe.utils import cint, date_diff, flt, getdate, nowdate
 
 def execute(filters=None):
     filters = frappe._dict(filters or {})
-    return get_columns(), get_data(filters)
+    columns, data = get_columns(), get_data(filters)
+    attach_payment_advice(data)
+    return columns, data
+
+
+def attach_payment_advice(rows):
+    """Show which invoices are already sitting on a Payment Advice.
+
+    Answers the question this report always raised but could not: "have we already told
+    someone we would pay this?" Silently skipped on a site where Payment Advice is not
+    installed yet.
+    """
+    from sf_trading.sf_trading.doctype.payment_advice.payment_advice import get_advice_map
+
+    advice_map = get_advice_map([r.get("purchase_invoice") for r in rows if r.get("purchase_invoice")])
+    for row in rows:
+        entry = advice_map.get(row.get("purchase_invoice")) or {}
+        row["payment_advice"] = entry.get("advice")
+        row["advice_status"] = entry.get("status")
 
 
 def _bucket(days):
@@ -102,5 +120,8 @@ def get_columns():
         {"label": _("Currency"), "fieldname": "currency", "fieldtype": "Link", "options": "Currency", "width": 70},
         {"label": _("On Hold"), "fieldname": "on_hold", "fieldtype": "Data", "width": 70},
         {"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 100},
+        {"label": _("Payment Advice"), "fieldname": "payment_advice", "fieldtype": "Link",
+         "options": "Payment Advice", "width": 140},
+        {"label": _("Advice Status"), "fieldname": "advice_status", "fieldtype": "Data", "width": 110},
         {"label": _("Company"), "fieldname": "company", "fieldtype": "Link", "options": "Company", "width": 150},
     ]

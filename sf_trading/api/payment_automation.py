@@ -32,7 +32,6 @@ from frappe.utils import (
     get_time,
     getdate,
     now_datetime,
-    nowdate,
 )
 
 from sf_trading.api import payment_advice_builder as builder
@@ -55,6 +54,15 @@ def run_due_automations():
     for name in names:
         try:
             if is_due(name):
+                # Claim the slot BEFORE enqueuing. The `all` event fires every few minutes;
+                # without this the next tick would still see is_due() == True while the job
+                # sits in the queue, enqueue a second run, and create duplicate advices.
+                frappe.db.set_value(
+                    "Payment Automation Settings", name, "last_execution", now_datetime(),
+                    update_modified=False,
+                )
+                frappe.db.commit()
+
                 frappe.enqueue(
                     "sf_trading.api.payment_automation.run_automation",
                     queue="long",
@@ -62,6 +70,7 @@ def run_due_automations():
                     enqueue_after_commit=True,
                     job_name="payment_automation_%s" % name,
                     settings_name=name,
+                    force=1,  # the window was already checked and claimed here
                 )
         except Exception:
             frappe.log_error(frappe.get_traceback(), "sf_trading: payment automation dispatch failed")

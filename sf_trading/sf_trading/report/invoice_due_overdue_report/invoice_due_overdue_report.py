@@ -33,7 +33,20 @@ DOCTYPES = {
 
 def execute(filters=None):
     filters = frappe._dict(filters or {})
-    return get_columns(), get_data(filters)
+    columns, data = get_columns(), get_data(filters)
+    attach_payment_advice(data)
+    return columns, data
+
+
+def attach_payment_advice(rows):
+    """Flag rows already covered by a Payment Advice, so chasing effort is not duplicated."""
+    from sf_trading.sf_trading.doctype.payment_advice.payment_advice import get_advice_map
+
+    advice_map = get_advice_map([r.get("invoice") for r in rows if r.get("invoice")])
+    for row in rows:
+        entry = advice_map.get(row.get("invoice")) or {}
+        row["payment_advice"] = entry.get("advice")
+        row["advice_status"] = entry.get("status")
 
 
 def _bucket(days):
@@ -256,6 +269,19 @@ def get_columns():
         {
             "fieldname": "epromise_vr_no",
             "label": _("ePromise VR"),
+            "fieldtype": "Data",
+            "width": 110,
+        },
+        {
+            "fieldname": "payment_advice",
+            "label": _("Payment Advice"),
+            "fieldtype": "Link",
+            "options": "Payment Advice",
+            "width": 140,
+        },
+        {
+            "fieldname": "advice_status",
+            "label": _("Advice Status"),
             "fieldtype": "Data",
             "width": 110,
         },

@@ -19,6 +19,19 @@ WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", 
 
 
 class PaymentAutomationSettings(Document):
+    def autoname(self):
+        """One configuration per company + party type, named from the company abbreviation.
+
+        Deterministic on purpose: it makes a duplicate configuration for the same company
+        and party type impossible, which is what would otherwise let two runs pay the same
+        invoices. The abbreviation is used rather than the company name so spaces and
+        characters like & or / never reach the primary key or the URL.
+        """
+        abbr = frappe.db.get_value("Company", self.company, "abbr") or frappe.scrub(
+            self.company or ""
+        )
+        self.name = "PAS-%s-%s" % (abbr, self.party_type or "Supplier")
+
     def validate(self):
         self.validate_level_chain()
         self.validate_schedule()
