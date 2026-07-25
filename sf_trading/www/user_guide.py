@@ -46,8 +46,10 @@ def render_guide():
     with open(path, encoding="utf-8") as handle:
         markdown = handle.read()
 
-    html = frappe.utils.md_to_html(strip_manual_toc(markdown))
-    return wrap_tables(html)
+    from sf_trading.api.user_guide_screens import screens_markdown
+
+    markdown = strip_manual_toc(markdown) + screens_markdown()
+    return wrap_tables(frappe.utils.md_to_html(markdown))
 
 
 def wrap_tables(html):

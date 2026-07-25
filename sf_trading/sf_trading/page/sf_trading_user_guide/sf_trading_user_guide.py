@@ -15,4 +15,9 @@ def get_user_guide_markdown():
 		frappe.throw(frappe._("User guide file not found on the server."))
 
 	with open(guide_path, encoding="utf-8") as f:
-		return f.read()
+		markdown = f.read()
+
+	# screenshots are optional: this adds a Screens section only for images that exist
+	from sf_trading.api.user_guide_screens import screens_markdown
+
+	return markdown + screens_markdown()
