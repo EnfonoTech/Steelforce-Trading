@@ -86,15 +86,28 @@ frappe.query_reports["Invoice Due & Overdue Report"] = {
                 method: "sf_trading.api.overdue_notifications.check_overdue_now",
                 callback: function (r) {
                     if (!r.message) return;
+                    const m = r.message;
+
+                    // Say which channels actually fired, so "no email" is never a mystery.
+                    let channels = __("chime + bell");
+                    if (m.emailed) {
+                        channels = __("chime + bell + email");
+                    } else if (m.count && !m.email_configured) {
+                        channels = __("chime + bell (no outgoing email account set)");
+                    }
+
                     frappe.show_alert(
                         {
-                            message: __("{0} overdue invoice(s), {1} outstanding", [
-                                r.message.count,
-                                format_currency(r.message.outstanding, r.message.currency),
-                            ]),
-                            indicator: r.message.count ? "orange" : "green",
+                            message: m.count
+                                ? __("{0} overdue invoice(s), {1} outstanding — {2}", [
+                                      m.count,
+                                      format_currency(m.outstanding, m.currency),
+                                      channels,
+                                  ])
+                                : __("Nothing overdue right now"),
+                            indicator: m.count ? "orange" : "green",
                         },
-                        6
+                        7
                     );
                 },
             });
