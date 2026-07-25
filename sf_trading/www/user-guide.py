@@ -17,6 +17,9 @@ TOC_HEADING = "## Table of Contents"
 def get_context(context):
     context.title = "SF Trading User Guide"
     context.guide_html = render_guide()
+    # computed here, not in the template: `frappe.utils` is not exposed to the website Jinja
+    # context, and calling it there silently truncates everything after that point
+    context.updated_on = frappe.utils.formatdate(frappe.utils.nowdate(), "d MMMM yyyy")
     return context
 
 
