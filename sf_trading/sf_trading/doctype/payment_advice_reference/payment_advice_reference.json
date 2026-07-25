@@ -140,11 +140,14 @@
   {
    "fieldname": "currency_section",
    "fieldtype": "Section Break",
+   "hidden": 1,
    "label": "Transaction Currency"
   },
   {
    "fieldname": "currency",
    "fieldtype": "Link",
+   "hidden": 1,
+   "in_list_view": 0,
    "label": "Currency",
    "options": "Currency",
    "read_only": 1
@@ -152,16 +155,20 @@
   {
    "fieldname": "exchange_rate",
    "fieldtype": "Float",
+   "hidden": 1,
+   "in_list_view": 0,
    "label": "Exchange Rate",
    "read_only": 1
   },
   {
    "fieldname": "column_break_ccy",
-   "fieldtype": "Column Break"
+   "fieldtype": "Column Break",
+   "hidden": 1
   },
   {
    "fieldname": "amount_in_currency",
    "fieldtype": "Currency",
+   "hidden": 1,
    "label": "Amount In Currency",
    "options": "currency",
    "read_only": 1
@@ -169,6 +176,7 @@
   {
    "fieldname": "settled_amount_in_currency",
    "fieldtype": "Currency",
+   "hidden": 1,
    "label": "Settled Amount In Currency",
    "options": "currency",
    "read_only": 1
@@ -176,6 +184,7 @@
   {
    "fieldname": "net_payable_amount_in_currency",
    "fieldtype": "Currency",
+   "hidden": 1,
    "label": "Net Payable Amount In Currency",
    "options": "currency",
    "read_only": 1

@@ -58,10 +58,18 @@ frappe.ui.form.on("Payment Advice", {
 	},
 
 	toggle_buttons(frm) {
+		// Buttons are rebuilt from scratch: add_custom_button() alone would stack duplicates,
+		// and on a new advice refresh() runs before company/party exist — which is why the
+		// button never showed up until a reload. The field triggers below re-run this.
+		frm.clear_custom_buttons();
+
 		if (frm.doc.docstatus === 0 && frm.doc.party && frm.doc.company) {
-			frm.add_custom_button(__("Get Outstanding Documents"), () =>
-				frm.trigger("fetch_outstanding")
-			);
+			frm.add_custom_button(
+				frm.doc.party_type === "Customer"
+					? __("Get Outstanding Invoices")
+					: __("Get Outstanding Documents"),
+				() => frm.trigger("fetch_outstanding")
+			).addClass(frm.doc.payment_advice_reference?.length ? "" : "btn-primary");
 		}
 
 		if (frm.doc.docstatus !== 1) return;
@@ -231,7 +239,12 @@ frappe.ui.form.on("Payment Advice", {
 		frm.dashboard.set_headline(msg);
 	},
 
+	payment_advice_type(frm) {
+		frm.trigger("toggle_buttons");
+	},
+
 	company(frm) {
+		frm.trigger("toggle_buttons");
 		// company drives every other picker; clear what no longer applies
 		["bank_account", "cost_center", "project"].forEach((f) => frm.set_value(f, null));
 		if (!frm.doc.transaction_currency) {
@@ -242,6 +255,13 @@ frappe.ui.form.on("Payment Advice", {
 	},
 
 	party_type(frm) {
+		// Outward pays suppliers, Inward collects from customers — keep the two in step so a
+		// customer advice is never labelled Outward
+		frm.set_value(
+			"payment_advice_type",
+			frm.doc.party_type === "Customer" ? "Inward" : "Outward"
+		);
+		frm.trigger("toggle_buttons");
 		frm.set_value("party", null);
 		frm.set_value("party_name", null);
 		frm.clear_table("payment_advice_reference");
@@ -252,9 +272,11 @@ frappe.ui.form.on("Payment Advice", {
 		frm.clear_table("payment_advice_reference");
 		frm.refresh_field("payment_advice_reference");
 		frm.set_value("payment_amount", 0);
+		frm.trigger("toggle_buttons");   // the button depends on party being set
 	},
 
 	payment_amount(frm) {
+		frm.trigger("toggle_buttons");   // Payment Entry offers its fetch at this point too
 		frm.trigger("show_allocation_summary");
 	},
 

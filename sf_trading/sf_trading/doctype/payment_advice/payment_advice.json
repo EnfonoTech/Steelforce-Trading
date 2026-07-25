@@ -238,49 +238,65 @@
    "read_only": 1
   },
   {
+   "description": "Retained for data continuity; the advice works in company currency.",
    "fieldname": "currency_section",
    "fieldtype": "Section Break",
+   "hidden": 1,
    "label": "Transaction Currency"
   },
   {
+   "description": "Retained for data continuity; the advice works in company currency.",
    "fieldname": "transaction_currency",
    "fieldtype": "Link",
+   "hidden": 1,
    "label": "Transaction Currency",
    "options": "Currency"
   },
   {
+   "description": "Retained for data continuity; the advice works in company currency.",
    "fieldname": "exchange_rate",
    "fieldtype": "Float",
+   "hidden": 1,
    "label": "Exchange Rate"
   },
   {
+   "description": "Retained for data continuity; the advice works in company currency.",
    "fieldname": "column_break_currency",
-   "fieldtype": "Column Break"
+   "fieldtype": "Column Break",
+   "hidden": 1
   },
   {
+   "description": "Retained for data continuity; the advice works in company currency.",
    "fieldname": "amount_in_trans_cur",
    "fieldtype": "Currency",
+   "hidden": 1,
    "label": "Amount In Trans Cur",
    "options": "transaction_currency",
    "read_only": 1
   },
   {
+   "description": "Retained for data continuity; the advice works in company currency.",
    "fieldname": "amount_paid_in_trans_curr",
    "fieldtype": "Currency",
+   "hidden": 1,
    "label": "Amount Paid In Trans Curr",
    "options": "transaction_currency",
    "read_only": 1
   },
   {
+   "description": "Retained for data continuity; the advice works in company currency.",
    "fieldname": "amount_to_be_settled_trans_curr",
    "fieldtype": "Currency",
+   "hidden": 1,
    "label": "Amount To Be Settled Trans Curr",
    "options": "transaction_currency",
    "read_only": 1
   },
   {
+   "description": "Retained for data continuity; the advice works in company currency.",
    "fieldname": "amount_words_trans_curr",
    "fieldtype": "Data",
+   "hidden": 1,
    "label": "Amount Words Trans Curr",
    "read_only": 1
   },

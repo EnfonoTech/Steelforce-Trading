@@ -487,8 +487,14 @@ def build_payment_entry(advice):
             pe.paid_to_account_currency, company_currency, pe.posting_date
         )
 
-    # let ERPNext compute base amounts, party balance and unallocated amount
-    pe.set_missing_values()
+    # Deliberately NOT calling pe.set_missing_values() here. ERPNext's validate() runs
+    # setup_party_account_field() FIRST and set_missing_values() second (see
+    # erpnext/accounts/doctype/payment_entry/payment_entry.py). Calling it standalone on a new
+    # document leaves self.party_account unset, and hrms' EmployeePaymentEntry override — which
+    # replaces the Payment Entry class on this bench — then fails with
+    # "'EmployeePaymentEntry' object has no attribute 'party_account'". This killed every
+    # customer (Receive) advice. insert() runs validate(), which does the whole job in the
+    # right order, so nothing is lost by leaving it to ERPNext.
     return pe
 
 
