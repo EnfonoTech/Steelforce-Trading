@@ -1,0 +1,181 @@
+[
+ {
+  "charts": [],
+  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Supplier Payments</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Advice\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Advice Builder\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Automation Settings\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Supplier Payments Guide\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Reports</b></span>\", \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Payables\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cash & Cheques\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Masters\", \"col\": 4}}]",
+  "creation": "2026-07-26 12:30:00.000000",
+  "docstatus": 0,
+  "doctype": "Workspace",
+  "for_user": "",
+  "hide_custom": 0,
+  "icon": "money-coins-1",
+  "idx": 0,
+  "is_hidden": 0,
+  "label": "Supplier Payments",
+  "links": [
+   {
+    "hidden": 0,
+    "is_query_report": 0,
+    "label": "Payables",
+    "link_count": 0,
+    "onboard": 0,
+    "type": "Card Break"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 0,
+    "label": "Payment Advice",
+    "link_count": 0,
+    "link_to": "Payment Advice",
+    "link_type": "DocType",
+    "onboard": 1,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Supplier Due Payment Report",
+    "link_count": 0,
+    "link_to": "Supplier Due Payment Report",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Invoice Due & Overdue Report",
+    "link_count": 0,
+    "link_to": "Invoice Due & Overdue Report",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "hidden": 0,
+    "is_query_report": 0,
+    "label": "Cash & Cheques",
+    "link_count": 0,
+    "onboard": 0,
+    "type": "Card Break"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "PDC Report",
+    "link_count": 0,
+    "link_to": "PDC Report",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Loyalty Rewards Report",
+    "link_count": 0,
+    "link_to": "Loyalty Rewards Report",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 0,
+    "label": "Payment Entry",
+    "link_count": 0,
+    "link_to": "Payment Entry",
+    "link_type": "DocType",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "hidden": 0,
+    "is_query_report": 0,
+    "label": "Masters",
+    "link_count": 0,
+    "onboard": 0,
+    "type": "Card Break"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 0,
+    "label": "Payment Automation Settings",
+    "link_count": 0,
+    "link_to": "Payment Automation Settings",
+    "link_type": "DocType",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 0,
+    "label": "Supplier",
+    "link_count": 0,
+    "link_to": "Supplier",
+    "link_type": "DocType",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 0,
+    "label": "Bank Account",
+    "link_count": 0,
+    "link_to": "Bank Account",
+    "link_type": "DocType",
+    "onboard": 0,
+    "type": "Link"
+   }
+  ],
+  "modified": "2026-07-26 12:30:00.000000",
+  "modified_by": "Administrator",
+  "module": "Sf Trading",
+  "name": "Supplier Payments",
+  "number_cards": [],
+  "owner": "Administrator",
+  "parent_page": "",
+  "public": 1,
+  "quick_lists": [],
+  "roles": [],
+  "sequence_id": 40.0,
+  "shortcuts": [
+   {
+    "color": "Blue",
+    "doc_view": "List",
+    "label": "Payment Advice",
+    "link_to": "Payment Advice",
+    "stats_filter": "{\"status\":[\"in\",[\"Draft\",\"Pending Approval\",\"Approved\"]]}",
+    "type": "DocType"
+   },
+   {
+    "color": "Green",
+    "label": "Payment Advice Builder",
+    "link_to": "payment-advice-builder",
+    "type": "Page"
+   },
+   {
+    "color": "Orange",
+    "doc_view": "List",
+    "label": "Payment Automation Settings",
+    "link_to": "Payment Automation Settings",
+    "type": "DocType"
+   },
+   {
+    "color": "Grey",
+    "label": "Supplier Payments Guide",
+    "link_to": "payment-advice-guide",
+    "type": "Page"
+   }
+  ],
+  "title": "Supplier Payments"
+ }
+]

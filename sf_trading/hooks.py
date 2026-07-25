@@ -606,6 +606,10 @@ fixtures = [
 		"doctype": "Notification",
 		"filters": [["name", "in", ("Supplier Payment Due Reminder",)]],
 	},
+	{
+		"doctype": "Workspace",
+		"filters": [["name", "in", ("Supplier Payments",)]],
+	},
 ]
 
 # ─── Scheduler ────────────────────────────────────────────────────────────────
