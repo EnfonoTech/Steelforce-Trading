@@ -6,6 +6,7 @@ Renders `sf_trading/docs/USER_GUIDE.md` — the same file the desk page
 """
 
 import os
+import re
 
 import frappe
 
@@ -45,4 +46,19 @@ def render_guide():
     with open(path, encoding="utf-8") as handle:
         markdown = handle.read()
 
-    return frappe.utils.md_to_html(strip_manual_toc(markdown))
+    html = frappe.utils.md_to_html(strip_manual_toc(markdown))
+    return wrap_tables(html)
+
+
+def wrap_tables(html):
+    """Put every table in a scroll container.
+
+    A payables table with six columns has nowhere to go on a laptop screen, and the guide is
+    table-heavy. Wrapping server-side keeps the markdown clean and lets CSS handle the rest.
+    """
+    return re.sub(
+        r"<table(.*?)</table>",
+        lambda m: '<div class="table-wrap"><table%s</table></div>' % m.group(1),
+        html,
+        flags=re.S,
+    )
