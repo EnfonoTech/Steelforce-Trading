@@ -73,6 +73,7 @@ PARTY_NAME_FIELD = {
 class PaymentAdvice(Document):
     # ── lifecycle ────────────────────────────────────────────────────────────────
     def validate(self):
+        self.set_advice_type()
         self.validate_references()
         self.set_party_name()
         self.set_reference_details()
@@ -100,6 +101,17 @@ class PaymentAdvice(Document):
         self.db_set("status", STATUS_CANCELLED, update_modified=False)
         # the vouchers are free again — make sure their status on this advice reads true
         refresh_reference_status(self.name)
+
+    def set_advice_type(self):
+        """Inward collects from a customer, Outward pays a supplier.
+
+        Derived here rather than left to the form: the builder, the invoice-list action and the
+        automation all insert advices without any client script, and a customer advice was being
+        stored as Outward through those paths.
+        """
+        self.payment_advice_type = (
+            "Inward" if self.party_type in RECEIVE_PARTY_TYPES else "Outward"
+        )
 
     # ── reference integrity ──────────────────────────────────────────────────────
     def validate_references(self):
