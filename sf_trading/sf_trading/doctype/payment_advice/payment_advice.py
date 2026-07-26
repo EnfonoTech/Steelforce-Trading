@@ -383,15 +383,21 @@ class PaymentAdvice(Document):
         if not self.approver:
             frappe.throw(_("Select an Approver before submitting."))
 
-        approver_user = frappe.db.get_value("Employee", self.approver, "user_id")
-        if not approver_user:
-            frappe.throw(_("No user account is linked to Employee %s.") % frappe.bold(self.approver))
-
-        if frappe.session.user == approver_user:
+        # A System Manager can always release a stuck advice. This check comes FIRST on purpose:
+        # when the approver Employee has no linked user, the error below would otherwise block
+        # everyone, including the person able to fix it — and it blocked automated submits too.
+        if "System Manager" in frappe.get_roles():
             return
 
-        # a System Manager can always push a stuck advice through
-        if "System Manager" in frappe.get_roles():
+        approver_user = frappe.db.get_value("Employee", self.approver, "user_id")
+        if not approver_user:
+            frappe.throw(
+                _("Employee %s has no linked user account, so nobody can submit as that approver. "
+                  "Set User ID on the Employee, or pick another approver.")
+                % frappe.bold(self.approver)
+            )
+
+        if frappe.session.user == approver_user:
             return
 
         frappe.throw(
