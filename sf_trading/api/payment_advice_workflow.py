@@ -19,7 +19,8 @@ Shape copied from Payment Request Approval as it runs on prod:
     Draft ──Send for Approval──▶ Pending Approval ──Approve──▶ Approved (docstatus 1)
                                         └──────Reject──────▶ Rejected ──▶ Pending Approval
 with require_attachment on Approve, require_comment + return-for-correction on Reject,
-a 3-day reminder and 7-day escalation.
+a 3-day reminder and 7-day escalation. Roles match it too: Purchase User raises, Accountant
+approves.
 """
 
 import frappe
@@ -34,10 +35,11 @@ STATE_PENDING = "Pending Approval"
 STATE_APPROVED = "Approved"
 STATE_REJECTED = "Rejected"
 
-# Roles follow the Payment Request workflow, shifted to who actually raises payment advices:
-# the accounts team prepares, the Finance Manager approves.
-ROLE_PREPARER = "Accounts User"
-ROLE_APPROVER = "Finance Manager"
+# Roles are the live Payment Request Approval's, unchanged: the raiser sends it up, the
+# Accountant approves. Keeping them identical means one approval convention across both
+# documents rather than two rules staff have to remember.
+ROLE_PREPARER = "Purchase User"
+ROLE_APPROVER = "Accountant"
 
 
 def pm_workflow_available():
@@ -68,6 +70,20 @@ def has_active_workflow(company=None):
     if hasattr(frappe.local, "cache"):
         frappe.local.cache[key] = active
     return active
+
+
+def _default_email_alert():
+    """Follow whatever the site's other PM Workflows do about approval email.
+
+    Steel Force has these switched off while no outgoing Email Account exists — every
+    transition would otherwise log "Failed to send workflow action email". A new workflow that
+    ignored that would quietly start filling the Error Log again. With no workflows to learn
+    from (a fresh site) email stays on, which is permission_manager's own default.
+    """
+    existing = frappe.get_all("PM Workflow", pluck="send_email_alert")
+    if not existing:
+        return 1
+    return 1 if any(cint(v) for v in existing) else 0
 
 
 def _states(company):
@@ -153,7 +169,7 @@ def setup_workflow(company: str = None, force: int = 0):
             "document_type": DOCTYPE,
             "company": company,
             "is_active": 1,
-            "send_email_alert": 1,
+            "send_email_alert": _default_email_alert(),
             "allow_descendants": 1,
             "workflow_state_field": "workflow_state",
             "reminder_after_days": 3,

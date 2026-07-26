@@ -249,10 +249,17 @@ netted before you see them.
 
 | Role | Prepare | Approve | Configure automation |
 |---|---|---|---|
+| Purchase User | Yes | No | No |
 | Accounts User | Yes | No | No |
-| Accountant | Yes | No | No |
+| Accountant | Yes | Yes | No |
 | Finance Manager | Yes | Yes | Yes |
 | Accounts Manager | Yes | No | Yes |
+
+Approval follows the **Payment Advice Approval** PM Workflow, which is the same shape and the
+same roles as Payment Request Approval: a Purchase User sends the advice up, an Accountant
+approves or rejects it. Approving requires an attachment; rejecting requires a comment and
+returns the advice to the raiser for correction. While that workflow is active it — not the
+Approver field on the form — decides who may submit.
 
 ### 9.1 Raise one advice
 
