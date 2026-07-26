@@ -35,19 +35,27 @@ from frappe.utils import add_days, cint, flt, getdate, get_link_to_form, money_i
 from erpnext.accounts.party import get_party_account
 from erpnext.setup.utils import get_exchange_rate
 
-PAY_PARTY_TYPES = ("Supplier", "Employee")
+PAY_PARTY_TYPES = ("Supplier",)
 RECEIVE_PARTY_TYPES = ("Customer",)
+PARTY_TYPES = PAY_PARTY_TYPES + RECEIVE_PARTY_TYPES
 
-# Reference types a Payment Advice may point at. Enforced server-side as well as in the
-# form, because a Dynamic Link accepts any DocType name over the API otherwise.
-ALLOWED_REFERENCE_DOCTYPES = (
-    "Purchase Invoice",
-    "Sales Invoice",
-    "Journal Entry",
-    "Expense Claim",
-    "Purchase Order",
-    "Sales Order",
+# Reference types per party type, copied from ERPNext's own Payment Entry
+# (PaymentEntry.get_valid_reference_doctypes) so an advice can never carry a reference its
+# Payment Entry would later reject. Enforced server-side as well as in the form, because a
+# Dynamic Link accepts any DocType name over the API otherwise.
+VALID_REFERENCE_DOCTYPES = {
+    "Customer": ("Sales Order", "Sales Invoice", "Journal Entry", "Dunning", "Payment Entry"),
+    "Supplier": ("Purchase Order", "Purchase Invoice", "Journal Entry", "Payment Entry"),
+}
+
+ALLOWED_REFERENCE_DOCTYPES = tuple(
+    sorted({dt for types in VALID_REFERENCE_DOCTYPES.values() for dt in types})
 )
+
+
+def valid_reference_doctypes(party_type):
+    """What this party type may be paid against — identical to Payment Entry's list."""
+    return VALID_REFERENCE_DOCTYPES.get(party_type, ())
 
 STATUS_DRAFT = "Draft"
 STATUS_PENDING = "Pending Approval"
@@ -59,7 +67,6 @@ STATUS_CANCELLED = "Cancelled"
 PARTY_NAME_FIELD = {
     "Supplier": "supplier_name",
     "Customer": "customer_name",
-    "Employee": "employee_name",
 }
 
 
@@ -70,6 +77,7 @@ class PaymentAdvice(Document):
         self.set_party_name()
         self.set_reference_details()
         self.compute_totals()
+        self.validate_transaction_reference()
         self.validate_payment_amount()
         self.allocate_payment()
         self.set_words()
@@ -108,10 +116,16 @@ class PaymentAdvice(Document):
                     _("Row #%s: select both a reference type and a reference document.") % row.idx
                 )
 
-            if row.reference_doctype not in ALLOWED_REFERENCE_DOCTYPES:
+            allowed = valid_reference_doctypes(self.party_type)
+            if row.reference_doctype not in allowed:
                 frappe.throw(
-                    _("Row #%(idx)s: %(dt)s cannot be referenced on a Payment Advice.")
-                    % {"idx": row.idx, "dt": _(row.reference_doctype)}
+                    _("Row #%(idx)s: a %(party_type)s advice cannot reference a %(dt)s. Allowed: %(allowed)s")
+                    % {
+                        "idx": row.idx,
+                        "party_type": _(self.party_type or ""),
+                        "dt": _(row.reference_doctype),
+                        "allowed": ", ".join(_(d) for d in allowed),
+                    }
                 )
 
             if not frappe.db.exists(row.reference_doctype, row.reference_record):
@@ -172,9 +186,7 @@ class PaymentAdvice(Document):
         self.validate_not_advised_elsewhere()
 
     def party_field(self):
-        return {"Supplier": "supplier", "Customer": "customer", "Employee": "employee"}.get(
-            self.party_type, "supplier"
-        )
+        return {"Supplier": "supplier", "Customer": "customer"}.get(self.party_type, "supplier")
 
     def validate_not_advised_elsewhere(self):
         """Stop the same voucher being paid twice through two live advices."""
@@ -281,6 +293,33 @@ class PaymentAdvice(Document):
             self.amount_in_trans_cur = flt(flt(self.amount) / rate, 3)
             self.amount_paid_in_trans_curr = flt(flt(self.amount_paid) / rate, 3)
             self.amount_to_be_settled_trans_curr = flt(flt(self.amount_to_be_settled) / rate, 3)
+
+    def validate_transaction_reference(self):
+        """Mirror ERPNext's PaymentEntry.validate_transaction_reference().
+
+        There the company-side account is checked, not the Mode of Payment: if that account is
+        of type Bank, reference no and date are mandatory. Enforcing it on the advice means a
+        bank payment cannot be approved only to have its Payment Entry refuse to post.
+        """
+        if not self.company:
+            return
+
+        company_account = get_company_account(self.company, self.mode_of_payment) or self.get(
+            "bank_account_account"
+        )
+        if self.bank_account and not company_account:
+            company_account = frappe.db.get_value("Bank Account", self.bank_account, "account")
+        if not company_account:
+            return
+
+        if frappe.get_cached_value("Account", company_account, "account_type") != "Bank":
+            return
+
+        if not (self.reference_no and self.reference_date):
+            frappe.throw(
+                _("Reference No and Reference Date are mandatory for a bank transaction (%s).")
+                % frappe.bold(company_account)
+            )
 
     def validate_payment_amount(self):
         if flt(self.payment_amount) <= 0:
@@ -539,6 +578,21 @@ def create_payment_entry(payment_advice: str, submit: int = 0):
 
 
 @frappe.whitelist()
+def mode_needs_reference(company: str, mode_of_payment: str = None, bank_account: str = None):
+    """True when the company-side account is a Bank account.
+
+    Same test ERPNext applies in PaymentEntry.validate_transaction_reference(), exposed so the
+    form can mark reference no/date required as soon as the mode is chosen rather than at save.
+    """
+    account = get_company_account(company, mode_of_payment)
+    if not account and bank_account:
+        account = frappe.db.get_value("Bank Account", bank_account, "account")
+    if not account:
+        return False
+    return frappe.get_cached_value("Account", account, "account_type") == "Bank"
+
+
+@frappe.whitelist()
 def get_reference_details(reference_doctype: str, reference_record: str, company: str = None,
                          party_type: str = None, party: str = None):
     """Details for ONE manually-picked reference row.
@@ -549,9 +603,15 @@ def get_reference_details(reference_doctype: str, reference_record: str, company
     """
     frappe.has_permission("Payment Advice", "write", throw=True)
 
-    if reference_doctype not in ALLOWED_REFERENCE_DOCTYPES:
+    allowed = valid_reference_doctypes(party_type) if party_type else ALLOWED_REFERENCE_DOCTYPES
+    if reference_doctype not in allowed:
         frappe.throw(
-            _("%s cannot be referenced on a Payment Advice.") % _(reference_doctype)
+            _("A %(party_type)s advice cannot reference a %(dt)s. Allowed: %(allowed)s")
+            % {
+                "party_type": _(party_type or ""),
+                "dt": _(reference_doctype),
+                "allowed": ", ".join(_(d) for d in allowed),
+            }
         )
     if not frappe.db.exists(reference_doctype, reference_record):
         frappe.throw(
@@ -576,7 +636,7 @@ def get_reference_details(reference_doctype: str, reference_record: str, company
         )
 
     if party and party_type:
-        party_field = {"Supplier": "supplier", "Customer": "customer", "Employee": "employee"}.get(party_type)
+        party_field = {"Supplier": "supplier", "Customer": "customer"}.get(party_type)
         if party_field and meta.has_field(party_field):
             row_party = frappe.db.get_value(reference_doctype, reference_record, party_field)
             if row_party and row_party != party:
@@ -666,7 +726,7 @@ def get_outstanding_documents(
         frappe.throw(_("Company is required."))
     if not (party_type and party):
         frappe.throw(_("Party Type and Party are required."))
-    if party_type not in PAY_PARTY_TYPES + RECEIVE_PARTY_TYPES:
+    if party_type not in PARTY_TYPES:
         frappe.throw(_("Unsupported Party Type: %s") % party_type)
 
     party_account = party_account or get_party_account(party_type, party, company)

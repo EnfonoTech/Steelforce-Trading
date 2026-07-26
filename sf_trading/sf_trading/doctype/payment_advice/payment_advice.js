@@ -2,6 +2,15 @@
 // Payment Advice form: scope the pickers, pull outstanding documents in one click,
 // keep the totals honest as rows change, and hand off to the Payment Entry.
 
+// Payment Entry's own reference table, so an advice cannot hold something its Payment Entry
+// would reject at submit.
+function sf_valid_reference_doctypes(party_type) {
+	if (party_type === "Customer") {
+		return ["Sales Order", "Sales Invoice", "Journal Entry", "Dunning", "Payment Entry"];
+	}
+	return ["Purchase Order", "Purchase Invoice", "Journal Entry", "Payment Entry"];
+}
+
 frappe.ui.form.on("Payment Advice", {
 	setup(frm) {
 		// party pickers stay inside the advice's own company
@@ -17,29 +26,26 @@ frappe.ui.form.on("Payment Advice", {
 		// references may only point at documents of the same company and party
 		frm.set_query("reference_record", "payment_advice_reference", (doc, cdt, cdn) => {
 			const row = locals[cdt][cdn];
-			const filters = { docstatus: 1, company: doc.company };
-			if (row.reference_doctype === "Purchase Invoice" && doc.party_type === "Supplier") {
-				filters.supplier = doc.party;
-			} else if (row.reference_doctype === "Sales Invoice" && doc.party_type === "Customer") {
-				filters.customer = doc.party;
-			}
+			const filters = { docstatus: 1 };
+			if (doc.company) filters.company = doc.company;
+
+			const party_field = { Supplier: "supplier", Customer: "customer" }[doc.party_type];
+			const carries_party = [
+				"Purchase Invoice",
+				"Purchase Order",
+				"Sales Invoice",
+				"Sales Order",
+				"Dunning",
+			].includes(row.reference_doctype);
+			if (party_field && carries_party && doc.party) filters[party_field] = doc.party;
+
 			return { filters };
 		});
 
-		frm.set_query("reference_doctype", "payment_advice_reference", () => ({
-			filters: {
-				name: [
-					"in",
-					[
-						"Purchase Invoice",
-						"Sales Invoice",
-						"Journal Entry",
-						"Expense Claim",
-						"Purchase Order",
-						"Sales Order",
-					],
-				],
-			},
+		// exactly Payment Entry's list, per party type
+		// (PaymentEntry.get_valid_reference_doctypes in ERPNext)
+		frm.set_query("reference_doctype", "payment_advice_reference", (doc) => ({
+			filters: { name: ["in", sf_valid_reference_doctypes(doc.party_type)] },
 		}));
 	},
 
@@ -255,6 +261,10 @@ frappe.ui.form.on("Payment Advice", {
 	},
 
 	party_type(frm) {
+		// the allowed reference doctypes change with the party type, so drop what no longer fits
+		frm.clear_table("payment_advice_reference");
+		frm.refresh_field("payment_advice_reference");
+
 		// Outward pays suppliers, Inward collects from customers — keep the two in step so a
 		// customer advice is never labelled Outward
 		frm.set_value(
@@ -273,6 +283,25 @@ frappe.ui.form.on("Payment Advice", {
 		frm.refresh_field("payment_advice_reference");
 		frm.set_value("payment_amount", 0);
 		frm.trigger("toggle_buttons");   // the button depends on party being set
+	},
+
+	mode_of_payment(frm) {
+		// mirror Payment Entry: a Bank account demands a reference no and date
+		if (!frm.doc.mode_of_payment || !frm.doc.company) return;
+		frappe.call({
+			method: "sf_trading.sf_trading.doctype.payment_advice.payment_advice.mode_needs_reference",
+			args: { company: frm.doc.company, mode_of_payment: frm.doc.mode_of_payment },
+			callback(r) {
+				if (!r.message) return;
+				frm.set_df_property("reference_no", "reqd", 1);
+				frm.set_df_property("reference_date", "reqd", 1);
+				if (!frm.doc.reference_date) frm.set_value("reference_date", frappe.datetime.get_today());
+				frappe.show_alert(
+					{ message: __("Bank payment — reference no and date are required"), indicator: "blue" },
+					6
+				);
+			},
+		});
 	},
 
 	payment_amount(frm) {

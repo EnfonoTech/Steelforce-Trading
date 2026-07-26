@@ -27,6 +27,7 @@ from frappe import _
 from frappe.utils import add_days, cint, flt, getdate, nowdate
 
 from sf_trading.sf_trading.doctype.payment_advice.payment_advice import (
+    PARTY_TYPES,
     PAY_PARTY_TYPES,
     RECEIVE_PARTY_TYPES,
     get_party_account,
@@ -170,7 +171,7 @@ def get_builder_data(filters=None):
         frappe.throw(_("Company is required."))
 
     party_type = filters.get("party_type") or "Supplier"
-    if party_type not in PAY_PARTY_TYPES + RECEIVE_PARTY_TYPES:
+    if party_type not in PARTY_TYPES:
         frappe.throw(_("Unsupported Party Type: %s") % party_type)
 
     floor = flt(filters.get("minimum_total") or DEFAULT_FLOOR)

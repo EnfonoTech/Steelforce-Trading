@@ -156,7 +156,7 @@
    "fieldtype": "Select",
    "in_standard_filter": 1,
    "label": "Party Type",
-   "options": "Supplier\nCustomer\nEmployee",
+   "options": "Supplier\nCustomer",
    "reqd": 1
   },
   {
@@ -313,12 +313,16 @@
   },
   {
    "allow_on_submit": 1,
+   "depends_on": "eval:doc.mode_of_payment || doc.bank_account",
+   "description": "Mandatory when the paying/receiving account is a Bank account, as in Payment Entry.",
    "fieldname": "reference_no",
    "fieldtype": "Data",
    "label": "Reference No"
   },
   {
    "allow_on_submit": 1,
+   "depends_on": "eval:doc.mode_of_payment || doc.bank_account",
+   "description": "Mandatory when the paying/receiving account is a Bank account, as in Payment Entry.",
    "fieldname": "reference_date",
    "fieldtype": "Date",
    "label": "Reference Date"
