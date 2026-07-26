@@ -24,6 +24,7 @@ from sf_trading.sf_trading.report.mode_of_payment_invoice_wise.mode_of_payment_i
     CLASS_NO_VOUCHER,
     CLASS_WALLET,
     CREDIT_LABEL,
+    INVOICE_TYPES,
     NO_VOUCHER_LABEL,
     ROUNDING_TOLERANCE,
     UNSET_LABEL,
@@ -269,6 +270,37 @@ class TestModeOfPaymentInvoiceWise(FrappeTestCase):
             self.assertLessEqual(
                 abs(total - flt(row["grand_total"])), ROUNDING_TOLERANCE, msg=row["invoice"]
             )
+
+    def test_invoice_type_is_the_declared_payment_mode(self):
+        rows = self._fabricated([self._leg("Cheque", 100)], declared="Cheque")
+        self.assertEqual(rows[0]["invoice_type"], "Cheque")
+
+    def test_invoices_without_a_declared_mode_are_left_out(self):
+        """Scope rule: no declaration on the invoice → not in this report, and no error."""
+        _columns, rows = self._run()
+        reported = {row["invoice"] for row in rows}
+        for row in rows:
+            self.assertIn(row["invoice_type"], INVOICE_TYPES, msg=row["invoice"])
+
+        blank = frappe.get_all(
+            "Sales Invoice",
+            filters={
+                "docstatus": 1,
+                "company": self.company,
+                "posting_date": [">=", get_first_day(nowdate())],
+                "custom_payment_mode": ["in", ["", None]],
+            },
+            pluck="name",
+            limit=25,
+        )
+        for name in blank:
+            self.assertNotIn(name, reported)
+
+    def test_invoice_type_filter_narrows_to_that_declaration(self):
+        for declared in INVOICE_TYPES:
+            _columns, rows = self._run(invoice_type=declared)
+            for row in rows:
+                self.assertEqual(row["invoice_type"], declared, msg=row["invoice"])
 
     def test_every_row_has_a_payment_class(self):
         _columns, rows = self._run()

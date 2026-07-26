@@ -84,10 +84,11 @@ frappe.query_reports["Mode of Payment Invoice Wise"] = {
 			].join("\n"),
 		},
 		{
+			// the counter's declaration on the invoice (custom_payment_mode)
 			fieldname: "invoice_type",
 			label: __("Invoice Type"),
 			fieldtype: "Select",
-			options: ["", "Counter (POS)", "Credit Sale", "Return"].join("\n"),
+			options: ["", "Cash", "Credit", "Cheque"].join("\n"),
 		},
 		{
 			fieldname: "status",
@@ -188,13 +189,6 @@ frappe.query_reports["Mode of Payment Invoice Wise"] = {
 			report.set_filter_value({
 				view: "Invoice Summary",
 				payment_class: "Credit",
-				only_mixed: 0,
-			});
-		});
-		report.page.add_inner_button(__("Needs Fixing (mode not set)"), function () {
-			report.set_filter_value({
-				view: "Payment Detail",
-				only_unset_mode: 1,
 				only_mixed: 0,
 			});
 		});

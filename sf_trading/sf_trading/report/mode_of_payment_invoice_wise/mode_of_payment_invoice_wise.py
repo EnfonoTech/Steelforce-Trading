@@ -39,6 +39,11 @@ Two data facts on this site shape the code (verified against prod, 2026-07-26):
     `Mode of Payment-custom_payment_class` field is ever added, its value wins — no code
     change needed.
 
+**Scope**: only invoices that carry a declared payment mode
+(`Sales Invoice.custom_payment_mode` — Cash / Credit / Cheque) are reported. Invoices with
+that field blank are skipped silently, so totals here are not the full sales figure for the
+period; see INVOICE_TYPES below.
+
 Three views, switched by the **View** filter:
   * Invoice Summary — one row per invoice: class ("Cash / Card"), mode detail, and an
     amount column per class
@@ -117,9 +122,13 @@ ROUNDING_TOLERANCE = 0.05
 
 DOCSTATUS_LABEL = {0: _("Draft"), 1: _("Submitted"), 2: _("Cancelled")}
 
-INVOICE_TYPE_POS = "Counter (POS)"
-INVOICE_TYPE_CREDIT = "Credit Sale"
-INVOICE_TYPE_RETURN = "Return"
+#: The **Invoice Type** column is the counter's own declaration — the Select field
+#: `Sales Invoice.custom_payment_mode` (Cash / Credit / Cheque), not something derived from
+#: `is_pos` / `is_return`. The field is not mandatory, and invoices where nobody set it are
+#: **left out of the report entirely** (quietly, no message): only declared invoices are in
+#: scope. On UAT that is 954 of 2,604 July invoices — the rest carry no declaration at all.
+#: The `Check` column compares the declaration against what the vouchers actually say.
+INVOICE_TYPES = ("Cash", "Credit", "Cheque")
 
 VIEW_SUMMARY = "Invoice Summary"
 VIEW_DETAIL = "Payment Detail"
@@ -191,13 +200,12 @@ def invoice_conditions(filters, si):
         # `custom_sales_person` holds a plain name ("Akhil"), not a link — exact match.
         conds.append(si.custom_sales_person == filters.sales_person)
 
-    invoice_type = filters.get("invoice_type")
-    if invoice_type == INVOICE_TYPE_POS:
-        conds += [si.is_pos == 1, si.is_return == 0]
-    elif invoice_type == INVOICE_TYPE_CREDIT:
-        conds += [si.is_pos == 0, si.is_return == 0]
-    elif invoice_type == INVOICE_TYPE_RETURN:
-        conds.append(si.is_return == 1)
+    # Only invoices the counter declared a payment mode on are in scope. Silent by design —
+    # an invoice with no declaration is simply not part of this report.
+    conds += [si.custom_payment_mode.isnotnull(), si.custom_payment_mode != ""]
+
+    if filters.get("invoice_type"):
+        conds.append(si.custom_payment_mode == filters.invoice_type)
 
     return conds
 
@@ -221,8 +229,6 @@ def get_invoices(filters):
             si.branch,
             si.status,
             si.currency,
-            si.is_pos,
-            si.is_return,
             si.return_against,
             si.grand_total,
             si.rounded_total,
@@ -690,7 +696,7 @@ def build_invoice_rows(invoices, legs):
             "invoice": name,
             "posting_date": invoice.posting_date,
             "due_date": invoice.due_date,
-            "invoice_type": invoice_type_of(invoice),
+            "invoice_type": invoice.custom_payment_mode,
             "customer": invoice.customer,
             "customer_name": invoice.customer_name,
             "branch": invoice.branch,
@@ -716,7 +722,6 @@ def build_invoice_rows(invoices, legs):
                 (leg["payment_date"] for leg in invoice_legs if leg.get("payment_date")),
                 default=None,
             ),
-            "declared_mode": invoice.custom_payment_mode,
             "mode_mismatch": mismatch_label(invoice.custom_payment_mode, by_class),
             "mode_not_set": 1 if any(leg["mode_missing"] for leg in invoice_legs) else 0,
             "is_mixed": 1 if len(ordered_classes) > 1 else 0,
@@ -734,12 +739,6 @@ def build_invoice_rows(invoices, legs):
 
     rows.sort(key=lambda row: (row["posting_date"], row["invoice"]))
     return rows
-
-
-def invoice_type_of(invoice):
-    if invoice.is_return:
-        return INVOICE_TYPE_RETURN
-    return INVOICE_TYPE_POS if invoice.is_pos else INVOICE_TYPE_CREDIT
 
 
 def mismatch_label(declared, by_class):
@@ -995,7 +994,6 @@ def get_columns():
             "fieldtype": "Data",
             "width": 130,
         },
-        {"fieldname": "declared_mode", "label": _("Declared Mode"), "fieldtype": "Data", "width": 110},
         {"fieldname": "mode_mismatch", "label": _("Check"), "fieldtype": "Data", "width": 90},
         {"fieldname": "due_date", "label": _("Due Date"), "fieldtype": "Date", "width": 95},
         {"fieldname": "sales_person", "label": _("Sales Person"), "fieldtype": "Data", "width": 110},
