@@ -262,8 +262,10 @@ class PaymentAdvice(Document):
 
             if not row.date:
                 row.date = source("posting_date")
-            if not row.amount:
-                row.amount = get_document_total(row.reference_doctype, row.reference_record, meta)
+            # Always re-read, never trust what is on the row: these fields are read-only, the
+            # source document can be amended, and rows written before the currency fix hold a
+            # foreign-currency total. A stale figure here misstates the whole advice.
+            row.amount = get_document_total(row.reference_doctype, row.reference_record, meta)
             # Amounts on these rows are company-currency figures: ERPNext stores invoice
             # outstanding in the party account currency, which is the company currency here.
             # Stamping the invoice's own currency (SAR on an import PI, say) would render a
@@ -277,9 +279,6 @@ class PaymentAdvice(Document):
             # outstanding, where the reference doctype tracks it
             if meta.has_field("outstanding_amount"):
                 outstanding = flt(source("outstanding_amount"))
-                # a row saved before this fix may hold a foreign-currency total; recompute
-                if flt(row.amount) < outstanding:
-                    row.amount = get_document_total(row.reference_doctype, row.reference_record, meta)
                 row.settled_amount = flt(flt(row.amount) - outstanding, 3)
                 row.net_payable_amount = outstanding
             elif not row.net_payable_amount:
