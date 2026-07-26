@@ -109,7 +109,10 @@ UNSET_LABEL = "(mode not set)"
 UNSET_SEPARATOR = " - "
 
 #: A POS row can be keyed a cent away from the invoice total (BHD prints 3 decimals but
-#: the counter types 2). Gaps at or below this are rounding, not a missing payment.
+#: the counter types 2). Gaps at or below this are rounding, not a missing payment — and
+#: not a Credit / Refund either: without this cut, a return left with 4 fils outstanding
+#: reads as "Cash / Refund Due" and every such invoice is counted as mixed-mode (on the
+#: UAT copy that was 381 "mixed" invoices instead of the real ~140).
 ROUNDING_TOLERANCE = 0.05
 
 DOCSTATUS_LABEL = {0: _("Draft"), 1: _("Submitted"), 2: _("Cancelled")}
@@ -617,8 +620,6 @@ def build_invoice_rows(invoices, legs):
     rows = []
     for name, invoice in invoices.items():
         precision = precision_for(invoice.currency)
-        tolerance = (1.0 / (10**precision)) / 2 if precision else 0.5
-
         invoice_legs = legs.get(name) or []
 
         # Change handed back at the counter is money that left again — ERPNext keeps it in
@@ -666,10 +667,10 @@ def build_invoice_rows(invoices, legs):
             by_class[leg["payment_class"]] = flt(by_class.get(leg["payment_class"])) + amount
             by_mode[leg["mode_label"]] = flt(by_mode.get(leg["mode_label"])) + amount
 
-        if outstanding > tolerance:
+        if outstanding > ROUNDING_TOLERANCE:
             by_class[CLASS_CREDIT] = flt(by_class.get(CLASS_CREDIT)) + outstanding
             by_mode[CREDIT_LABEL] = flt(by_mode.get(CREDIT_LABEL)) + outstanding
-        elif outstanding < -tolerance:
+        elif outstanding < -ROUNDING_TOLERANCE:
             by_class[CLASS_REFUND] = flt(by_class.get(CLASS_REFUND)) + outstanding
             by_mode[REFUND_LABEL] = flt(by_mode.get(REFUND_LABEL)) + outstanding
 
@@ -1091,9 +1092,18 @@ def class_totals(rows):
     return totals
 
 
+def material(amount):
+    """Worth putting on a card or a chart bar.
+
+    Float sums leave residue (a fully-vouchered month came back as -2.7e-15 in the
+    no-voucher bucket, which would otherwise draw an empty "Settled (no voucher)" card).
+    """
+    return abs(flt(amount)) > ROUNDING_TOLERANCE
+
+
 def chart(rows):
     totals = class_totals(rows)
-    labels = [payment_class for payment_class in CLASS_COLUMNS if flt(totals[payment_class])]
+    labels = [payment_class for payment_class in CLASS_COLUMNS if material(totals[payment_class])]
     if not labels:
         return None
     return {
@@ -1131,7 +1141,7 @@ def summary(rows):
     ]
 
     for payment_class in (CLASS_CASH, CLASS_CARD, CLASS_WALLET, CLASS_CHEQUE, CLASS_BANK):
-        if flt(totals[payment_class]):
+        if material(totals[payment_class]):
             cards.append(
                 {
                     "label": _(payment_class),
@@ -1141,7 +1151,7 @@ def summary(rows):
                 }
             )
 
-    if flt(totals[CLASS_CREDIT]):
+    if material(totals[CLASS_CREDIT]):
         cards.append(
             {
                 "label": _("Credit Outstanding"),
@@ -1152,7 +1162,7 @@ def summary(rows):
             }
         )
 
-    if flt(totals[CLASS_NO_VOUCHER]):
+    if material(totals[CLASS_NO_VOUCHER]):
         cards.append(
             {
                 "label": _("Settled (no voucher)"),

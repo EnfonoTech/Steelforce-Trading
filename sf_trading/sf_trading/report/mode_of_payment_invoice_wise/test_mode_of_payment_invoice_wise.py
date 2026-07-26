@@ -156,6 +156,15 @@ class TestModeOfPaymentInvoiceWise(FrappeTestCase):
         self.assertEqual(flt(rows[0]["amt_credit"]), 40.0)
         self.assertIn(CREDIT_LABEL, rows[0]["mode_of_payment"])
 
+    def test_sub_fils_outstanding_is_not_a_credit(self):
+        """A return left with 4 fils open must not read as "Cash / Refund Due"."""
+        rows = self._fabricated(
+            [self._leg("Cash-SFSB", -30.400)], outstanding=-0.004, grand_total=-30.404
+        )
+        self.assertEqual(rows[0]["payment_class"], CLASS_CASH)
+        self.assertEqual(rows[0]["is_mixed"], 0)
+        self.assertEqual(flt(rows[0]["amt_refund_due"]), 0.0)
+
     def test_unpaid_invoice_is_pure_credit(self):
         rows = self._fabricated([], outstanding=100)
         self.assertEqual(rows[0]["payment_class"], CLASS_CREDIT)
