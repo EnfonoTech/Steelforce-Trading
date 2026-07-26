@@ -223,6 +223,7 @@ def get_invoices(filters):
             si.return_against,
             si.grand_total,
             si.rounded_total,
+            si.disable_rounded_total,
             si.outstanding_amount,
             si.change_amount,
             si.custom_payment_mode,
@@ -598,6 +599,20 @@ def precision_for(currency):
     return cache[currency]
 
 
+def document_total(invoice, precision):
+    """The payable face value of the invoice.
+
+    `rounded_total` is only meaningful when rounding is enabled — with
+    `disable_rounded_total` set, ERPNext leaves the rounding *residue* in the field
+    (several July returns here hold -0.004 against a -300.014 grand total). ERPNext's own
+    rule is the same CASE: see
+    `frappe/erpnext: erpnext/controllers/accounts_controller.py:3529`.
+    """
+    if cint(invoice.get("disable_rounded_total")) or not flt(invoice.get("rounded_total")):
+        return flt(invoice.get("grand_total"), precision)
+    return flt(invoice.get("rounded_total"), precision)
+
+
 def build_invoice_rows(invoices, legs):
     rows = []
     for name, invoice in invoices.items():
@@ -640,7 +655,7 @@ def build_invoice_rows(invoices, legs):
 
         settled = sum(flt(leg["amount"]) for leg in invoice_legs)
         outstanding = flt(invoice.outstanding_amount, precision)
-        invoice_total = flt(invoice.rounded_total or invoice.grand_total, precision)
+        invoice_total = document_total(invoice, precision)
 
         by_class = {}
         by_mode = {}

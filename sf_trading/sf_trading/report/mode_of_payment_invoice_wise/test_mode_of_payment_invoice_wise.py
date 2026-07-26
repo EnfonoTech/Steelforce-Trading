@@ -21,12 +21,16 @@ from sf_trading.sf_trading.report.mode_of_payment_invoice_wise.mode_of_payment_i
     CLASS_CASH,
     CLASS_CHEQUE,
     CLASS_CREDIT,
+    CLASS_NO_VOUCHER,
     CLASS_WALLET,
     CREDIT_LABEL,
+    NO_VOUCHER_LABEL,
+    ROUNDING_TOLERANCE,
     UNSET_LABEL,
     build_invoice_rows,
     classify_mode,
     detail_rows,
+    document_total,
     execute,
     mismatch_label,
     mode_summary,
@@ -176,6 +180,39 @@ class TestModeOfPaymentInvoiceWise(FrappeTestCase):
         )
         self.assertEqual(rows[0]["payment_class"], CLASS_ADJUSTMENT)
 
+    def test_rounded_total_is_ignored_when_rounding_is_disabled(self):
+        """Real July returns hold the rounding residue (-0.004) in `rounded_total`."""
+        residue = frappe._dict(
+            {"grand_total": -300.014, "rounded_total": -0.004, "disable_rounded_total": 1}
+        )
+        self.assertEqual(document_total(residue, 3), -300.014)
+
+        rounded = frappe._dict(
+            {"grand_total": 100.014, "rounded_total": 100.0, "disable_rounded_total": 0}
+        )
+        self.assertEqual(document_total(rounded, 3), 100.0)
+
+        unset = frappe._dict({"grand_total": 55.5, "rounded_total": 0, "disable_rounded_total": 0})
+        self.assertEqual(document_total(unset, 3), 55.5)
+
+    def test_settlement_with_no_voucher_gets_its_own_bucket(self):
+        """A migrated return: nothing outstanding, no Payment Entry, total still non-zero."""
+        rows = self._fabricated([], outstanding=0.0, grand_total=-27.001)
+        self.assertEqual(rows[0]["payment_class"], CLASS_NO_VOUCHER)
+        self.assertEqual(flt(rows[0]["amt_settled_no_voucher"]), -27.001)
+        self.assertIn(NO_VOUCHER_LABEL, rows[0]["mode_of_payment"])
+
+    def test_rounding_gap_is_not_reported_as_a_missing_voucher(self):
+        rows = self._fabricated([self._leg("Cash-SFSB", 100.01)], grand_total=100.0)
+        self.assertEqual(flt(rows[0]["amt_settled_no_voucher"]), 0.0)
+        self.assertEqual(rows[0]["payment_class"], CLASS_CASH)
+
+    def test_pos_change_is_taken_off_the_collection(self):
+        rows = self._fabricated([self._leg("Cash-SFSB", 100)], grand_total=99.0, change=1.0)
+        self.assertEqual(flt(rows[0]["paid_total"]), 99.0)
+        self.assertEqual(flt(rows[0]["amt_settled_no_voucher"]), 0.0)
+        self.assertEqual(rows[0]["payment_class"], CLASS_CASH)
+
     def test_detail_and_mode_summary_are_consistent_with_the_invoice_row(self):
         rows = self._fabricated([self._leg("Cash-SFSB", 60), self._leg("Swipe-SFSB", 40)])
         details = detail_rows(rows)
@@ -211,11 +248,18 @@ class TestModeOfPaymentInvoiceWise(FrappeTestCase):
         ):
             self.assertIn(expected, fieldnames)
 
-    def test_settled_plus_outstanding_matches_the_invoice_total(self):
+    def test_every_row_balances(self):
+        """Settled + no-voucher + outstanding = invoice total, within rounding.
+
+        The no-voucher bucket exists precisely so this holds on migrated data — without it
+        several hundred June–July returns would silently not add up.
+        """
         _columns, rows = self._run()
-        for row in rows[:200]:
-            total = flt(row["paid_total"]) + flt(row["outstanding"])
-            self.assertAlmostEqual(total, flt(row["grand_total"]), places=2, msg=row["invoice"])
+        for row in rows[:400]:
+            total = flt(row["paid_total"]) + flt(row["amt_settled_no_voucher"]) + flt(row["outstanding"])
+            self.assertLessEqual(
+                abs(total - flt(row["grand_total"])), ROUNDING_TOLERANCE, msg=row["invoice"]
+            )
 
     def test_every_row_has_a_payment_class(self):
         _columns, rows = self._run()
@@ -241,10 +285,9 @@ class TestModeOfPaymentInvoiceWise(FrappeTestCase):
             by_invoice[row["invoice"]] = flt(by_invoice.get(row["invoice"])) + flt(row["amount"])
 
         for row in invoice_rows[:200]:
-            self.assertAlmostEqual(
-                flt(by_invoice.get(row["invoice"])),
-                flt(row["grand_total"]),
-                places=2,
+            self.assertLessEqual(
+                abs(flt(by_invoice.get(row["invoice"])) - flt(row["grand_total"])),
+                ROUNDING_TOLERANCE,
                 msg=row["invoice"],
             )
 
