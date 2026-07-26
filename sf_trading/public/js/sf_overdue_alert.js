@@ -12,7 +12,7 @@
 frappe.provide("sf_trading.overdue_alert");
 
 (function () {
-	var REPORT = "Invoice Due & Overdue Report";
+	var REPORT = "Invoice Due and Overdue Report";
 	var _ctx = null;
 
 	// ── Shared AudioContext ────────────────────────────────────────────────────

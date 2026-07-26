@@ -77,6 +77,7 @@ class PaymentAdvice(Document):
     def validate(self):
         self.set_advice_type()
         self.validate_references()
+        self.set_defaults_from_references()
         self.set_party_name()
         self.set_reference_details()
         self.compute_totals()
@@ -199,6 +200,53 @@ class PaymentAdvice(Document):
 
         self.validate_not_advised_elsewhere()
 
+    def set_defaults_from_references(self):
+        """Inherit branch and cost centre from the vouchers being paid.
+
+        Every voucher in this system carries a branch, and Branch Configuration holds that
+        branch's cost centre — so the branch is the source of truth, not a guess. Only blank
+        fields are filled, so a deliberate choice is never overwritten.
+
+        Mode of payment is deliberately NOT inherited: Purchase Invoice carries a real Mode of
+        Payment link but Sales Invoice only has a Cash/Credit/Cheque Select, and Branch
+        Configuration lists several modes per branch (Cash-SFSB, Swipe-SFSB, Cheque, BPAY-SFSB)
+        with no single default. Picking one would be a guess about how the money actually moves.
+        """
+        rows = [r for r in self.payment_advice_reference if r.reference_record]
+        if not rows:
+            return
+
+        if not self.branch:
+            self.branch = self.branch_from_references(rows)
+
+        if not self.cost_center:
+            # the voucher's own cost centre first, then the branch's configured one
+            for row in rows:
+                if row.cost_center:
+                    self.cost_center = row.cost_center
+                    break
+            else:
+                self.cost_center = get_branch_cost_center(self.branch, self.company)
+
+        if self.cost_center:
+            for row in rows:
+                if not row.cost_center:
+                    row.cost_center = self.cost_center
+
+    def branch_from_references(self, rows):
+        """The branch of the vouchers being paid, when they agree on one."""
+        branches = []
+        for row in rows:
+            meta = frappe.get_meta(row.reference_doctype)
+            if not meta.has_field("branch"):
+                continue
+            branch = frappe.db.get_value(row.reference_doctype, row.reference_record, "branch")
+            if branch and branch not in branches:
+                branches.append(branch)
+
+        # mixed branches on one advice: leave it blank rather than pick a side
+        return branches[0] if len(branches) == 1 else None
+
     def party_field(self):
         return {"Supplier": "supplier", "Customer": "customer"}.get(self.party_type, "supplier")
 
@@ -263,7 +311,7 @@ class PaymentAdvice(Document):
                 return frappe.db.get_value(row.reference_doctype, row.reference_record, fieldname)
 
             if not row.date:
-                row.date = source("posting_date")
+                row.date = source("posting_date") or source("transaction_date")
             # Always re-read, never trust what is on the row: these fields are read-only, the
             # source document can be amended, and rows written before the currency fix hold a
             # foreign-currency total. A stale figure here misstates the whole advice.
@@ -285,7 +333,12 @@ class PaymentAdvice(Document):
             row.net_payable_amount = payable
             row.settled_amount = flt(flt(row.amount) - payable, 3)
 
-            due = source("due_date") if meta.has_field("due_date") else None
+            due = None
+            for fieldname in ("due_date", "schedule_date"):
+                if meta.has_field(fieldname):
+                    due = source(fieldname)
+                    if due:
+                        break
             due = getdate(due or row.date or today)
             row.ageing = max(0, (today - due).days)
 
@@ -498,6 +551,33 @@ def get_document_total(doctype, name, meta=None):
     return get_reference_amounts(doctype, name, meta)[0]
 
 
+def get_branch_cost_center(branch, company=None):
+    """The cost centre configured for a branch, from Branch Configuration.
+
+    Branch Configuration holds a cost_center child table per branch (one row in practice, e.g.
+    SFSB -> "SFSB - SFB"). This is what the rest of sf_trading treats as the branch default, so
+    the advice follows the same source rather than inventing its own.
+    """
+    if not branch:
+        return None
+
+    filters = {"branch": branch}
+    if company:
+        filters["company"] = company
+    config = frappe.db.get_value("Branch Configuration", filters, "name") or frappe.db.get_value(
+        "Branch Configuration", {"branch": branch}, "name"
+    )
+    if not config:
+        return None
+
+    return frappe.db.get_value(
+        "Branch Configuration Cost Center",
+        {"parent": config, "parenttype": "Branch Configuration"},
+        "cost_center",
+        order_by="idx asc",
+    )
+
+
 def get_company_currency(company):
     """The one currency this document speaks in."""
     return (
@@ -667,6 +747,13 @@ def create_payment_entry(payment_advice: str, submit: int = 0):
 
 
 @frappe.whitelist()
+def get_branch_default_cost_center(branch: str, company: str = None):
+    """Exposed for the form: the cost centre Branch Configuration holds for this branch."""
+    frappe.has_permission("Payment Advice", "read", throw=True)
+    return get_branch_cost_center(branch, company)
+
+
+@frappe.whitelist()
 def mode_needs_reference(company: str, mode_of_payment: str = None, bank_account: str = None):
     """True when the company-side account is a Bank account.
 
@@ -710,8 +797,9 @@ def get_reference_details(reference_doctype: str, reference_record: str, company
 
     meta = frappe.get_meta(reference_doctype)
     wanted = [f for f in (
-        "posting_date", "due_date", "grand_total", "outstanding_amount", "currency",
-        "conversion_rate", "cost_center", "status", "docstatus", "company", "bill_no",
+        "posting_date", "transaction_date", "due_date", "schedule_date", "grand_total",
+        "outstanding_amount", "currency", "conversion_rate", "cost_center", "status",
+        "docstatus", "company", "bill_no", "branch",
     ) if f == "docstatus" or meta.has_field(f)]
     values = frappe.db.get_value(reference_doctype, reference_record, wanted, as_dict=True) or frappe._dict()
 
@@ -766,11 +854,26 @@ def get_reference_details(reference_doctype: str, reference_record: str, company
         frappe.throw(_("%s has nothing outstanding.") % frappe.bold(reference_record))
 
     today = getdate(nowdate())
-    due = getdate(values.get("due_date") or values.get("posting_date") or today)
+    due = getdate(
+        values.get("due_date")
+        or values.get("schedule_date")     # orders age from their delivery/required date
+        or values.get("posting_date")
+        or values.get("transaction_date")
+        or today
+    )
+
+    branch = (
+        frappe.db.get_value(reference_doctype, reference_record, "branch")
+        if meta.has_field("branch")
+        else None
+    )
 
     return {
         "bill_no": values.get("bill_no"),
-        "date": values.get("posting_date"),
+        "date": values.get("posting_date") or values.get("transaction_date"),
+        # offered to the parent form, which only takes these when its own fields are blank
+        "parent_branch": branch,
+        "parent_cost_center": values.get("cost_center") or get_branch_cost_center(branch, company),
         "amount": total,
         "settled_amount": flt(total - outstanding, 3),
         "net_payable_amount": outstanding,

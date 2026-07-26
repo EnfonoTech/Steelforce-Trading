@@ -41,8 +41,8 @@ from frappe.utils import (
 )
 
 EVENT = "sf_invoice_overdue_alert"
-REPORT = "Invoice Due & Overdue Report"
-REPORT_ROUTE = "/app/query-report/Invoice%20Due%20%26%20Overdue%20Report"
+REPORT = "Invoice Due and Overdue Report"
+REPORT_ROUTE = "/app/query-report/Invoice%20Due%20and%20Overdue%20Report"
 EMAIL_ROW_LIMIT = 15
 
 # role -> what that role should be told about

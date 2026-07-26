@@ -220,7 +220,7 @@ Duplicate VAT numbers are blocked unless the user has an override role and ticks
 | **DCR Detailed** | A single day's full cash-flow ledger — every Sales Invoice, Purchase Invoice, and Payment Entry posted that day, split into Cash vs. Bank/Card columns. |
 | **Work Flow Approval** | Every document sitting in a "Pending" workflow state, with a bulk **Apply Workflow Action** to approve/reject checked rows at once. |
 | **Supplier Due Payment Report** | Supplier payables by due date with overdue days and ageing buckets, plus the **Payment Advice** each invoice already sits on and that advice's status. |
-| **Invoice Due & Overdue Report** | Sales and Purchase outstanding together, overdue-only by default, with ageing buckets, reward-free totals and the same Payment Advice columns. |
+| **Invoice Due and Overdue Report** | Sales and Purchase outstanding together, overdue-only by default, with ageing buckets, reward-free totals and the same Payment Advice columns. |
 | **PDC Report** | Cheque Payment Entries (ZATCA payment means 20) with cheque date, posting date and a T-3 reminder date. |
 | **Loyalty Rewards Report** | Loyalty reward journals with their linked Sales Invoice, customer and reward % of invoice, plus a customer-wise summary. |
 

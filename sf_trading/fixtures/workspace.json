@@ -46,9 +46,9 @@
     "dependencies": "",
     "hidden": 0,
     "is_query_report": 1,
-    "label": "Invoice Due & Overdue Report",
+    "label": "Invoice Due and Overdue Report",
     "link_count": 0,
-    "link_to": "Invoice Due & Overdue Report",
+    "link_to": "Invoice Due and Overdue Report",
     "link_type": "Report",
     "onboard": 0,
     "type": "Link"

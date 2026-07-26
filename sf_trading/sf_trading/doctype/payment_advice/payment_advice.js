@@ -24,6 +24,7 @@ frappe.ui.form.on("Payment Advice", {
 			filters: { company: frm.doc.company, is_group: 0 },
 		}));
 		frm.set_query("project", () => ({ filters: { company: frm.doc.company } }));
+		frm.set_query("branch", () => ({ filters: {} }));
 		frm.set_query("mode_of_payment", () => ({ filters: { type: ["!=", "Phone"] } }));
 
 		// references may only point at documents of the same company and party
@@ -193,6 +194,11 @@ frappe.ui.form.on("Payment Advice", {
 					5
 				);
 
+				// branch + cost centre from the fetched rows, if the advice has none yet
+				const first = (frm.doc.payment_advice_reference || []).find((d) => d.cost_center);
+				if (first && !frm.doc.cost_center) frm.set_value("cost_center", first.cost_center);
+				if (!frm.doc.branch) frm.trigger("pull_branch_from_references");
+
 				// default the authorised amount to everything now outstanding
 				if (!frm.doc.payment_amount) {
 					const total = (frm.doc.payment_advice_reference || []).reduce(
@@ -201,6 +207,43 @@ frappe.ui.form.on("Payment Advice", {
 					);
 					frm.set_value("payment_amount", total);
 				}
+			},
+		});
+	},
+
+	pull_branch_from_references(frm) {
+		const row = (frm.doc.payment_advice_reference || []).find((d) => d.reference_record);
+		if (!row) return;
+
+		frappe.call({
+			method: "sf_trading.sf_trading.doctype.payment_advice.payment_advice.get_reference_details",
+			args: {
+				reference_doctype: row.reference_doctype,
+				reference_record: row.reference_record,
+				company: frm.doc.company,
+				party_type: frm.doc.party_type,
+				party: frm.doc.party,
+			},
+			callback(r) {
+				if (!r.message) return;
+				if (r.message.parent_branch && !frm.doc.branch) {
+					frm.set_value("branch", r.message.parent_branch);
+				}
+				if (r.message.parent_cost_center && !frm.doc.cost_center) {
+					frm.set_value("cost_center", r.message.parent_cost_center);
+				}
+			},
+		});
+	},
+
+	branch(frm) {
+		// a branch change re-points the cost centre, unless one was chosen by hand
+		if (!frm.doc.branch || frm.doc.cost_center) return;
+		frappe.call({
+			method: "sf_trading.sf_trading.doctype.payment_advice.payment_advice.get_branch_default_cost_center",
+			args: { branch: frm.doc.branch, company: frm.doc.company },
+			callback(r) {
+				if (r.message) frm.set_value("cost_center", r.message);
 			},
 		});
 	},
@@ -357,9 +400,24 @@ frappe.ui.form.on("Payment Advice Reference", {
 			},
 			callback(r) {
 				if (!r.message) return;
+
+				// the parent hints travel alongside the row fields; apply them first, then
+				// only the real row fields go onto the row
+				const parent_branch = r.message.parent_branch;
+				const parent_cost_center = r.message.parent_cost_center;
+				delete r.message.parent_branch;
+				delete r.message.parent_cost_center;
+
 				Object.keys(r.message).forEach((field) => {
 					frappe.model.set_value(cdt, cdn, field, r.message[field]);
 				});
+
+				// branch and cost centre follow the voucher, but never overwrite a choice
+				if (parent_branch && !frm.doc.branch) frm.set_value("branch", parent_branch);
+				if (parent_cost_center && !frm.doc.cost_center) {
+					frm.set_value("cost_center", parent_cost_center);
+				}
+
 				frm.trigger("recalculate_payment_amount");
 			},
 			error() {

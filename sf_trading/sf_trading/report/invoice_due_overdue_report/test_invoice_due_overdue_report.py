@@ -1,5 +1,5 @@
 # sf_trading/sf_trading/report/invoice_due_overdue_report/test_invoice_due_overdue_report.py
-"""Tests for the Invoice Due & Overdue Report.
+"""Tests for the Invoice Due and Overdue Report.
 
 Read-only against existing data — the report never writes, so the tests assert
 bucket maths, filter behaviour and column/row shape rather than creating invoices

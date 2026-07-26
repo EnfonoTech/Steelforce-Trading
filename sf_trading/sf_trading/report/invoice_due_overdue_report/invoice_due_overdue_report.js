@@ -1,5 +1,5 @@
 // sf_trading/sf_trading/report/invoice_due_overdue_report/invoice_due_overdue_report.js
-frappe.query_reports["Invoice Due & Overdue Report"] = {
+frappe.query_reports["Invoice Due and Overdue Report"] = {
     filters: [
         {
             fieldname: "company",

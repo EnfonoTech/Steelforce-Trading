@@ -11,23 +11,41 @@
  "letterhead": null,
  "modified": "2026-07-25 21:00:00.000000",
  "module": "Sf Trading",
- "name": "Invoice Due & Overdue Report",
+ "name": "Invoice Due and Overdue Report",
  "owner": "Administrator",
  "prepared_report": 0,
  "query": null,
  "ref_doctype": "Sales Invoice",
- "report_name": "Invoice Due & Overdue Report",
+ "report_name": "Invoice Due and Overdue Report",
  "report_script": null,
  "report_type": "Script Report",
  "roles": [
-  {"role": "Accounts Manager"},
-  {"role": "Accountant"},
-  {"role": "Finance Manager"},
-  {"role": "HO Accounts"},
-  {"role": "Branch Head"},
-  {"role": "Purchase Manager"},
-  {"role": "Purchase Assistant"},
-  {"role": "Sales Manager"},
-  {"role": "System Manager"}
+  {
+   "role": "Accounts Manager"
+  },
+  {
+   "role": "Accountant"
+  },
+  {
+   "role": "Finance Manager"
+  },
+  {
+   "role": "HO Accounts"
+  },
+  {
+   "role": "Branch Head"
+  },
+  {
+   "role": "Purchase Manager"
+  },
+  {
+   "role": "Purchase Assistant"
+  },
+  {
+   "role": "Sales Manager"
+  },
+  {
+   "role": "System Manager"
+  }
  ]
 }

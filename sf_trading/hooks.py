@@ -80,8 +80,10 @@ doctype_js = {
 # include js in doctype views
 # doctype_js = {"doctype" : "public/js/doctype.js"}
 doctype_list_js = {
-	"Purchase Invoice": "public/js/purchase_invoice_list.js",
-	"Sales Invoice": "public/js/sales_invoice_list.js",
+	"Purchase Invoice": ["public/js/payment_advice_list_action.js", "public/js/purchase_invoice_list.js"],
+	"Sales Invoice": ["public/js/payment_advice_list_action.js", "public/js/sales_invoice_list.js"],
+	"Purchase Order": ["public/js/payment_advice_list_action.js", "public/js/purchase_order_list.js"],
+	"Sales Order": ["public/js/payment_advice_list_action.js", "public/js/sales_order_list.js"],
 }
 
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}

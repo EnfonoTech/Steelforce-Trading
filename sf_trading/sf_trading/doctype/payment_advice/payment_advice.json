@@ -52,6 +52,7 @@
   "branch_code",
   "swift_no",
   "dimensions_section",
+  "branch",
   "cost_center",
   "column_break_dimensions",
   "project",
@@ -383,6 +384,14 @@
    "fieldname": "dimensions_section",
    "fieldtype": "Section Break",
    "label": "Accounting Dimensions"
+  },
+  {
+   "description": "Taken from the vouchers being paid; drives the default cost centre via Branch Configuration.",
+   "fieldname": "branch",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Branch",
+   "options": "Branch"
   },
   {
    "fieldname": "cost_center",

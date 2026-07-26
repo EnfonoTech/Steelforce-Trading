@@ -31,8 +31,13 @@ from sf_trading.sf_trading.doctype.payment_advice.payment_advice import (
     PAY_PARTY_TYPES,
     RECEIVE_PARTY_TYPES,
     get_party_account,
+    get_reference_amounts,
     shape_reference_rows,
 )
+
+# which side of the ledger a list-view action belongs to
+SUPPLIER_DOCTYPES = ("Purchase Invoice", "Purchase Order")
+CUSTOMER_DOCTYPES = ("Sales Invoice", "Sales Order")
 
 # Skip reasons, kept as constants so the page and the tests speak the same language.
 SKIP_NO_PARTY_ACCOUNT = "no_party_account"
@@ -448,86 +453,95 @@ def _create_one(selection, options):
 # ── Purchase Invoice list bulk action ────────────────────────────────────────────
 
 @frappe.whitelist()
-def create_advices_from_invoices(invoices, options=None):
-    """Group hand-picked invoices by their party and raise one advice each."""
+def create_advices_from_documents(documents, options=None):
+    """Group hand-picked documents by their party and raise one advice each.
+
+    Serves the list-view action on Purchase Invoice, Sales Invoice, Purchase Order and Sales
+    Order. Amounts come from get_reference_amounts(), so an order nets off advance_paid and a
+    foreign invoice is read in company currency — the same figures the form would produce.
+    """
     frappe.has_permission("Payment Advice", "create", throw=True)
 
-    invoices = _as_list(invoices)
-    if not invoices:
-        frappe.throw(_("Select at least one invoice."))
+    documents = _as_list(documents)
+    if not documents:
+        frappe.throw(_("Select at least one document."))
 
     options = frappe._dict(_as_dict(options))
     doctype = options.get("doctype") or "Purchase Invoice"
-    party_type = "Supplier" if doctype == "Purchase Invoice" else "Customer"
+
+    party_type = "Supplier" if doctype in SUPPLIER_DOCTYPES else "Customer"
     party_field = _party_field(party_type)
+    if not frappe.get_meta(doctype).has_field(party_field):
+        frappe.throw(_("%s cannot be paid through a Payment Advice.") % _(doctype))
 
-    rows = frappe.get_all(
-        doctype,
-        filters={"name": ["in", invoices], "docstatus": 1, "outstanding_amount": [">", 0]},
-        fields=[
-            "name",
-            party_field + " as party",
-            "company",
-            "posting_date",
-            "due_date",
-            "grand_total",
-            "base_grand_total",
-            "outstanding_amount",
-            "currency",
-            "conversion_rate",
-            "cost_center",
-            "status",
-            "bill_no" if doctype == "Purchase Invoice" else "name as bill_no",
-        ],
-    )
+    fields = ["name", party_field + " as party", "company", "cost_center"]
+    meta = frappe.get_meta(doctype)
+    for optional in ("posting_date", "transaction_date", "due_date", "schedule_date",
+                     "status", "bill_no", "mode_of_payment"):
+        if meta.has_field(optional):
+            fields.append(optional)
+
+    rows = frappe.get_all(doctype, filters={"name": ["in", documents], "docstatus": 1}, fields=fields)
     if not rows:
-        frappe.throw(_("None of the selected documents have an outstanding amount."))
+        frappe.throw(_("None of the selected documents are submitted."))
 
-    companies = {r.company for r in rows}
+    companies = {r.company for r in rows if r.company}
     if len(companies) > 1:
-        frappe.throw(_("Select invoices of a single company."))
+        frappe.throw(_("Select documents of a single company."))
 
     already = _already_advised([r.name for r in rows])
-    skipped = [r.name for r in rows if r.name in already]
+    skipped_advised, skipped_nothing_due = [], []
 
-    grouped = {}
     today = getdate(nowdate())
+    grouped = {}
     for row in rows:
         if row.name in already:
+            skipped_advised.append(row.name)
             continue
+
+        total, payable = get_reference_amounts(doctype, row.name, meta)
+        if payable <= 0:
+            skipped_nothing_due.append(row.name)
+            continue
+
+        due = row.get("due_date") or row.get("schedule_date") or row.get("posting_date") or row.get("transaction_date")
         grouped.setdefault(row.party, []).append(
             {
                 "reference_doctype": doctype,
                 "reference_record": row.name,
                 "bill_no": row.get("bill_no"),
-                "date": row.posting_date,
-                # company currency: base_grand_total, never the document's own grand_total —
-                # outstanding_amount is a company-currency figure, so mixing them misreports
-                # both the amount and what has already been settled
-                "amount": flt(row.base_grand_total) or flt(row.grand_total),
-                "settled_amount": flt(
-                    (flt(row.base_grand_total) or flt(row.grand_total)) - flt(row.outstanding_amount), 3
-                ),
-                "net_payable_amount": flt(row.outstanding_amount),
-                "currency": row.currency,
-                "exchange_rate": flt(row.conversion_rate) or 1.0,
-                "cost_center": row.cost_center,
-                "ageing": max(0, (today - getdate(row.due_date or row.posting_date)).days),
+                "date": row.get("posting_date") or row.get("transaction_date"),
+                "amount": total,
+                "settled_amount": flt(total - payable, 3),
+                "net_payable_amount": payable,
+                "cost_center": row.get("cost_center"),
+                "reference_status": row.get("status"),
+                "ageing": max(0, (today - getdate(due)).days) if due else 0,
             }
         )
 
     if not grouped:
-        frappe.throw(
-            _("Every selected document is already allocated on a live Payment Advice: %s")
-            % ", ".join(skipped)
-        )
+        reasons = []
+        if skipped_advised:
+            reasons.append(_("already on a live advice: %s") % ", ".join(skipped_advised))
+        if skipped_nothing_due:
+            reasons.append(_("nothing left to pay: %s") % ", ".join(skipped_nothing_due))
+        frappe.throw(_("No advice could be raised — %s") % "; ".join(reasons or [_("no payable documents")]))
 
-    options.update({"company": companies.pop(), "party_type": party_type})
+    options.update({"company": companies.pop() if companies else options.get("company"),
+                    "party_type": party_type})
     result = _create_many(
         [{"party": party, "references": refs} for party, refs in grouped.items()], options
     )
-    result["skipped_already_advised"] = skipped
+    result["skipped_already_advised"] = skipped_advised
+    result["skipped_nothing_due"] = skipped_nothing_due
     return result
+
+
+@frappe.whitelist()
+def create_advices_from_invoices(invoices, options=None):
+    """Backwards-compatible alias for the original invoice-only entry point."""
+    return create_advices_from_documents(invoices, options)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────────
