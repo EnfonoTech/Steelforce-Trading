@@ -263,7 +263,7 @@ class PaymentAdvice(Document):
             if not row.date:
                 row.date = source("posting_date")
             if not row.amount:
-                row.amount = flt(source("grand_total"))
+                row.amount = get_document_total(row.reference_doctype, row.reference_record, meta)
             # Amounts on these rows are company-currency figures: ERPNext stores invoice
             # outstanding in the party account currency, which is the company currency here.
             # Stamping the invoice's own currency (SAR on an import PI, say) would render a
@@ -277,6 +277,9 @@ class PaymentAdvice(Document):
             # outstanding, where the reference doctype tracks it
             if meta.has_field("outstanding_amount"):
                 outstanding = flt(source("outstanding_amount"))
+                # a row saved before this fix may hold a foreign-currency total; recompute
+                if flt(row.amount) < outstanding:
+                    row.amount = get_document_total(row.reference_doctype, row.reference_record, meta)
                 row.settled_amount = flt(flt(row.amount) - outstanding, 3)
                 row.net_payable_amount = outstanding
             elif not row.net_payable_amount:
@@ -439,6 +442,26 @@ def workflow_controls_submission(company=None):
 
 
 # ── Payment Entry creation ───────────────────────────────────────────────────────
+
+def get_document_total(doctype, name, meta=None):
+    """A reference document's total in COMPANY currency.
+
+    This matters more than it looks. ERPNext keeps `grand_total` in the document's own currency
+    but `outstanding_amount` in the party account currency, which is the company currency. Taking
+    grand_total for a SAR purchase invoice and subtracting a BHD outstanding produced nonsense:
+    an 8,851.622 BHD invoice displayed as 86,458.500 with 77,606.878 "already paid".
+
+    So: base_grand_total where it exists, then total_debit for a Journal Entry, then grand_total
+    as a last resort for doctypes that only keep one figure.
+    """
+    meta = meta or frappe.get_meta(doctype)
+    for fieldname in ("base_grand_total", "total_debit", "grand_total"):
+        if meta.has_field(fieldname):
+            value = flt(frappe.db.get_value(doctype, name, fieldname))
+            if value:
+                return value
+    return 0.0
+
 
 def get_company_currency(company):
     """The one currency this document speaks in."""
@@ -698,7 +721,7 @@ def get_reference_details(reference_doctype: str, reference_record: str, company
             % {"name": frappe.bold(reference_record), "advice": frappe.bold(clash[0].parent)}
         )
 
-    total = flt(values.get("grand_total"))
+    total = get_document_total(reference_doctype, reference_record, meta)
     outstanding = flt(values.get("outstanding_amount")) if meta.has_field("outstanding_amount") else total
     if outstanding <= 0:
         frappe.throw(_("%s has nothing outstanding.") % frappe.bold(reference_record))

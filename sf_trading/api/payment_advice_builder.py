@@ -471,6 +471,7 @@ def create_advices_from_invoices(invoices, options=None):
             "posting_date",
             "due_date",
             "grand_total",
+            "base_grand_total",
             "outstanding_amount",
             "currency",
             "conversion_rate",
@@ -500,8 +501,13 @@ def create_advices_from_invoices(invoices, options=None):
                 "reference_record": row.name,
                 "bill_no": row.get("bill_no"),
                 "date": row.posting_date,
-                "amount": flt(row.grand_total),
-                "settled_amount": flt(flt(row.grand_total) - flt(row.outstanding_amount), 3),
+                # company currency: base_grand_total, never the document's own grand_total —
+                # outstanding_amount is a company-currency figure, so mixing them misreports
+                # both the amount and what has already been settled
+                "amount": flt(row.base_grand_total) or flt(row.grand_total),
+                "settled_amount": flt(
+                    (flt(row.base_grand_total) or flt(row.grand_total)) - flt(row.outstanding_amount), 3
+                ),
                 "net_payable_amount": flt(row.outstanding_amount),
                 "currency": row.currency,
                 "exchange_rate": flt(row.conversion_rate) or 1.0,
