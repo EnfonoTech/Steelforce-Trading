@@ -1,4 +1,4 @@
-# sf_trading/sf_trading/report/invoice_due_overdue_report/test_invoice_due_overdue_report.py
+# sf_trading/sf_trading/report/invoice_due_and_overdue_report/test_invoice_due_and_overdue_report.py
 """Tests for the Invoice Due and Overdue Report.
 
 Read-only against existing data — the report never writes, so the tests assert
@@ -10,7 +10,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_days, nowdate
 
-from sf_trading.sf_trading.report.invoice_due_overdue_report.invoice_due_overdue_report import (
+from sf_trading.sf_trading.report.invoice_due_and_overdue_report.invoice_due_and_overdue_report import (
     _bucket,
     execute,
 )

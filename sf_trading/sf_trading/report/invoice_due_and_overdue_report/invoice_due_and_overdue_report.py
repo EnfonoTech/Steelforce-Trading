@@ -1,4 +1,4 @@
-# sf_trading/sf_trading/report/invoice_due_overdue_report/invoice_due_overdue_report.py
+# sf_trading/sf_trading/report/invoice_due_and_overdue_report/invoice_due_and_overdue_report.py
 """Invoice Due & Overdue Report — combined Sales + Purchase outstanding by due date.
 
 One row per submitted Sales Invoice / Purchase Invoice with ``outstanding_amount > 0``.
