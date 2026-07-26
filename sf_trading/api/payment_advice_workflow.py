@@ -112,6 +112,9 @@ def _transitions(company):
             "allowed": ROLE_APPROVER,
             # same discipline as Payment Request: an approval carries its paperwork
             "require_attachment": 1,
+            # the field defaults to 1, and Payment Request Approval leaves it off here: whoever
+            # raised the advice must not be the one approving it, even holding the approver role
+            "allow_self_approval": 0,
         },
         {
             "state": STATE_PENDING,
@@ -120,6 +123,7 @@ def _transitions(company):
             "allowed": ROLE_APPROVER,
             "require_comment": 1,
             "is_return_for_correction": 1,
+            "allow_self_approval": 0,
         },
         {
             "state": STATE_REJECTED,
