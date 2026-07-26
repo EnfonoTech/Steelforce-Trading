@@ -30,6 +30,15 @@ frappe.query_reports["Loyalty Rewards Report"] = {
 			options: "Journal Entry Template",
 			default: "Loyalty Reward Entry",
 		},
+		{
+			// rewards reach the account two ways: a template journal, or a deduction row
+			// on the collection that settles the invoice
+			fieldname: "source",
+			label: __("Source"),
+			fieldtype: "Select",
+			options: ["", "Journal Entry", "Payment Entry"].join("\n"),
+			default: "",
+		},
 		{ fieldname: "customer", label: __("Customer"), fieldtype: "Link", options: "Customer" },
 		{
 			fieldname: "sales_invoice",
@@ -39,7 +48,7 @@ frappe.query_reports["Loyalty Rewards Report"] = {
 		},
 		{
 			fieldname: "status",
-			label: __("JE Status"),
+			label: __("Voucher Status"),
 			fieldtype: "Select",
 			options: ["Draft + Submitted", "Submitted", "Draft", "Cancelled", "All"].join("\n"),
 			default: "Draft + Submitted",
@@ -74,6 +83,11 @@ frappe.query_reports["Loyalty Rewards Report"] = {
 			value = '<span style="color:var(--red-500)"><b>' + __("Not linked") + "</b></span>";
 		}
 
+		// payment-side rewards read differently from template journals — mark them
+		if (column.fieldname === "source" && data.source === "Payment Entry") {
+			value = '<span style="color:var(--blue-500)">' + value + "</span>";
+		}
+
 		// a reward far above the usual share of the invoice is worth a second look
 		if (column.fieldname === "reward_pct" && data.reward_pct) {
 			const colour =
@@ -95,6 +109,12 @@ frappe.query_reports["Loyalty Rewards Report"] = {
 	onload: function (report) {
 		report.page.add_inner_button(__("Show Unlinked Only"), function () {
 			report.set_filter_value("only_unlinked", 1);
+			report.set_filter_value("source", "Journal Entry");
+			report.set_filter_value("summarise_by_customer", 0);
+		});
+		report.page.add_inner_button(__("Payment Deductions Only"), function () {
+			report.set_filter_value("only_unlinked", 0);
+			report.set_filter_value("source", "Payment Entry");
 			report.set_filter_value("summarise_by_customer", 0);
 		});
 		report.page.add_inner_button(__("Customer Summary"), function () {

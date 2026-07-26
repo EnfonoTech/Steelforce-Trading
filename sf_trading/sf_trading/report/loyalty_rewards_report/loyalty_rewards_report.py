@@ -1,32 +1,52 @@
 # sf_trading/sf_trading/report/loyalty_rewards_report/loyalty_rewards_report.py
-"""Loyalty Rewards Report — reward journals with their Sales Invoice and customer.
+"""Loyalty Rewards Report — every reward booked to the reward account, from both sides.
 
 Steel Force does not use ERPNext's Loyalty Program (there are no Loyalty Program or
-Loyalty Point Entry records). A "loyalty reward" here is a **Journal Entry created from
-the `Loyalty Reward Entry` template**, debiting the Loyalty Rewards expense account and
-crediting petty cash / bank. The journal itself carries no party, so the customer can
-only be known through the linked Sales Invoice — that is what the Custom Field
-`Journal Entry-custom_loyalty_sales_invoice` provides (mandatory when the template is used).
+Loyalty Point Entry records). A "loyalty reward" is whatever lands on the account the
+**`Loyalty Reward Entry` Journal Entry Template** posts to
+(`52010300019 - Loyalty Rewards - SFB` on the live site). It gets there two ways:
 
-Journals created before that field existed have no link. They are still listed, with the
-Sales Invoice / customer columns blank, and the **Only Unlinked** filter isolates them so
-an accountant can attach the invoice by hand (the field is allow_on_submit).
+* **Journal Entry** — created from the template, debiting the reward account and crediting
+  petty cash / bank. The journal carries no party, so the customer is only knowable through
+  the Custom Field `Journal Entry-custom_loyalty_sales_invoice`. Journals booked before that
+  field existed have no link; they are still listed with blank invoice / customer columns and
+  the **Only Unlinked** filter isolates them so an accountant can attach the invoice by hand.
+* **Payment Entry** — the collection itself carries the reward as a row in the PE's
+  **Deductions or Loss** table on that same account (the counter waives the fils-level
+  remainder). Here the customer and the invoice are known exactly: the PE's party plus its
+  **Payment References** allocation. One row per allocated invoice, with the allocated amount
+  next to the reward. When a payment settles several invoices the reward follows the
+  allocation shares and the last invoice absorbs the rounding remainder, so the rows still
+  add up to the deduction.
+
+The account list comes from the template itself, so re-pointing the template moves both
+sides of the report with it. The **Source** filter isolates either side.
 
 Two shapes, switched by the "Summarise by Customer" filter:
-  * detail  — one row per reward journal, with invoice + customer + reward-vs-invoice %
-  * summary — one row per customer: journals, invoices, reward total, invoice value, %
+  * detail  — one row per reward voucher (per allocated invoice for payments)
+  * summary — one row per customer: vouchers, invoices, reward split by source, invoice value, %
 
-Reads are batched: one query for journals, one for their account rows, one for the linked
-invoices. No per-row lookups, no SQL strings.
+Reads are batched: one query for journals, one for their account rows, one joined query for
+payment deductions, one for the payment allocations, one for the invoices. No per-row lookups,
+no SQL strings.
 """
 
 import frappe
 from frappe import _
+from frappe.query_builder import Order
 from frappe.utils import flt, getdate
 
 TEMPLATE = "Loyalty Reward Entry"
 UNLINKED_LABEL = "(Not Linked)"
 LINK_FIELD = "custom_loyalty_sales_invoice"
+
+SOURCE_JOURNAL = "Journal Entry"
+SOURCE_PAYMENT = "Payment Entry"
+
+# BHD carries three decimals and the payment-side rewards are fractions of a fils
+PRECISION = 3
+
+EPOCH = getdate("1900-01-01")
 
 DOCSTATUS_LABEL = {0: _("Draft"), 1: _("Submitted"), 2: _("Cancelled")}
 DOCSTATUS_FILTER = {
@@ -58,7 +78,7 @@ def execute(filters=None):
     return get_columns(), rows
 
 
-# ── Fetch ─────────────────────────────────────────────────────────────────────────
+# ── Shared helpers ────────────────────────────────────────────────────────────────
 
 def link_field_available():
     """Is the Loyalty Sales Invoice Custom Field installed on this site?
@@ -70,18 +90,49 @@ def link_field_available():
     return frappe.get_meta("Journal Entry").has_field(LINK_FIELD)
 
 
+def _present_fields(doctype, fieldnames):
+    """Only those fields the site actually has — `branch` / `epromise_vr_no` are local."""
+    meta = frappe.get_meta(doctype)
+    return [field for field in fieldnames if meta.has_field(field)]
+
+
+def _docstatus_list(filters):
+    return DOCSTATUS_FILTER.get(filters.get("status") or "Draft + Submitted", [0, 1])
+
+
+def _date_range(filters):
+    from_date = getdate(filters.get("from_date")) if filters.get("from_date") else None
+    to_date = getdate(filters.get("to_date")) if filters.get("to_date") else None
+    return from_date, to_date
+
+
+def _template_accounts(template):
+    """The accounts the reward template posts to — the bridge to the payment side."""
+    return [
+        row.account
+        for row in frappe.get_all(
+            "Journal Entry Template Account",
+            filters={"parent": template},
+            fields=["account"],
+            order_by="idx asc",
+        )
+        if row.account
+    ]
+
+
+# ── Journal side ──────────────────────────────────────────────────────────────────
+
 def _journals(filters):
     has_link = link_field_available()
 
     conditions = {
         "from_template": filters.get("journal_template") or TEMPLATE,
-        "docstatus": ["in", DOCSTATUS_FILTER.get(filters.get("status") or "Draft + Submitted", [0, 1])],
+        "docstatus": ["in", _docstatus_list(filters)],
     }
     if filters.get("company"):
         conditions["company"] = filters.get("company")
 
-    from_date = getdate(filters.get("from_date")) if filters.get("from_date") else None
-    to_date = getdate(filters.get("to_date")) if filters.get("to_date") else None
+    from_date, to_date = _date_range(filters)
     if from_date and to_date:
         conditions["posting_date"] = ["between", [from_date, to_date]]
     elif from_date:
@@ -154,8 +205,211 @@ def _account_rows(journal_names):
     return detail
 
 
+def _journal_rows(filters):
+    journals = _journals(filters)
+    if not journals:
+        return []
+
+    accounts = _account_rows([journal.name for journal in journals])
+
+    rows = []
+    for je in journals:
+        detail = accounts.get(je.name) or {}
+        rows.append(
+            {
+                "source": SOURCE_JOURNAL,
+                "voucher_no": je.name,
+                "journal_entry": je.name,
+                "payment_entry": None,
+                "posting_date": je.posting_date,
+                "status": DOCSTATUS_LABEL.get(je.docstatus, ""),
+                "workflow_state": je.workflow_state,
+                "reward_amount": flt(detail.get("reward") or je.total_debit, PRECISION),
+                "reward_account": ", ".join(detail.get("reward_accounts") or []),
+                "funding_account": ", ".join(detail.get("funding_accounts") or []),
+                "cost_center": detail.get("cost_center"),
+                "sales_invoice": je.get(LINK_FIELD),
+                "allocated_amount": None,
+                "payment_amount": None,
+                "payment_type": None,
+                "cheque_no": je.cheque_no,
+                "epromise_vr_no": je.epromise_vr_no,
+                "remark": (je.user_remark or "").strip(),
+                "party_customer": None,
+                "party_customer_name": None,
+                "branch": None,
+            }
+        )
+
+    return rows
+
+
+# ── Payment side ──────────────────────────────────────────────────────────────────
+
+def _payment_deductions(filters, accounts):
+    """Every Deductions-or-Loss row on the reward accounts, with its payment header."""
+    payment = frappe.qb.DocType("Payment Entry")
+    deduction = frappe.qb.DocType("Payment Entry Deduction")
+    optional = _present_fields("Payment Entry", ["workflow_state", "epromise_vr_no", "branch"])
+
+    query = (
+        frappe.qb.from_(deduction)
+        .inner_join(payment)
+        .on(deduction.parent == payment.name)
+        .select(
+            deduction.parent.as_("payment_entry"),
+            deduction.account,
+            deduction.amount,
+            deduction.cost_center,
+            deduction.description,
+            payment.posting_date,
+            payment.docstatus,
+            payment.payment_type,
+            payment.party_type,
+            payment.party,
+            payment.party_name,
+            payment.paid_amount,
+            payment.received_amount,
+            payment.paid_from,
+            payment.paid_to,
+            payment.reference_no,
+            payment.remarks,
+            payment.company,
+            *[getattr(payment, field) for field in optional],
+        )
+        .where(deduction.parenttype == SOURCE_PAYMENT)
+        .where(deduction.account.isin(accounts))
+        .where(payment.docstatus.isin(_docstatus_list(filters)))
+        .orderby(payment.posting_date, order=Order.desc)
+        .orderby(deduction.parent, order=Order.desc)
+        .orderby(deduction.idx)
+    )
+
+    if filters.get("company"):
+        query = query.where(payment.company == filters.get("company"))
+
+    from_date, to_date = _date_range(filters)
+    if from_date:
+        query = query.where(payment.posting_date >= from_date)
+    if to_date:
+        query = query.where(payment.posting_date <= to_date)
+
+    return query.run(as_dict=True)
+
+
+def _payment_allocations(payment_names):
+    """Sales Invoice allocations of those payments, in one query."""
+    allocations = {}
+    if not payment_names:
+        return allocations
+
+    for row in frappe.get_all(
+        "Payment Entry Reference",
+        filters={"parent": ["in", payment_names], "reference_doctype": "Sales Invoice"},
+        fields=["parent", "reference_name", "allocated_amount"],
+        order_by="parent asc, idx asc",
+    ):
+        allocations.setdefault(row.parent, []).append(row)
+
+    return allocations
+
+
+def _split_reward(total, references):
+    """Spread one payment's reward across the invoices it settles.
+
+    Returns (invoice, allocated_amount, reward) per invoice. Almost every collection
+    settles a single invoice, so the split is usually a no-op. Where it is not, the reward
+    follows the allocated amounts and the last invoice absorbs the rounding remainder, so
+    the rows still add up to the deduction booked on the payment.
+    """
+    total = flt(total, PRECISION)
+    if not references:
+        return [(None, None, total)]
+    if len(references) == 1:
+        return [(references[0].reference_name, flt(references[0].allocated_amount), total)]
+
+    allocated_total = sum(flt(ref.allocated_amount) for ref in references)
+    split, running = [], 0.0
+    for ref in references[:-1]:
+        share = flt(ref.allocated_amount) / allocated_total if allocated_total else 1.0 / len(references)
+        amount = flt(total * share, PRECISION)
+        running += amount
+        split.append((ref.reference_name, flt(ref.allocated_amount), amount))
+
+    last = references[-1]
+    split.append((last.reference_name, flt(last.allocated_amount), flt(total - running, PRECISION)))
+    return split
+
+
+def _payment_rows(filters):
+    accounts = _template_accounts(filters.get("journal_template") or TEMPLATE)
+    if not accounts:
+        return []
+
+    deductions = _payment_deductions(filters, accounts)
+    if not deductions:
+        return []
+
+    payments = {}
+    for row in deductions:
+        bucket = payments.setdefault(
+            row.payment_entry,
+            {"head": row, "reward": 0.0, "accounts": [], "cost_center": None, "descriptions": []},
+        )
+        bucket["reward"] += flt(row.amount)
+        if row.account not in bucket["accounts"]:
+            bucket["accounts"].append(row.account)
+        if not bucket["cost_center"] and row.cost_center:
+            bucket["cost_center"] = row.cost_center
+        description = (row.description or "").strip()
+        if description and description not in bucket["descriptions"]:
+            bucket["descriptions"].append(description)
+
+    allocations = _payment_allocations(list(payments))
+    wanted_invoice = filters.get("sales_invoice")
+
+    rows = []
+    for name, bucket in payments.items():
+        head = bucket["head"]
+        is_receive = head.payment_type == "Receive"
+        remark = "; ".join(bucket["descriptions"]) or (head.remarks or "").strip()
+
+        for invoice, allocated, reward in _split_reward(bucket["reward"], allocations.get(name) or []):
+            if wanted_invoice and invoice != wanted_invoice:
+                continue
+            rows.append(
+                {
+                    "source": SOURCE_PAYMENT,
+                    "voucher_no": name,
+                    "journal_entry": None,
+                    "payment_entry": name,
+                    "posting_date": head.posting_date,
+                    "status": DOCSTATUS_LABEL.get(head.docstatus, ""),
+                    "workflow_state": head.get("workflow_state"),
+                    "reward_amount": reward,
+                    "reward_account": ", ".join(bucket["accounts"]),
+                    "funding_account": head.paid_to if is_receive else head.paid_from,
+                    "cost_center": bucket["cost_center"],
+                    "sales_invoice": invoice,
+                    "allocated_amount": allocated,
+                    "payment_amount": flt(head.received_amount if is_receive else head.paid_amount),
+                    "payment_type": head.payment_type,
+                    "cheque_no": head.reference_no,
+                    "epromise_vr_no": head.get("epromise_vr_no"),
+                    "remark": remark,
+                    "party_customer": head.party if head.party_type == "Customer" else None,
+                    "party_customer_name": head.party_name if head.party_type == "Customer" else None,
+                    "branch": head.get("branch"),
+                }
+            )
+
+    return rows
+
+
+# ── Invoice enrichment ────────────────────────────────────────────────────────────
+
 def _invoices(invoice_names):
-    """Sales Invoice header data for the linked invoices, in one query."""
+    """Sales Invoice header data for the referenced invoices, in one query."""
     if not invoice_names:
         return {}
 
@@ -178,63 +432,66 @@ def _invoices(invoice_names):
     return {row.name: row for row in rows}
 
 
+def _attach_invoice_detail(rows):
+    invoices = _invoices({row["sales_invoice"] for row in rows if row.get("sales_invoice")})
+
+    for row in rows:
+        invoice = invoices.get(row["sales_invoice"]) if row.get("sales_invoice") else None
+        invoice_total = flt(invoice.base_grand_total) if invoice else 0.0
+        reward = flt(row["reward_amount"])
+        # the payment side knows its customer even when the invoice row is missing
+        party = row.pop("party_customer", None)
+        party_name = row.pop("party_customer_name", None)
+
+        row["invoice_date"] = invoice.posting_date if invoice else None
+        row["invoice_total"] = invoice_total
+        row["invoice_outstanding"] = flt(invoice.outstanding_amount) if invoice else 0.0
+        row["invoice_status"] = invoice.status if invoice else None
+        row["customer"] = (invoice.customer if invoice else None) or party
+        row["customer_name"] = (
+            (invoice.customer_name if invoice else None)
+            or party_name
+            or (None if row.get("sales_invoice") else UNLINKED_LABEL)
+        )
+        row["branch"] = (invoice.branch if invoice else None) or row.get("branch")
+        row["reward_pct"] = flt(reward / invoice_total * 100, 2) if invoice_total else 0.0
+
+    return rows
+
+
 # ── Build ─────────────────────────────────────────────────────────────────────────
 
 def get_data(filters):
-    journals = _journals(filters)
-    if not journals:
+    source = filters.get("source")
+
+    rows = []
+    if source != SOURCE_PAYMENT:
+        rows.extend(_journal_rows(filters))
+    if source != SOURCE_JOURNAL and not filters.get("only_unlinked"):
+        # a payment-side reward always names its invoice, so it can never be "unlinked"
+        rows.extend(_payment_rows(filters))
+
+    if not rows:
         return []
 
-    accounts = _account_rows([j.name for j in journals])
-    invoices = _invoices({j.custom_loyalty_sales_invoice for j in journals if j.custom_loyalty_sales_invoice})
+    _attach_invoice_detail(rows)
 
     min_amount = flt(filters.get("min_amount"))
     wanted_customer = filters.get("customer")
     wanted_cost_center = filters.get("cost_center")
 
-    data = []
-    for je in journals:
-        detail = accounts.get(je.name) or {}
-        reward = flt(detail.get("reward") or je.total_debit)
-        if min_amount and reward < min_amount:
-            continue
+    data = [
+        row
+        for row in rows
+        if not (min_amount and flt(row["reward_amount"]) < min_amount)
+        and not (wanted_customer and row.get("customer") != wanted_customer)
+        and not (wanted_cost_center and row.get("cost_center") != wanted_cost_center)
+    ]
 
-        cost_center = detail.get("cost_center")
-        if wanted_cost_center and cost_center != wanted_cost_center:
-            continue
-
-        invoice = invoices.get(je.custom_loyalty_sales_invoice) if je.custom_loyalty_sales_invoice else None
-        if wanted_customer and (not invoice or invoice.customer != wanted_customer):
-            continue
-
-        invoice_total = flt(invoice.base_grand_total) if invoice else 0.0
-        data.append(
-            {
-                "journal_entry": je.name,
-                "posting_date": je.posting_date,
-                "status": DOCSTATUS_LABEL.get(je.docstatus, ""),
-                "workflow_state": je.workflow_state,
-                "reward_amount": reward,
-                "reward_account": ", ".join(detail.get("reward_accounts") or []),
-                "funding_account": ", ".join(detail.get("funding_accounts") or []),
-                "cost_center": cost_center,
-                "sales_invoice": je.custom_loyalty_sales_invoice,
-                "invoice_date": invoice.posting_date if invoice else None,
-                "invoice_total": invoice_total,
-                "invoice_outstanding": flt(invoice.outstanding_amount) if invoice else 0.0,
-                "invoice_status": invoice.status if invoice else None,
-                "customer": invoice.customer if invoice else None,
-                "customer_name": (invoice.customer_name if invoice else None) or (
-                    None if je.custom_loyalty_sales_invoice else UNLINKED_LABEL
-                ),
-                "branch": invoice.branch if invoice else None,
-                "reward_pct": flt(reward / invoice_total * 100, 2) if invoice_total else 0.0,
-                "cheque_no": je.cheque_no,
-                "epromise_vr_no": je.epromise_vr_no,
-                "remark": (je.user_remark or "").strip(),
-            }
-        )
-
+    data.sort(
+        key=lambda row: (getdate(row["posting_date"]) if row.get("posting_date") else EPOCH, row["voucher_no"]),
+        reverse=True,
+    )
     return data
 
 
@@ -251,14 +508,21 @@ def summarise(rows):
                 "journals": 0,
                 "invoices": set(),
                 "reward_amount": 0.0,
+                "journal_reward": 0.0,
+                "payment_reward": 0.0,
                 "invoice_total": 0.0,
             },
         )
         bucket["journals"] += 1
-        bucket["reward_amount"] += flt(row["reward_amount"])
+        reward = flt(row["reward_amount"])
+        bucket["reward_amount"] += reward
+        if row.get("source") == SOURCE_PAYMENT:
+            bucket["payment_reward"] += reward
+        else:
+            bucket["journal_reward"] += reward
         if row.get("sales_invoice") and row["sales_invoice"] not in bucket["invoices"]:
             bucket["invoices"].add(row["sales_invoice"])
-            # count each invoice's value once, however many journals reference it
+            # count each invoice's value once, however many vouchers reference it
             bucket["invoice_total"] += flt(row["invoice_total"])
 
     summary = []
@@ -270,13 +534,15 @@ def summarise(rows):
                 "customer_name": bucket["customer_name"],
                 "journals": bucket["journals"],
                 "invoices": len(bucket["invoices"]),
-                "reward_amount": flt(bucket["reward_amount"], 3),
+                "reward_amount": flt(bucket["reward_amount"], PRECISION),
+                "journal_reward": flt(bucket["journal_reward"], PRECISION),
+                "payment_reward": flt(bucket["payment_reward"], PRECISION),
                 "invoice_total": invoice_total,
                 "reward_pct": flt(bucket["reward_amount"] / invoice_total * 100, 2) if invoice_total else 0.0,
             }
         )
 
-    summary.sort(key=lambda r: -r["reward_amount"])
+    summary.sort(key=lambda row: -row["reward_amount"])
     return summary
 
 
@@ -284,12 +550,15 @@ def summarise(rows):
 
 def get_columns():
     return [
-        {"fieldname": "journal_entry", "label": _("Journal Entry"), "fieldtype": "Link",
-         "options": "Journal Entry", "width": 160},
+        {"fieldname": "source", "label": _("Source"), "fieldtype": "Data", "width": 110},
+        {"fieldname": "voucher_no", "label": _("Voucher"), "fieldtype": "Dynamic Link",
+         "options": "source", "width": 165},
         {"fieldname": "posting_date", "label": _("Date"), "fieldtype": "Date", "width": 95},
-        {"fieldname": "reward_amount", "label": _("Reward (Debit)"), "fieldtype": "Currency", "width": 130},
+        {"fieldname": "reward_amount", "label": _("Reward"), "fieldtype": "Currency", "width": 120},
         {"fieldname": "sales_invoice", "label": _("Sales Invoice"), "fieldtype": "Link",
          "options": "Sales Invoice", "width": 170},
+        {"fieldname": "allocated_amount", "label": _("Allocated to Invoice"), "fieldtype": "Currency",
+         "width": 145},
         {"fieldname": "customer", "label": _("Customer"), "fieldtype": "Link",
          "options": "Customer", "width": 130},
         {"fieldname": "customer_name", "label": _("Customer Name"), "fieldtype": "Data", "width": 210},
@@ -299,10 +568,11 @@ def get_columns():
          "width": 140},
         {"fieldname": "invoice_date", "label": _("Invoice Date"), "fieldtype": "Date", "width": 95},
         {"fieldname": "invoice_status", "label": _("Invoice Status"), "fieldtype": "Data", "width": 110},
-        {"fieldname": "status", "label": _("JE Status"), "fieldtype": "Data", "width": 90},
+        {"fieldname": "payment_amount", "label": _("Payment Amount"), "fieldtype": "Currency", "width": 130},
+        {"fieldname": "status", "label": _("Voucher Status"), "fieldtype": "Data", "width": 110},
         {"fieldname": "workflow_state", "label": _("Workflow State"), "fieldtype": "Data", "width": 120},
         {"fieldname": "reward_account", "label": _("Reward Account"), "fieldtype": "Data", "width": 220},
-        {"fieldname": "funding_account", "label": _("Paid From"), "fieldtype": "Data", "width": 220},
+        {"fieldname": "funding_account", "label": _("Paid From / To"), "fieldtype": "Data", "width": 220},
         {"fieldname": "cost_center", "label": _("Cost Center"), "fieldtype": "Link",
          "options": "Cost Center", "width": 130},
         {"fieldname": "branch", "label": _("Branch"), "fieldtype": "Link", "options": "Branch", "width": 90},
@@ -317,9 +587,13 @@ def get_summary_columns():
         {"fieldname": "customer", "label": _("Customer"), "fieldtype": "Link",
          "options": "Customer", "width": 140},
         {"fieldname": "customer_name", "label": _("Customer Name"), "fieldtype": "Data", "width": 240},
-        {"fieldname": "journals", "label": _("Reward Journals"), "fieldtype": "Int", "width": 130},
+        {"fieldname": "journals", "label": _("Reward Vouchers"), "fieldtype": "Int", "width": 130},
         {"fieldname": "invoices", "label": _("Invoices"), "fieldtype": "Int", "width": 100},
         {"fieldname": "reward_amount", "label": _("Total Reward"), "fieldtype": "Currency", "width": 140},
+        {"fieldname": "journal_reward", "label": _("Reward via Journal"), "fieldtype": "Currency",
+         "width": 150},
+        {"fieldname": "payment_reward", "label": _("Reward via Payment"), "fieldtype": "Currency",
+         "width": 150},
         {"fieldname": "invoice_total", "label": _("Total Invoice Amount"), "fieldtype": "Currency",
          "width": 160},
         {"fieldname": "reward_pct", "label": _("Reward % of Invoices"), "fieldtype": "Percent", "width": 150},

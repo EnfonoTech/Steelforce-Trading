@@ -3,11 +3,20 @@
 
 Lists Payment Entries whose linked Mode of Payment carries ZATCA payment-means
 code '20' (cheque). Robust against nulls / cancelled / messy reference data.
+
+Reminder anchor: the **posting date**. The notification "PDC Cheque Date Reminder"
+(Notification fixture in permission_manager) fires `REMINDER_LEAD_DAYS` days before
+`Payment Entry.posting_date`, so the report's Reminder Date column is posting_date − 3.
+Keep the two in step — the column exists so an accountant can see, in the report, the
+day the alert lands.
 """
 
 import frappe
 from frappe import _
 from frappe.utils import add_days, cint, date_diff, flt, getdate, nowdate
+
+# days before the posting date that the PDC reminder notification fires
+REMINDER_LEAD_DAYS = 3
 
 
 def execute(filters=None):
@@ -72,8 +81,11 @@ def get_data(filters):
         currency = r.paid_to_account_currency if is_receive else r.paid_from_account_currency
         bank = r.paid_to if is_receive else r.paid_from
         cheque_date = getdate(r.reference_date) if r.reference_date else None
+        posting_date = getdate(r.posting_date) if r.posting_date else None
         days = date_diff(cheque_date, today) if cheque_date else None
-        reminder_date = add_days(cheque_date, -3) if cheque_date else None
+        # the notification anchors on the posting date, so the report must too
+        reminder_date = add_days(posting_date, -REMINDER_LEAD_DAYS) if posting_date else None
+        days_to_posting = date_diff(posting_date, today) if posting_date else None
         if r.docstatus == 2:
             state = "Cancelled"
         elif r.clearance_date:
@@ -83,10 +95,12 @@ def get_data(filters):
         out.append({
             "payment_entry": r.name,
             "payment_type": r.payment_type,
+            "posting_date": posting_date,
             "cheque_date": cheque_date,
             "reminder_date": reminder_date,
             "reference_no": r.reference_no,
             "days_to_cheque_date": days,
+            "days_to_posting_date": days_to_posting,
             "status": state,
             "party_type": r.party_type,
             "party": r.party,
@@ -95,7 +109,6 @@ def get_data(filters):
             "amount": amount,
             "currency": currency,
             "bank_account": bank,
-            "posting_date": r.posting_date,
             "clearance_date": r.clearance_date,
             "company": r.company,
         })
@@ -106,10 +119,12 @@ def get_columns():
     return [
         {"label": _("Payment Entry"), "fieldname": "payment_entry", "fieldtype": "Link", "options": "Payment Entry", "width": 165},
         {"label": _("Type"), "fieldname": "payment_type", "fieldtype": "Data", "width": 80},
+        {"label": _("Posting Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 105},
+        {"label": _("Reminder Date (Posting − 3)"), "fieldname": "reminder_date", "fieldtype": "Date", "width": 150},
+        {"label": _("Days to Posting"), "fieldname": "days_to_posting_date", "fieldtype": "Int", "width": 105},
         {"label": _("Cheque Date"), "fieldname": "cheque_date", "fieldtype": "Date", "width": 100},
-        {"label": _("Reminder Date (T-3)"), "fieldname": "reminder_date", "fieldtype": "Date", "width": 115},
         {"label": _("Cheque / Ref No"), "fieldname": "reference_no", "fieldtype": "Data", "width": 170},
-        {"label": _("Days to Date"), "fieldname": "days_to_cheque_date", "fieldtype": "Int", "width": 90},
+        {"label": _("Days to Cheque Date"), "fieldname": "days_to_cheque_date", "fieldtype": "Int", "width": 125},
         {"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 90},
         {"label": _("Party Type"), "fieldname": "party_type", "fieldtype": "Data", "width": 90},
         {"label": _("Party"), "fieldname": "party", "fieldtype": "Dynamic Link", "options": "party_type", "width": 150},
@@ -118,7 +133,6 @@ def get_columns():
         {"label": _("Amount"), "fieldname": "amount", "fieldtype": "Currency", "options": "currency", "width": 120},
         {"label": _("Currency"), "fieldname": "currency", "fieldtype": "Link", "options": "Currency", "width": 70},
         {"label": _("Bank / Cash Account"), "fieldname": "bank_account", "fieldtype": "Link", "options": "Account", "width": 170},
-        {"label": _("Posting Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 100},
         {"label": _("Cleared On"), "fieldname": "clearance_date", "fieldtype": "Date", "width": 100},
         {"label": _("Company"), "fieldname": "company", "fieldtype": "Link", "options": "Company", "width": 150},
     ]
