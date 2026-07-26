@@ -18,6 +18,12 @@ so this report stitches them together:
      the same journal names the mode; failing that the leg is classed as an Adjustment.
   4. Whatever is left unpaid is the **Credit** portion (`outstanding_amount`) — on a
      return invoice a negative balance is a **Refund Due**.
+  5. Anything still unexplained lands in **Settled (no voucher)** so that every row adds
+     up: `Invoice Total = Settled + No-voucher + Outstanding`. On this site that bucket is
+     mostly ePromise-migrated history — returns and part-payments whose outstanding was
+     written straight into the invoice with no Payment Entry behind it (checked
+     2026-07-26: 23 of 1,411 credit sales and 387 of 474 returns in June–July). It is a
+     genuine finding for the accounts team, not noise, so it gets its own column.
 
 Two data facts on this site shape the code (verified against prod, 2026-07-26):
 
@@ -43,6 +49,8 @@ Reads are batched: one query for invoices, one per leg source, one for the mode/
 maps. No per-row lookups, no SQL strings.
 """
 
+import re
+
 import frappe
 from frappe import _
 from frappe.utils import cint, flt, get_first_day, getdate, nowdate
@@ -54,6 +62,7 @@ CLASS_CHEQUE = "Cheque"
 CLASS_BANK = "Bank Transfer"
 CLASS_OTHER = "Other"
 CLASS_ADJUSTMENT = "Adjustment"
+CLASS_NO_VOUCHER = "Settled (no voucher)"
 CLASS_CREDIT = "Credit"
 CLASS_REFUND = "Refund Due"
 
@@ -66,6 +75,7 @@ CLASS_COLUMNS = (
     CLASS_BANK,
     CLASS_OTHER,
     CLASS_ADJUSTMENT,
+    CLASS_NO_VOUCHER,
     CLASS_CREDIT,
     CLASS_REFUND,
 )
@@ -93,8 +103,14 @@ CLASS_OVERRIDE_FIELD = "custom_payment_class"
 
 CREDIT_LABEL = "Credit (unpaid)"
 REFUND_LABEL = "Refund Due"
+NO_VOUCHER_LABEL = "Settled without a payment voucher"
+CHANGE_LABEL = "Change Returned"
 UNSET_LABEL = "(mode not set)"
 UNSET_SEPARATOR = " - "
+
+#: A POS row can be keyed a cent away from the invoice total (BHD prints 3 decimals but
+#: the counter types 2). Gaps at or below this are rounding, not a missing payment.
+ROUNDING_TOLERANCE = 0.05
 
 DOCSTATUS_LABEL = {0: _("Draft"), 1: _("Submitted"), 2: _("Cancelled")}
 
@@ -208,6 +224,7 @@ def get_invoices(filters):
             si.grand_total,
             si.rounded_total,
             si.outstanding_amount,
+            si.change_amount,
             si.custom_payment_mode,
             si.custom_sales_person,
         )
@@ -588,7 +605,34 @@ def build_invoice_rows(invoices, legs):
         tolerance = (1.0 / (10**precision)) / 2 if precision else 0.5
 
         invoice_legs = legs.get(name) or []
+
+        # Change handed back at the counter is money that left again — ERPNext keeps it in
+        # `change_amount`, outside the payments table, so it needs its own (negative) leg
+        # or the invoice looks over-collected.
+        change = flt(invoice.change_amount, precision)
+        if change:
+            invoice_legs.append(
+                {
+                    "invoice": name,
+                    "voucher_type": "Sales Invoice",
+                    "voucher_no": name,
+                    "payment_date": getdate(invoice.posting_date),
+                    "mode_of_payment": None,
+                    "mode_label": CHANGE_LABEL,
+                    "payment_class": CLASS_CASH,
+                    "amount": -change,
+                    "account": None,
+                    "reference_no": None,
+                    "docstatus": 1,
+                    "source": "POS",
+                    "mode_missing": 0,
+                    "_resolved": 1,
+                }
+            )
+
         for leg in invoice_legs:
+            if leg.get("_resolved"):
+                continue
             leg["mode_missing"] = 0 if (leg.get("mode_of_payment") or "").strip() else 1
             if leg["source"] == "POS" and not leg.get("payment_date"):
                 leg["payment_date"] = getdate(invoice.posting_date)
@@ -596,6 +640,7 @@ def build_invoice_rows(invoices, legs):
 
         settled = sum(flt(leg["amount"]) for leg in invoice_legs)
         outstanding = flt(invoice.outstanding_amount, precision)
+        invoice_total = flt(invoice.rounded_total or invoice.grand_total, precision)
 
         by_class = {}
         by_mode = {}
@@ -613,6 +658,15 @@ def build_invoice_rows(invoices, legs):
             by_class[CLASS_REFUND] = flt(by_class.get(CLASS_REFUND)) + outstanding
             by_mode[REFUND_LABEL] = flt(by_mode.get(REFUND_LABEL)) + outstanding
 
+        # Whatever the vouchers do not explain. Mostly ePromise-migrated history whose
+        # outstanding was written straight onto the invoice; keeps every row balanced.
+        no_voucher = flt(invoice_total - outstanding - settled, precision)
+        if abs(no_voucher) > ROUNDING_TOLERANCE:
+            by_class[CLASS_NO_VOUCHER] = flt(by_class.get(CLASS_NO_VOUCHER)) + no_voucher
+            by_mode[NO_VOUCHER_LABEL] = flt(by_mode.get(NO_VOUCHER_LABEL)) + no_voucher
+        else:
+            no_voucher = 0.0
+
         ordered_classes = sorted(by_class.items(), key=lambda item: -abs(item[1]))
         ordered_modes = sorted(by_mode.items(), key=lambda item: -abs(item[1]))
 
@@ -626,9 +680,10 @@ def build_invoice_rows(invoices, legs):
             "branch": invoice.branch,
             "status": invoice.status,
             "currency": invoice.currency,
-            "grand_total": flt(invoice.rounded_total or invoice.grand_total, precision),
+            "grand_total": invoice_total,
             "paid_total": flt(settled, precision),
             "outstanding": outstanding,
+            "no_voucher": no_voucher,
             "payment_class": " / ".join(label for label, _amount in ordered_classes)
             or _("Not Settled"),
             "mode_of_payment": " | ".join(
@@ -690,7 +745,8 @@ def mismatch_label(declared, by_class):
 
 
 def class_fieldname(payment_class):
-    return "amt_" + payment_class.lower().replace(" ", "_")
+    """"Settled (no voucher)" → `amt_settled_no_voucher` — fieldnames stay plain."""
+    return "amt_" + re.sub(r"[^a-z0-9]+", "_", payment_class.lower()).strip("_")
 
 
 def format_amount(amount, precision):
@@ -758,7 +814,11 @@ def detail_rows(rows):
                 }
             )
 
-        for label, payment_class in ((CREDIT_LABEL, CLASS_CREDIT), (REFUND_LABEL, CLASS_REFUND)):
+        for label, payment_class in (
+            (CREDIT_LABEL, CLASS_CREDIT),
+            (REFUND_LABEL, CLASS_REFUND),
+            (NO_VOUCHER_LABEL, CLASS_NO_VOUCHER),
+        ):
             amount = flt(row["_classes"].get(payment_class), precision)
             if not amount:
                 continue
@@ -822,12 +882,15 @@ def mode_summary(rows):
 
 
 def class_of_label(label):
-    if label == CREDIT_LABEL:
-        return CLASS_CREDIT
-    if label == REFUND_LABEL:
-        return CLASS_REFUND
-    if label == CLASS_ADJUSTMENT:
-        return CLASS_ADJUSTMENT
+    fixed = {
+        CREDIT_LABEL: CLASS_CREDIT,
+        REFUND_LABEL: CLASS_REFUND,
+        NO_VOUCHER_LABEL: CLASS_NO_VOUCHER,
+        CHANGE_LABEL: CLASS_CASH,
+        CLASS_ADJUSTMENT: CLASS_ADJUSTMENT,
+    }
+    if label in fixed:
+        return fixed[label]
     if label.startswith(UNSET_LABEL):
         return classify_account(label.split(UNSET_SEPARATOR, 1)[-1])
     return classify_mode(label)
@@ -894,7 +957,7 @@ def get_columns():
         },
         {"fieldname": "status", "label": _("Status"), "fieldtype": "Data", "width": 100},
         money_column("grand_total", _("Invoice Total"), 120),
-        money_column("paid_total", _("Settled")),
+        money_column("paid_total", _("Settled (vouchers)"), 130),
         money_column("outstanding", _("Outstanding")),
     ]
 
@@ -1071,6 +1134,17 @@ def summary(rows):
                 "datatype": "Currency",
                 "currency": currency,
                 "indicator": "Red",
+            }
+        )
+
+    if flt(totals[CLASS_NO_VOUCHER]):
+        cards.append(
+            {
+                "label": _("Settled (no voucher)"),
+                "value": totals[CLASS_NO_VOUCHER],
+                "datatype": "Currency",
+                "currency": currency,
+                "indicator": "Orange",
             }
         )
 

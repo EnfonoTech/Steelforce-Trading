@@ -77,6 +77,7 @@ frappe.query_reports["Mode of Payment Invoice Wise"] = {
 				"Bank Transfer",
 				"Other",
 				"Adjustment",
+				"Settled (no voucher)",
 				"Credit",
 				"Refund Due",
 				"Mixed",
@@ -140,6 +141,7 @@ frappe.query_reports["Mode of Payment Invoice Wise"] = {
 			Credit: "var(--red-500)",
 			"Refund Due": "var(--red-500)",
 			Adjustment: "var(--text-muted)",
+			"Settled (no voucher)": "var(--orange-600)",
 		};
 
 		// The headline column: single class gets its colour, a mix is called out.

@@ -44,9 +44,11 @@ PARTY_TYPES = PAY_PARTY_TYPES + RECEIVE_PARTY_TYPES
 # Payment Entry would later reject. Enforced server-side as well as in the form, because a
 # Dynamic Link accepts any DocType name over the API otherwise.
 VALID_REFERENCE_DOCTYPES = {
-    "Customer": ("Sales Order", "Sales Invoice", "Journal Entry", "Dunning", "Payment Entry"),
-    "Supplier": ("Purchase Order", "Purchase Invoice", "Journal Entry", "Payment Entry"),
+    "Customer": ("Sales Order", "Sales Invoice", "Journal Entry", "Dunning"),
+    "Supplier": ("Purchase Order", "Purchase Invoice", "Journal Entry"),
 }
+
+ORDER_DOCTYPES = ("Sales Order", "Purchase Order")
 
 ALLOWED_REFERENCE_DOCTYPES = tuple(
     sorted({dt for types in VALID_REFERENCE_DOCTYPES.values() for dt in types})
@@ -265,7 +267,10 @@ class PaymentAdvice(Document):
             # Always re-read, never trust what is on the row: these fields are read-only, the
             # source document can be amended, and rows written before the currency fix hold a
             # foreign-currency total. A stale figure here misstates the whole advice.
-            row.amount = get_document_total(row.reference_doctype, row.reference_record, meta)
+            total, payable = get_reference_amounts(
+                row.reference_doctype, row.reference_record, meta
+            )
+            row.amount = total
             # Amounts on these rows are company-currency figures: ERPNext stores invoice
             # outstanding in the party account currency, which is the company currency here.
             # Stamping the invoice's own currency (SAR on an import PI, say) would render a
@@ -276,13 +281,9 @@ class PaymentAdvice(Document):
             if not row.cost_center:
                 row.cost_center = source("cost_center")
 
-            # outstanding, where the reference doctype tracks it
-            if meta.has_field("outstanding_amount"):
-                outstanding = flt(source("outstanding_amount"))
-                row.settled_amount = flt(flt(row.amount) - outstanding, 3)
-                row.net_payable_amount = outstanding
-            elif not row.net_payable_amount:
-                row.net_payable_amount = flt(flt(row.amount) - flt(row.settled_amount), 3)
+            # payable figure comes from the same helper, so orders net off advance_paid
+            row.net_payable_amount = payable
+            row.settled_amount = flt(flt(row.amount) - payable, 3)
 
             due = source("due_date") if meta.has_field("due_date") else None
             due = getdate(due or row.date or today)
@@ -442,24 +443,59 @@ def workflow_controls_submission(company=None):
 
 # ── Payment Entry creation ───────────────────────────────────────────────────────
 
-def get_document_total(doctype, name, meta=None):
-    """A reference document's total in COMPANY currency.
+def get_reference_amounts(doctype, name, meta=None):
+    """(total, still payable) for a reference document, both in COMPANY currency.
 
-    This matters more than it looks. ERPNext keeps `grand_total` in the document's own currency
-    but `outstanding_amount` in the party account currency, which is the company currency. Taking
-    grand_total for a SAR purchase invoice and subtracting a BHD outstanding produced nonsense:
-    an 8,851.622 BHD invoice displayed as 86,458.500 with 77,606.878 "already paid".
+    Mirrors ERPNext's Payment Request get_amount() while expressing everything in company
+    currency, because that is the only currency this document speaks:
 
-    So: base_grand_total where it exists, then total_debit for a Journal Entry, then grand_total
-    as a last resort for doctypes that only keep one figure.
+      * Sales / Purchase Order — orders carry no outstanding_amount. Payable is
+        (rounded total or grand total) minus advance_paid, exactly as Payment Request computes
+        it, and advance_paid is already a company-currency figure. Without this an order that
+        is fully advanced still looked fully payable: PUR-ORD-2026-00048 on UAT is 27.5 with
+        27.5 advanced, i.e. nothing to pay.
+      * Sales / Purchase Invoice — outstanding_amount, which ERPNext keeps in the party account
+        (company) currency. The total comes from base_* so a foreign invoice is not mixed.
+      * Journal Entry — total_debit; there is no outstanding concept, so both figures match.
+      * anything else (Dunning) — grand_total converted at the document's rate.
+
+    base_rounded_total is checked before base_grand_total but is genuinely 0 on documents with
+    rounding disabled, which is why each step falls through on a zero rather than trusting it.
     """
     meta = meta or frappe.get_meta(doctype)
-    for fieldname in ("base_grand_total", "total_debit", "grand_total"):
-        if meta.has_field(fieldname):
-            value = flt(frappe.db.get_value(doctype, name, fieldname))
-            if value:
-                return value
-    return 0.0
+
+    def value(*fieldnames):
+        for fieldname in fieldnames:
+            if meta.has_field(fieldname):
+                amount = flt(frappe.db.get_value(doctype, name, fieldname))
+                if amount:
+                    return amount
+        return 0.0
+
+    if doctype in ORDER_DOCTYPES:
+        total = value("base_rounded_total", "base_grand_total", "grand_total")
+        advance = flt(frappe.db.get_value(doctype, name, "advance_paid"))
+        return total, max(0.0, flt(total - advance, 3))
+
+    if meta.has_field("outstanding_amount"):
+        total = value("base_rounded_total", "base_grand_total", "grand_total")
+        outstanding = flt(frappe.db.get_value(doctype, name, "outstanding_amount"))
+        return (total or outstanding), outstanding
+
+    if meta.has_field("total_debit"):
+        total = value("total_debit")
+        return total, total
+
+    total = value("base_grand_total")
+    if not total and meta.has_field("grand_total"):
+        rate = flt(frappe.db.get_value(doctype, name, "conversion_rate")) or 1.0
+        total = flt(flt(frappe.db.get_value(doctype, name, "grand_total")) * rate, 3)
+    return total, total
+
+
+def get_document_total(doctype, name, meta=None):
+    """Company-currency total only — kept for callers that do not need the payable figure."""
+    return get_reference_amounts(doctype, name, meta)[0]
 
 
 def get_company_currency(company):
@@ -720,9 +756,13 @@ def get_reference_details(reference_doctype: str, reference_record: str, company
             % {"name": frappe.bold(reference_record), "advice": frappe.bold(clash[0].parent)}
         )
 
-    total = get_document_total(reference_doctype, reference_record, meta)
-    outstanding = flt(values.get("outstanding_amount")) if meta.has_field("outstanding_amount") else total
+    total, outstanding = get_reference_amounts(reference_doctype, reference_record, meta)
     if outstanding <= 0:
+        if reference_doctype in ORDER_DOCTYPES:
+            frappe.throw(
+                _("%s is already fully advanced, so there is nothing left to pay against it.")
+                % frappe.bold(reference_record)
+            )
         frappe.throw(_("%s has nothing outstanding.") % frappe.bold(reference_record))
 
     today = getdate(nowdate())

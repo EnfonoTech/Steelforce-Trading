@@ -91,7 +91,7 @@ class TestModeOfPaymentInvoiceWise(FrappeTestCase):
 
     # ---------------------------------------------------------------- aggregation
 
-    def _fabricated(self, legs, outstanding=0.0, grand_total=100.0, declared=None):
+    def _fabricated(self, legs, outstanding=0.0, grand_total=100.0, declared=None, change=0.0):
         invoice = frappe._dict(
             {
                 "name": "SI-TEST-0001",
@@ -108,6 +108,7 @@ class TestModeOfPaymentInvoiceWise(FrappeTestCase):
                 "grand_total": grand_total,
                 "rounded_total": grand_total,
                 "outstanding_amount": outstanding,
+                "change_amount": change,
                 "custom_payment_mode": declared,
                 "custom_sales_person": None,
             }

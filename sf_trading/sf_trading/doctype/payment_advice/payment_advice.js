@@ -5,10 +5,13 @@
 // Payment Entry's own reference table, so an advice cannot hold something its Payment Entry
 // would reject at submit.
 function sf_valid_reference_doctypes(party_type) {
+	// Payment Entry is deliberately absent: an advice authorises a payment, it does not pay
+	// another payment. Orders are included and behave as Payment Request does — payable is the
+	// order total less advance_paid.
 	if (party_type === "Customer") {
-		return ["Sales Order", "Sales Invoice", "Journal Entry", "Dunning", "Payment Entry"];
+		return ["Sales Order", "Sales Invoice", "Journal Entry", "Dunning"];
 	}
-	return ["Purchase Order", "Purchase Invoice", "Journal Entry", "Payment Entry"];
+	return ["Purchase Order", "Purchase Invoice", "Journal Entry"];
 }
 
 frappe.ui.form.on("Payment Advice", {
@@ -38,6 +41,12 @@ frappe.ui.form.on("Payment Advice", {
 				"Dunning",
 			].includes(row.reference_doctype);
 			if (party_field && carries_party && doc.party) filters[party_field] = doc.party;
+
+			// a closed or completed order has nothing left to pay against, same as the
+			// Payment Request selector
+			if (["Sales Order", "Purchase Order"].includes(row.reference_doctype)) {
+				filters.status = ["not in", ["Closed", "Completed"]];
+			}
 
 			return { filters };
 		});
