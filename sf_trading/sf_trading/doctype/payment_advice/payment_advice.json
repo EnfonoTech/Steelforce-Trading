@@ -199,12 +199,14 @@
    "fieldname": "amount",
    "fieldtype": "Currency",
    "label": "Total Reference Amount",
+   "options": "Company:company:default_currency",
    "read_only": 1
   },
   {
    "fieldname": "amount_to_be_settled",
    "fieldtype": "Currency",
    "label": "Amount To Be Settled",
+   "options": "Company:company:default_currency",
    "read_only": 1
   },
   {
@@ -217,6 +219,7 @@
    "fieldname": "amount_paid",
    "fieldtype": "Currency",
    "label": "Amount Paid",
+   "options": "Company:company:default_currency",
    "read_only": 1
   },
   {
@@ -229,12 +232,14 @@
    "fieldtype": "Currency",
    "in_list_view": 1,
    "label": "Payment Amount",
+   "options": "Company:company:default_currency",
    "reqd": 1
   },
   {
    "fieldname": "pending_amount",
    "fieldtype": "Currency",
    "label": "Pending Amount",
+   "options": "Company:company:default_currency",
    "read_only": 1
   },
   {

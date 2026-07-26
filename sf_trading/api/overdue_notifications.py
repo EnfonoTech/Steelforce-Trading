@@ -172,7 +172,16 @@ def _users_by_scope():
 
 # ── Message building ──────────────────────────────────────────────────────────────
 
-def _payload(summary, scope):
+def _company_currency(company=None):
+    """Company currency where a company is known, else the system default."""
+    if company:
+        currency = frappe.get_cached_value("Company", company, "default_currency")
+        if currency:
+            return currency
+    return frappe.db.get_default("currency") or ""
+
+
+def _payload(summary, scope, company=None):
     """Build the realtime payload for one scope, or None when nothing is overdue."""
     parts = []
     count = 0
@@ -191,7 +200,7 @@ def _payload(summary, scope):
     if not count:
         return None
 
-    currency = frappe.db.get_default("currency") or ""
+    currency = _company_currency(company)
     message = _("%(count)s overdue (%(detail)s) — %(amount)s outstanding") % {
         "count": count,
         "detail": " + ".join(parts),
@@ -322,7 +331,7 @@ def _send_email(user, payload, rows):
 
 def _notify(user, scope, summary, company=None, as_on=None, email_allowed=False):
     """Fire every enabled channel for one user. Returns the payload, or None."""
-    payload = _payload(summary, scope)
+    payload = _payload(summary, scope, company=company)
     if not payload:
         return None
 

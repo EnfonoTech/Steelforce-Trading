@@ -282,6 +282,7 @@ def _outstanding_rows(party_type, party, filters, party_account, min_ageing):
         cost_center=filters.get("cost_center"),
         from_amount=filters.get("from_amount"),
         to_amount=filters.get("to_amount"),
+        company=filters.get("company"),
     )
 
     if min_ageing:

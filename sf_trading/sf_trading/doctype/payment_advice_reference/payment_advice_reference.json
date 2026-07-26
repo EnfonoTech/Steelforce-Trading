@@ -79,12 +79,14 @@
    "fieldtype": "Currency",
    "in_list_view": 1,
    "label": "Amount",
+   "options": "currency",
    "read_only": 1
   },
   {
    "fieldname": "settled_amount",
    "fieldtype": "Currency",
    "label": "Settled Amount",
+   "options": "currency",
    "read_only": 1
   },
   {
@@ -93,6 +95,7 @@
    "fieldtype": "Currency",
    "in_list_view": 1,
    "label": "Net Payable Amount",
+   "options": "currency",
    "read_only": 1
   },
   {
@@ -117,6 +120,7 @@
    "fieldname": "allocated_amount",
    "fieldtype": "Currency",
    "label": "Allocated Amount",
+   "options": "currency",
    "read_only": 1
   },
   {
@@ -144,6 +148,7 @@
    "label": "Transaction Currency"
   },
   {
+   "description": "Company currency. Amounts on this row are company-currency figures (ERPNext stores invoice outstanding in party account currency).",
    "fieldname": "currency",
    "fieldtype": "Link",
    "hidden": 1,

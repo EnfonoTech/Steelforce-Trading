@@ -247,6 +247,7 @@ class PaymentAdvice(Document):
     def set_reference_details(self):
         """Fill each row from its source document. Ageing is measured from the due date."""
         today = getdate(nowdate())
+        company_currency = get_company_currency(self.company)
 
         for row in self.payment_advice_reference:
             if not (row.reference_doctype and row.reference_record):
@@ -263,8 +264,11 @@ class PaymentAdvice(Document):
                 row.date = source("posting_date")
             if not row.amount:
                 row.amount = flt(source("grand_total"))
-            if not row.currency:
-                row.currency = source("currency") or frappe.db.get_default("currency")
+            # Amounts on these rows are company-currency figures: ERPNext stores invoice
+            # outstanding in the party account currency, which is the company currency here.
+            # Stamping the invoice's own currency (SAR on an import PI, say) would render a
+            # BHD number with an SAR symbol.
+            row.currency = company_currency
             if not row.exchange_rate:
                 row.exchange_rate = flt(source("conversion_rate")) or 1.0
             if not row.cost_center:
@@ -363,7 +367,7 @@ class PaymentAdvice(Document):
             balance = flt(balance - allocated, 3)
 
     def set_words(self):
-        company_currency = frappe.db.get_value("Company", self.company, "default_currency")
+        company_currency = get_company_currency(self.company)
         if self.amount_to_be_settled:
             self.amount_to_be_settled_in_words = money_in_words(
                 self.amount_to_be_settled, company_currency
@@ -435,6 +439,15 @@ def workflow_controls_submission(company=None):
 
 
 # ── Payment Entry creation ───────────────────────────────────────────────────────
+
+def get_company_currency(company):
+    """The one currency this document speaks in."""
+    return (
+        frappe.get_cached_value("Company", company, "default_currency")
+        if company
+        else None
+    ) or frappe.db.get_default("currency")
+
 
 def get_payment_type(party_type):
     if party_type in RECEIVE_PARTY_TYPES:
@@ -700,7 +713,7 @@ def get_reference_details(reference_doctype: str, reference_record: str, company
         "settled_amount": flt(total - outstanding, 3),
         "net_payable_amount": outstanding,
         "ageing": max(0, (today - due).days),
-        "currency": values.get("currency") or frappe.db.get_default("currency"),
+        "currency": get_company_currency(company),
         "exchange_rate": flt(values.get("conversion_rate")) or 1.0,
         "cost_center": values.get("cost_center"),
         "reference_status": values.get("status"),
@@ -772,11 +785,12 @@ def get_outstanding_documents(
 
     vouchers = get_outstanding_reference_documents(args) or []
     return shape_reference_rows(
-        vouchers, cost_center=cost_center, from_amount=from_amount, to_amount=to_amount
+        vouchers, cost_center=cost_center, from_amount=from_amount, to_amount=to_amount,
+        company=company,
     )
 
 
-def shape_reference_rows(vouchers, cost_center=None, from_amount=None, to_amount=None):
+def shape_reference_rows(vouchers, cost_center=None, from_amount=None, to_amount=None, company=None):
     """Map ERPNext's outstanding rows onto Payment Advice Reference rows.
 
     Verified against live data: the engine returns account, bill_no, currency, due_date,
@@ -786,7 +800,8 @@ def shape_reference_rows(vouchers, cost_center=None, from_amount=None, to_amount
     need a extra lookup, since the engine does not carry them.
     """
     today = getdate(nowdate())
-    default_currency = frappe.db.get_default("currency")
+    # every amount below is a company-currency figure, so label it as such
+    default_currency = get_company_currency(company)
     rows = []
 
     for voucher in vouchers:
@@ -824,7 +839,7 @@ def shape_reference_rows(vouchers, cost_center=None, from_amount=None, to_amount
                 "net_payable_amount": outstanding,
                 "ageing": max(0, (today - getdate(due_date)).days) if due_date else 0,
                 "payment_term": voucher.get("payment_term"),
-                "currency": voucher.get("currency") or default_currency,
+                "currency": default_currency,
                 "exchange_rate": flt(voucher.get("exchange_rate")) or 1.0,
                 "cost_center": extra.get("cost_center") or cost_center,
                 "reference_status": extra.get("status"),
