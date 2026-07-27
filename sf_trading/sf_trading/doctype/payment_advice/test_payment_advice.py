@@ -32,8 +32,12 @@ class TestPaymentAdvice(FrappeTestCase):
     # ── pure helpers ─────────────────────────────────────────────────────────────
     def test_payment_type_by_party(self):
         self.assertEqual(get_payment_type("Supplier"), "Pay")
-        self.assertEqual(get_payment_type("Employee"), "Pay")
         self.assertEqual(get_payment_type("Customer"), "Receive")
+
+    def test_payment_type_rejects_employee(self):
+        # party_type offers only Supplier and Customer; Employee was never wired up
+        with self.assertRaises(frappe.ValidationError):
+            get_payment_type("Employee")
 
     def test_payment_type_rejects_unknown_party(self):
         with self.assertRaises(frappe.ValidationError):
@@ -332,9 +336,10 @@ class TestCreateAdvicesFromDocuments(FrappeTestCase):
             self._call([], "Purchase Invoice")
 
     def test_doctype_without_a_party_field_is_rejected(self):
-        # Item carries neither supplier nor customer, so it can never be paid
+        # UOM carries neither supplier nor customer, so it can never be paid. The guard has to fire
+        # before the query is built, otherwise the missing columns surface as a raw 1054.
         with self.assertRaises(frappe.ValidationError):
-            self._call(["_nonexistent_item_"], "Item")
+            self._call(["Nos"], "UOM")
 
     def test_unsubmitted_or_missing_documents_are_rejected(self):
         with self.assertRaises(frappe.ValidationError):
@@ -367,9 +372,10 @@ class TestCreateAdvicesFromDocuments(FrappeTestCase):
         self.assertEqual(advice.party_type, "Supplier")
         self.assertEqual(advice.party, po.supplier)
         self.assertEqual(advice.company, po.company)
-        self.assertEqual([r.reference_doctype for r in advice.references], ["Purchase Order"])
-        self.assertEqual(advice.references[0].reference_record, po.name)
-        self.assertEqual(flt(advice.references[0].net_payable_amount, 3), flt(payable, 3))
+        rows = advice.payment_advice_reference
+        self.assertEqual([r.reference_doctype for r in rows], ["Purchase Order"])
+        self.assertEqual(rows[0].reference_record, po.name)
+        self.assertEqual(flt(rows[0].net_payable_amount, 3), flt(payable, 3))
 
         # a document already on a live advice cannot be advised twice
         with self.assertRaises(frappe.ValidationError):
@@ -391,5 +397,7 @@ class TestCreateAdvicesFromDocuments(FrappeTestCase):
         self.assertEqual(len(result["created"]), 1)
         advice = frappe.get_doc("Payment Advice", result["created"][0]["advice"])
         self.assertEqual(advice.party, pi.supplier)
-        self.assertEqual([r.reference_doctype for r in advice.references], ["Purchase Invoice"])
+        self.assertEqual(
+            [r.reference_doctype for r in advice.payment_advice_reference], ["Purchase Invoice"]
+        )
         self.assertGreater(flt(advice.payment_amount), 0)
