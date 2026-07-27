@@ -317,7 +317,10 @@ class TestCreateAdvicesFromDocuments(FrappeTestCase):
     Purchase Invoice (public/js/payment_advice_form_action.js) and behind the list-view action.
 
     Note: create_advices_from_documents() commits per advice, so anything it creates outlives the
-    test transaction. Every test that lets it succeed deletes what it made.
+    test transaction. Every test that lets it succeed removes what it made — and it has to cope with
+    the advice having been submitted in the meantime, because the site's own
+    payment_automation.run_due_automations tick stamps an approver and approves fresh drafts. A
+    submitted document cannot be deleted even with force=True, so cancel comes first.
     """
 
     def _call(self, documents, doctype):
@@ -327,7 +330,14 @@ class TestCreateAdvicesFromDocuments(FrappeTestCase):
 
     def _cleanup(self, result):
         for row in (result or {}).get("created", []):
-            frappe.delete_doc("Payment Advice", row["advice"], force=True, ignore_permissions=True)
+            name = row["advice"]
+            if not frappe.db.exists("Payment Advice", name):
+                continue
+            if frappe.db.get_value("Payment Advice", name, "docstatus") == 1:
+                doc = frappe.get_doc("Payment Advice", name)
+                doc.flags.ignore_permissions = True
+                doc.cancel()
+            frappe.delete_doc("Payment Advice", name, force=True, ignore_permissions=True)
         frappe.db.commit()
 
     # ── contract guards ──────────────────────────────────────────────────────────
