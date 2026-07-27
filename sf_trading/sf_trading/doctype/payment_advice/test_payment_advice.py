@@ -306,3 +306,90 @@ class TestReferenceIntegrity(FrappeTestCase):
         advice.company = mine.company
         with self.assertRaises(frappe.ValidationError):
             advice.validate_references()
+
+
+class TestCreateAdvicesFromDocuments(FrappeTestCase):
+    """The endpoint behind the "Payment Advice" entry in the Create menu of Purchase Order and
+    Purchase Invoice (public/js/payment_advice_form_action.js) and behind the list-view action.
+
+    Note: create_advices_from_documents() commits per advice, so anything it creates outlives the
+    test transaction. Every test that lets it succeed deletes what it made.
+    """
+
+    def _call(self, documents, doctype):
+        from sf_trading.api.payment_advice_builder import create_advices_from_documents
+
+        return create_advices_from_documents(documents, {"doctype": doctype})
+
+    def _cleanup(self, result):
+        for row in (result or {}).get("created", []):
+            frappe.delete_doc("Payment Advice", row["advice"], force=True, ignore_permissions=True)
+        frappe.db.commit()
+
+    # ── contract guards ──────────────────────────────────────────────────────────
+    def test_empty_selection_is_rejected(self):
+        with self.assertRaises(frappe.ValidationError):
+            self._call([], "Purchase Invoice")
+
+    def test_doctype_without_a_party_field_is_rejected(self):
+        # Item carries neither supplier nor customer, so it can never be paid
+        with self.assertRaises(frappe.ValidationError):
+            self._call(["_nonexistent_item_"], "Item")
+
+    def test_unsubmitted_or_missing_documents_are_rejected(self):
+        with self.assertRaises(frappe.ValidationError):
+            self._call(["PI-does-not-exist-0001"], "Purchase Invoice")
+
+    # ── the two Create-menu sources ──────────────────────────────────────────────
+    def test_purchase_order_raises_a_supplier_advice(self):
+        from sf_trading.sf_trading.doctype.payment_advice.payment_advice import get_reference_amounts
+
+        po = frappe.db.get_value(
+            "Purchase Order",
+            {"docstatus": 1, "status": ["not in", ["On Hold", "Closed"]], "per_billed": ["<", 100]},
+            ["name", "supplier", "company"],
+            as_dict=True,
+        )
+        if not po:
+            self.skipTest("need a submitted Purchase Order with per_billed < 100")
+
+        _total, payable = get_reference_amounts("Purchase Order", po.name)
+        if payable <= 0:
+            self.skipTest("the candidate Purchase Order has nothing left to pay")
+
+        result = self._call([po.name], "Purchase Order")
+        self.addCleanup(self._cleanup, result)
+
+        self.assertEqual(len(result["created"]), 1)
+        self.assertFalse(result["failed"])
+        advice = frappe.get_doc("Payment Advice", result["created"][0]["advice"])
+        self.assertEqual(advice.docstatus, 0)
+        self.assertEqual(advice.party_type, "Supplier")
+        self.assertEqual(advice.party, po.supplier)
+        self.assertEqual(advice.company, po.company)
+        self.assertEqual([r.reference_doctype for r in advice.references], ["Purchase Order"])
+        self.assertEqual(advice.references[0].reference_record, po.name)
+        self.assertEqual(flt(advice.references[0].net_payable_amount, 3), flt(payable, 3))
+
+        # a document already on a live advice cannot be advised twice
+        with self.assertRaises(frappe.ValidationError):
+            self._call([po.name], "Purchase Order")
+
+    def test_purchase_invoice_raises_a_supplier_advice(self):
+        pi = frappe.db.get_value(
+            "Purchase Invoice",
+            {"docstatus": 1, "outstanding_amount": [">", 0], "is_return": 0, "on_hold": 0},
+            ["name", "supplier", "company"],
+            as_dict=True,
+        )
+        if not pi:
+            self.skipTest("need a submitted Purchase Invoice with an outstanding amount")
+
+        result = self._call([pi.name], "Purchase Invoice")
+        self.addCleanup(self._cleanup, result)
+
+        self.assertEqual(len(result["created"]), 1)
+        advice = frappe.get_doc("Payment Advice", result["created"][0]["advice"])
+        self.assertEqual(advice.party, pi.supplier)
+        self.assertEqual([r.reference_doctype for r in advice.references], ["Purchase Invoice"])
+        self.assertGreater(flt(advice.payment_amount), 0)

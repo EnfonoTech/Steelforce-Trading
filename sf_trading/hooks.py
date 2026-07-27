@@ -58,9 +58,16 @@ doctype_js = {
 	"Customer":         "public/js/customer_company.js",
 	"Quotation":        "public/js/quotation.js",
 	"Supplier Quotation": "public/js/purchase_tax_template.js",
-	"Purchase Order":     "public/js/purchase_tax_template.js",
 	"Purchase Receipt":   "public/js/purchase_tax_template.js",
-	"Purchase Invoice":   "public/js/purchase_tax_template.js",
+	# Payment Advice sits in the Create menu beside Payment Request, under the same conditions
+	"Purchase Order":     [
+		"public/js/purchase_tax_template.js",
+		"public/js/payment_advice_form_action.js",
+	],
+	"Purchase Invoice":   [
+		"public/js/purchase_tax_template.js",
+		"public/js/payment_advice_form_action.js",
+	],
 }
 
 # include js, css files in header of web template
