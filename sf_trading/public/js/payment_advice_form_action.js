@@ -45,7 +45,8 @@
 					fieldname: "approver",
 					label: __("Approver"),
 					fieldtype: "Link",
-					options: "Employee",
+					options: "User",
+					get_query: () => ({ filters: { enabled: 1 } }),
 				},
 				{
 					fieldname: "bank_account",

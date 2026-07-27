@@ -415,11 +415,11 @@
    "label": "Approval"
   },
   {
-   "description": "Only the user linked to this Employee may submit the advice.",
+   "description": "Only this user may submit the advice.",
    "fieldname": "approver",
    "fieldtype": "Link",
    "label": "Approver",
-   "options": "Employee"
+   "options": "User"
   },
   {
    "fieldname": "column_break_approval",

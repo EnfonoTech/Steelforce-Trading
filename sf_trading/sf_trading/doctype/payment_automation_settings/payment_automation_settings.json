@@ -318,11 +318,11 @@
    "fieldtype": "Column Break"
   },
   {
-   "description": "Stamped as approver. Automated submits run as the scheduler, not this person.",
+   "description": "Stamped as approver on every advice the run raises. Automated submits run as the scheduler, not this person.",
    "fieldname": "approver",
    "fieldtype": "Link",
    "label": "Approver",
-   "options": "Employee"
+   "options": "User"
   },
   {
    "fieldname": "remarks",

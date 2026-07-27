@@ -57,12 +57,12 @@ class PaymentAutomationSettings(Document):
         if cint(self.auto_submit_advice) and not self.approver:
             frappe.throw(_("Set an Approver before letting the run submit advices."))
 
-        # the approver is stamped on every advice the run raises; an Employee with no linked
-        # user makes those advices unsubmittable by a human afterwards
-        if self.approver and not frappe.db.get_value("Employee", self.approver, "user_id"):
+        # the approver is stamped on every advice the run raises; a disabled user makes those
+        # advices unsubmittable by a human afterwards
+        if self.approver and not frappe.db.get_value("User", self.approver, "enabled"):
             frappe.throw(
-                _("Employee %s has no linked user account. Set User ID on the Employee, or pick "
-                  "an approver who has one.") % frappe.bold(self.approver)
+                _("User %s is disabled, so nobody could submit the advices this run stamps. "
+                  "Pick an active approver.") % frappe.bold(self.approver)
             )
 
     def validate_schedule(self):

@@ -49,6 +49,27 @@ class TestPaymentAdvice(FrappeTestCase):
         if account:
             self.assertEqual(frappe.db.get_value("Account", account, "company"), self.company)
 
+    def test_approver_links_to_a_user_not_an_employee(self):
+        # an Employee with no User ID could be picked and then nobody could submit the advice
+        for doctype in ("Payment Advice", "Payment Automation Settings"):
+            self.assertEqual(frappe.get_meta(doctype).get_field("approver").options, "User")
+
+    def test_party_name_is_filled_from_the_party(self):
+        for party_type, title_field in (("Supplier", "supplier_name"), ("Customer", "customer_name")):
+            party = frappe.db.get_value(party_type, {"disabled": 0}, ["name", title_field], as_dict=True)
+            if not party:
+                continue
+            advice = frappe.new_doc("Payment Advice")
+            advice.party_type, advice.party = party_type, party.name
+            advice.set_party_name()
+            self.assertEqual(advice.party_name, party.get(title_field) or party.name)
+
+    def test_party_name_left_alone_without_a_party(self):
+        advice = frappe.new_doc("Payment Advice")
+        advice.party_type = "Supplier"
+        advice.set_party_name()
+        self.assertFalse(advice.party_name)
+
     # ── allocation ───────────────────────────────────────────────────────────────
     def _advice(self, payables, payment_amount):
         """Build an unsaved advice with synthetic reference rows."""
@@ -122,10 +143,9 @@ class TestPaymentAdvice(FrappeTestCase):
         advice.set_status()
         self.assertEqual(advice.status, STATUS_DRAFT)
 
-        advice.approver = frappe.db.get_value("Employee", {}, "name")
-        if advice.approver:
-            advice.set_status()
-            self.assertEqual(advice.status, STATUS_PENDING)
+        advice.approver = "Administrator"
+        advice.set_status()
+        self.assertEqual(advice.status, STATUS_PENDING)
 
         advice.docstatus = 1
         advice.payment_entry = None

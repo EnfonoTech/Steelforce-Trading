@@ -73,6 +73,29 @@ frappe.ui.form.on("Payment Advice", {
 		frm.trigger("show_allocation_summary");
 	},
 
+	// party_name is read-only and filled server-side in validate(), so before the first save the
+	// field sat empty and the form showed only the supplier code. Fetch it on the spot instead.
+	party_type(frm) {
+		frm.trigger("fetch_party_name");
+	},
+
+	party(frm) {
+		frm.trigger("fetch_party_name");
+	},
+
+	fetch_party_name(frm) {
+		if (frm.doc.docstatus !== 0) return;
+		const field = { Supplier: "supplier_name", Customer: "customer_name" }[frm.doc.party_type];
+		if (!frm.doc.party || !field) {
+			if (frm.doc.party_name) frm.set_value("party_name", "");
+			return;
+		}
+		frappe.db.get_value(frm.doc.party_type, frm.doc.party, field).then((r) => {
+			// falls back to the code, exactly as PaymentAdvice.set_party_name() does
+			frm.set_value("party_name", (r.message && r.message[field]) || frm.doc.party);
+		});
+	},
+
 	toggle_buttons(frm) {
 		// Buttons are rebuilt from scratch: add_custom_button() alone would stack duplicates,
 		// and on a new advice refresh() runs before company/party exist — which is why the

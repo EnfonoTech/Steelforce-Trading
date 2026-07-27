@@ -67,18 +67,25 @@ class TestPaymentAutomationSettings(FrappeTestCase):
 			doc.validate_level_chain()
 
 	def test_full_chain_with_approver_is_valid(self):
-		approver = frappe.db.get_value("Employee", {}, "name")
-		if not approver:
-			self.skipTest("no Employee records on this site")
+		# the approver is a User now, not an Employee with a User ID hanging off it
 		doc = self._settings(
 			auto_submit_advice=1,
 			auto_create_payment_entry=1,
 			auto_submit_payment_entry=1,
-			approver=approver,
+			approver="Administrator",
 			mode_of_payment=frappe.db.get_value("Mode of Payment", {}, "name"),
 		)
 		doc.validate_level_chain()  # must not raise
 		self.assertEqual(doc.highest_enabled_step(), 4)
+
+	def test_disabled_approver_is_rejected(self):
+		"""A disabled user could be stamped and then nobody could submit those advices."""
+		user = frappe.db.get_value("User", {"enabled": 0, "name": ["!=", "Guest"]}, "name")
+		if not user:
+			self.skipTest("no disabled user on this site")
+		doc = self._settings(auto_submit_advice=1, approver=user)
+		with self.assertRaises(frappe.ValidationError):
+			doc.validate_level_chain()
 
 	# ── schedule ─────────────────────────────────────────────────────────────────
 	def test_enabled_needs_a_weekday(self):
