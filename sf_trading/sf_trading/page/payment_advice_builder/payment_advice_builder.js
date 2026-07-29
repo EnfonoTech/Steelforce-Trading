@@ -129,7 +129,7 @@ class PaymentAdviceBuilder {
 		this.data.groups.forEach((group) => {
 			if (group.skip) return;
 			if (on) {
-				this.selected.set(group.party, new Set(group.rows.map((row) => row.reference_record)));
+				this.selected.set(group.party, new Set(group.rows.map((row) => String(row.reference_record))));
 			} else {
 				this.selected.delete(group.party);
 			}
@@ -262,34 +262,55 @@ class PaymentAdviceBuilder {
 	}
 
 	bind_events() {
+		// .attr(), never .data(): jQuery coerces a numeric-looking attribute to a Number, so a
+		// voucher named 20020000006 came back as the number 20020000006 while the selection Set
+		// holds the string. Nothing matched, the footer read "0 voucher(s)", and create() dropped
+		// those rows from the advice without saying so.
 		this.body.find(".pab-group-check").on("change", (e) => {
-			const party = $(e.currentTarget).data("party");
+			const party = String($(e.currentTarget).attr("data-party"));
 			const on = e.currentTarget.checked;
 			const group = this.data.groups.find((g) => g.party === party);
+			if (!group) return;
 			if (on) {
-				this.selected.set(party, new Set(group.rows.map((r) => r.reference_record)));
+				this.selected.set(party, new Set(group.rows.map((r) => String(r.reference_record))));
 			} else {
 				this.selected.delete(party);
 			}
-			this.body
-				.find(`.pab-row[data-party="${party}"]`)
+			e.currentTarget.indeterminate = false;
+			this.body.find(".pab-row").filter((_i, el) => $(el).attr("data-party") === party)
 				.prop("checked", on);
 			this.update_totals();
 		});
 
 		this.body.find(".pab-row").on("change", (e) => {
 			const el = $(e.currentTarget);
-			const party = el.data("party");
-			const ref = el.data("ref");
+			const party = String(el.attr("data-party"));
+			const ref = String(el.attr("data-ref"));
 			if (!this.selected.has(party)) this.selected.set(party, new Set());
 			const set = this.selected.get(party);
 			e.currentTarget.checked ? set.add(ref) : set.delete(ref);
 			if (!set.size) this.selected.delete(party);
+			this.sync_group_check(party);
 			this.update_totals();
 		});
 
 		this.body.find(".pab-options").on("click", () => this.edit_options());
 		this.body.find(".pab-create").on("click", () => this.create());
+	}
+
+	sync_group_check(party) {
+		// A party header that stays ticked while only some of its rows are ticked reads as though
+		// everything is selected. Show the true state instead: ticked when all rows are in, dashed
+		// when only some are.
+		const group = this.data.groups.find((g) => g.party === party);
+		if (!group) return;
+		const set = this.selected.get(party) || new Set();
+		const box = this.body.find(".pab-group-check")
+			.filter((_i, el) => $(el).attr("data-party") === party)
+			.get(0);
+		if (!box) return;
+		box.checked = set.size === group.rows.length && group.rows.length > 0;
+		box.indeterminate = set.size > 0 && set.size < group.rows.length;
 	}
 
 	update_totals() {
@@ -300,13 +321,19 @@ class PaymentAdviceBuilder {
 		this.selected.forEach((refs, party) => {
 			const group = this.data.groups.find((g) => g.party === party);
 			if (!group) return;
-			parties += 1;
+			// count the party only once it actually contributes a voucher, so a stale or unmatched
+			// entry can never show as "1 party(ies), 0 voucher(s)" again
+			let party_vouchers = 0;
 			group.rows.forEach((row) => {
-				if (refs.has(row.reference_record)) {
-					vouchers += 1;
+				if (refs.has(String(row.reference_record))) {
+					party_vouchers += 1;
 					amount += flt(row.net_payable_amount);
 				}
 			});
+			if (party_vouchers) {
+				parties += 1;
+				vouchers += party_vouchers;
+			}
 		});
 
 		this.body
@@ -388,7 +415,7 @@ class PaymentAdviceBuilder {
 		this.selected.forEach((refs, party) => {
 			const group = this.data.groups.find((g) => g.party === party);
 			if (!group) return;
-			const references = group.rows.filter((row) => refs.has(row.reference_record));
+			const references = group.rows.filter((row) => refs.has(String(row.reference_record)));
 			if (references.length) {
 				selections.push({ party: party, references: references, bank_account: group.bank_account });
 			}
