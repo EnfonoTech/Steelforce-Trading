@@ -5,6 +5,10 @@ Read-only against live data: the report never writes. Reward vouchers are few, s
 tests assert filter behaviour, the two sources (template journals + payment deductions),
 the linked/unlinked split, the reward split arithmetic, summary arithmetic and column
 shape rather than fabricating vouchers on a client site.
+
+Both sides are now one row per reward row — per allocated invoice for a payment, per debit row
+for a journal — so a voucher legitimately appears on several rows and the tests reconcile rows
+back to the voucher rather than assuming one each.
 """
 
 import frappe
@@ -48,6 +52,7 @@ class TestLoyaltyRewardsReport(FrappeTestCase):
         for expected in (
             "source",
             "voucher_no",
+            "row_idx",
             "reward_amount",
             "sales_invoice",
             "allocated_amount",
@@ -78,11 +83,114 @@ class TestLoyaltyRewardsReport(FrappeTestCase):
                 frappe.db.get_value("Journal Entry", row["journal_entry"], "from_template"), TEMPLATE
             )
 
-    def test_reward_amount_matches_journal_debit(self):
+    def test_journal_rewards_add_up_to_the_journal_debit(self):
+        """However many debit rows a journal has, its rows sum back to the amount booked."""
         _columns, rows = self._run(source=SOURCE_JOURNAL)
-        for row in rows[:20]:
-            total_debit = frappe.db.get_value("Journal Entry", row["journal_entry"], "total_debit")
-            self.assertAlmostEqual(row["reward_amount"], total_debit, places=2)
+        by_journal = {}
+        for row in rows:
+            by_journal.setdefault(row["journal_entry"], 0.0)
+            by_journal[row["journal_entry"]] += flt(row["reward_amount"])
+
+        for journal, reward in list(by_journal.items())[:20]:
+            total_debit = frappe.db.get_value("Journal Entry", journal, "total_debit")
+            self.assertAlmostEqual(reward, flt(total_debit), places=2)
+
+    def test_journal_rows_carry_their_own_row_debit(self):
+        """Each row reports its own debit — never the whole voucher repeated per row."""
+        _columns, rows = self._run(source=SOURCE_JOURNAL)
+        checked = 0
+        for row in rows:
+            if row.get("row_idx") is None:
+                continue
+            debit = frappe.db.get_value(
+                "Journal Entry Account",
+                {"parent": row["voucher_no"], "idx": row["row_idx"]},
+                "debit",
+            )
+            self.assertAlmostEqual(flt(row["reward_amount"]), flt(debit), places=3)
+            checked += 1
+            if checked == 20:
+                break
+
+    def test_journal_rows_carry_their_row_invoice(self):
+        """The row's own link wins; the header link is only a fallback."""
+        _columns, rows = self._run(source=SOURCE_JOURNAL)
+        checked = 0
+        for row in rows:
+            if row.get("row_idx") is None:
+                continue
+            row_link = frappe.db.get_value(
+                "Journal Entry Account",
+                {"parent": row["voucher_no"], "idx": row["row_idx"]},
+                "custom_loyalty_sales_invoice",
+            )
+            header_link = frappe.db.get_value(
+                "Journal Entry", row["voucher_no"], "custom_loyalty_sales_invoice"
+            )
+            self.assertEqual(row["sales_invoice"], row_link or header_link)
+            checked += 1
+            if checked == 20:
+                break
+
+    def test_one_journal_can_reward_several_invoices(self):
+        """The point of the row-level link: one voucher, several customers' invoices."""
+        candidates = {}
+        for account_row in frappe.get_all(
+            "Journal Entry Account",
+            filters={"parenttype": SOURCE_JOURNAL, "custom_loyalty_sales_invoice": ["is", "set"]},
+            fields=["parent", "custom_loyalty_sales_invoice"],
+        ):
+            if frappe.db.get_value("Journal Entry", account_row.parent, "from_template") != TEMPLATE:
+                continue
+            candidates.setdefault(account_row.parent, set()).add(account_row.custom_loyalty_sales_invoice)
+
+        multi = next((je for je, invoices in candidates.items() if len(invoices) > 1), None)
+        if not multi:
+            self.skipTest("no multi-invoice reward journal on this site")
+
+        _columns, rows = self._run(source=SOURCE_JOURNAL)
+        mine = [row for row in rows if row["voucher_no"] == multi]
+        self.assertGreaterEqual(len(mine), 2)
+        self.assertEqual(len({row["sales_invoice"] for row in mine}), len(mine))
+        self.assertAlmostEqual(
+            sum(flt(row["reward_amount"]) for row in mine),
+            flt(frappe.db.get_value("Journal Entry", multi, "total_debit")),
+            places=2,
+        )
+
+    def test_only_unlinked_returns_rows_not_vouchers(self):
+        """A part-linked journal contributes only its unlinked rows."""
+        part_linked = None
+        for journal in frappe.get_all(
+            "Journal Entry", filters={"from_template": TEMPLATE}, pluck="name"
+        ):
+            debit_rows = [
+                account_row
+                for account_row in frappe.get_all(
+                    "Journal Entry Account",
+                    filters={"parent": journal},
+                    fields=["idx", "debit", "custom_loyalty_sales_invoice"],
+                )
+                if flt(account_row.debit)
+            ]
+            linked = [r for r in debit_rows if r.custom_loyalty_sales_invoice]
+            unlinked = [r for r in debit_rows if not r.custom_loyalty_sales_invoice]
+            if linked and unlinked:
+                part_linked = (journal, linked, unlinked)
+                break
+
+        if not part_linked:
+            self.skipTest("no part-linked reward journal on this site")
+
+        journal, linked, _unlinked = part_linked
+        _columns, rows = self._run(only_unlinked=1)
+        mine = [row for row in rows if row["voucher_no"] == journal]
+        self.assertTrue(mine)
+        for row in mine:
+            self.assertFalse(row["sales_invoice"])
+        returned = {row["row_idx"] for row in mine}
+        for linked_row in linked:
+            self.assertNotIn(linked_row.idx, returned)
 
     def test_payment_rows_sit_on_the_template_account(self):
         """A payment row exists only because the PE deducts to the template's account."""
@@ -154,6 +262,7 @@ class TestLoyaltyRewardsReport(FrappeTestCase):
         self.assertEqual(len(both), len(journals) + len(payments))
 
     def test_only_unlinked_filter(self):
+        """Unchanged on purpose: it specifies that unlinked *rows* carry no invoice/customer."""
         _columns, rows = self._run(only_unlinked=1)
         for row in rows:
             self.assertEqual(row["source"], SOURCE_JOURNAL)
@@ -192,7 +301,13 @@ class TestLoyaltyRewardsReport(FrappeTestCase):
             sum(r["reward_amount"] for r in rows),
             places=2,
         )
-        self.assertEqual(sum(s["journals"] for s in summary), len(rows))
+        # "Reward Vouchers" counts distinct vouchers per customer bucket, so it can be fewer
+        # than the number of rows — a voucher spanning several rows counts once in each bucket
+        expected = len(
+            {(row.get("customer") or UNLINKED_LABEL, row["source"], row["voucher_no"]) for row in rows}
+        )
+        self.assertEqual(sum(s["journals"] for s in summary), expected)
+        self.assertLessEqual(sum(s["journals"] for s in summary), len(rows))
 
     def test_summary_splits_reward_by_source(self):
         _columns, rows = self._run()
@@ -209,8 +324,10 @@ class TestLoyaltyRewardsReport(FrappeTestCase):
 
     def test_summary_groups_unlinked(self):
         rows = [
-            {"customer": None, "customer_name": None, "sales_invoice": None, "reward_amount": 5.0, "invoice_total": 0.0},
-            {"customer": None, "customer_name": None, "sales_invoice": None, "reward_amount": 2.5, "invoice_total": 0.0},
+            {"source": SOURCE_JOURNAL, "voucher_no": "JE-1", "customer": None, "customer_name": None,
+             "sales_invoice": None, "reward_amount": 5.0, "invoice_total": 0.0},
+            {"source": SOURCE_JOURNAL, "voucher_no": "JE-2", "customer": None, "customer_name": None,
+             "sales_invoice": None, "reward_amount": 2.5, "invoice_total": 0.0},
         ]
         summary = summarise(rows)
         self.assertEqual(len(summary), 1)
@@ -222,13 +339,14 @@ class TestLoyaltyRewardsReport(FrappeTestCase):
     def test_summary_counts_each_invoice_once(self):
         """A journal and a payment reward against the same invoice must not double it."""
         rows = [
-            {"source": SOURCE_JOURNAL, "customer": "CUST-1", "customer_name": "One",
+            {"source": SOURCE_JOURNAL, "voucher_no": "JE-1", "customer": "CUST-1", "customer_name": "One",
              "sales_invoice": "SI-1", "reward_amount": 3.0, "invoice_total": 100.0},
-            {"source": SOURCE_PAYMENT, "customer": "CUST-1", "customer_name": "One",
+            {"source": SOURCE_PAYMENT, "voucher_no": "PE-1", "customer": "CUST-1", "customer_name": "One",
              "sales_invoice": "SI-1", "reward_amount": 2.0, "invoice_total": 100.0},
         ]
         summary = summarise(rows)
         self.assertEqual(summary[0]["invoices"], 1)
+        self.assertEqual(summary[0]["journals"], 2)
         self.assertAlmostEqual(summary[0]["invoice_total"], 100.0, places=2)
         self.assertAlmostEqual(summary[0]["reward_amount"], 5.0, places=2)
         self.assertAlmostEqual(summary[0]["journal_reward"], 3.0, places=2)

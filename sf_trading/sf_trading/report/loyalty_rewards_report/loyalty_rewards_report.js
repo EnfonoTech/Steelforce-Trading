@@ -62,7 +62,7 @@ frappe.query_reports["Loyalty Rewards Report"] = {
 		{ fieldname: "min_amount", label: __("Min Reward Amount"), fieldtype: "Currency" },
 		{
 			fieldname: "only_unlinked",
-			label: __("Only Unlinked (no Sales Invoice)"),
+			label: __("Only Unlinked Rows (no Sales Invoice)"),
 			fieldtype: "Check",
 			default: 0,
 		},
@@ -107,7 +107,7 @@ frappe.query_reports["Loyalty Rewards Report"] = {
 	},
 
 	onload: function (report) {
-		report.page.add_inner_button(__("Show Unlinked Only"), function () {
+		report.page.add_inner_button(__("Show Unlinked Rows"), function () {
 			report.set_filter_value("only_unlinked", 1);
 			report.set_filter_value("source", "Journal Entry");
 			report.set_filter_value("summarise_by_customer", 0);

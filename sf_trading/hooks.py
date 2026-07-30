@@ -207,6 +207,12 @@ doc_events = {
 		"on_submit": "sf_trading.api.payment_advice_hooks.on_payment_entry_submit",
 		"on_cancel": "sf_trading.api.payment_advice_hooks.on_payment_entry_cancel",
 	},
+	"Journal Entry": {
+		# validate, not before_validate: the controller fills `debit` from
+		# debit_in_account_currency * exchange_rate during its own validate, and a hooked
+		# handler runs after it, so the debit rows are already known here
+		"validate": "sf_trading.api.loyalty_reward_rows.validate_loyalty_reward_rows",
+	},
 	"Customer": {
 		"validate": [
 			"sf_trading.api.customer_override.validate",
@@ -608,6 +614,7 @@ fixtures = [
 		"filters": [["name", "in", (
 			"Payment Entry-custom_zatca_payment_means_code",
 			"Journal Entry-custom_loyalty_sales_invoice",
+			"Journal Entry Account-custom_loyalty_sales_invoice",
 			"Payment Entry-custom_payment_advice",
 			"Supplier-custom_disable_auto_payment",
 		)]],

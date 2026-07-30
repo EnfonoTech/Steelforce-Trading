@@ -8,9 +8,13 @@ Loyalty Point Entry records). A "loyalty reward" is whatever lands on the accoun
 
 * **Journal Entry** — created from the template, debiting the reward account and crediting
   petty cash / bank. The journal carries no party, so the customer is only knowable through
-  the Custom Field `Journal Entry-custom_loyalty_sales_invoice`. Journals booked before that
-  field existed have no link; they are still listed with blank invoice / customer columns and
-  the **Only Unlinked** filter isolates them so an accountant can attach the invoice by hand.
+  the invoice named on each Accounts row (`Journal Entry Account-custom_loyalty_sales_invoice`).
+  One journal may therefore reward several invoices, belonging to different customers — one
+  report row per debit row, the same shape the payment side has always had. The old header
+  field is read as a fallback for the journals booked before the row field existed. A debit row
+  with no invoice is still listed, with blank invoice / customer columns, and the
+  **Only Unlinked** filter isolates those rows so an accountant can attach the invoice by hand;
+  the **Row #** column says which grid row to open.
 * **Payment Entry** — the collection itself carries the reward as a row in the PE's
   **Deductions or Loss** table on that same account (the counter waives the fils-level
   remainder). Here the customer and the invoice are known exactly: the PE's party plus its
@@ -38,7 +42,10 @@ from frappe.utils import flt, getdate
 
 TEMPLATE = "Loyalty Reward Entry"
 UNLINKED_LABEL = "(Not Linked)"
-LINK_FIELD = "custom_loyalty_sales_invoice"
+
+# the same fieldname on both doctypes, named twice so each read says which one it means
+ROW_LINK_FIELD = "custom_loyalty_sales_invoice"  # Journal Entry Account — where it lives now
+LEGACY_LINK_FIELD = "custom_loyalty_sales_invoice"  # Journal Entry header — pre-row journals
 
 SOURCE_JOURNAL = "Journal Entry"
 SOURCE_PAYMENT = "Payment Entry"
@@ -64,8 +71,9 @@ def execute(filters=None):
     if not link_field_available():
         frappe.msgprint(
             _(
-                "The <b>Loyalty Sales Invoice</b> field is not installed on this site yet, "
-                "so every reward journal is shown as unlinked. Run <code>bench migrate</code> "
+                "The <b>Loyalty Sales Invoice</b> field is not installed on the journal's "
+                "Accounts table on this site yet, so reward journals are shown as unlinked "
+                "unless the old header field carries a value. Run <code>bench migrate</code> "
                 "to install it."
             ),
             title=_("Link field missing"),
@@ -81,13 +89,19 @@ def execute(filters=None):
 # ── Shared helpers ────────────────────────────────────────────────────────────────
 
 def link_field_available():
-    """Is the Loyalty Sales Invoice Custom Field installed on this site?
+    """Is the row-level Loyalty Sales Invoice Custom Field installed on this site?
 
     The fixture ships with the app but only lands on `bench migrate`. Until then the
     column does not exist, so querying it would raise "Unknown column". The report stays
-    usable in that state: every journal is simply reported as unlinked.
+    usable in that state: the rows fall back to the journal header's legacy link, and
+    anything without one is simply reported as unlinked.
     """
-    return frappe.get_meta("Journal Entry").has_field(LINK_FIELD)
+    return frappe.get_meta("Journal Entry Account").has_field(ROW_LINK_FIELD)
+
+
+def legacy_link_available():
+    """Is the superseded header field still on this site? It is the fallback for old journals."""
+    return frappe.get_meta("Journal Entry").has_field(LEGACY_LINK_FIELD)
 
 
 def _present_fields(doctype, fieldnames):
@@ -123,8 +137,6 @@ def _template_accounts(template):
 # ── Journal side ──────────────────────────────────────────────────────────────────
 
 def _journals(filters):
-    has_link = link_field_available()
-
     conditions = {
         "from_template": filters.get("journal_template") or TEMPLATE,
         "docstatus": ["in", _docstatus_list(filters)],
@@ -140,64 +152,67 @@ def _journals(filters):
     elif to_date:
         conditions["posting_date"] = ["<=", to_date]
 
-    if has_link:
-        if filters.get("sales_invoice"):
-            conditions[LINK_FIELD] = filters.get("sales_invoice")
-        elif filters.get("only_unlinked"):
-            conditions[LINK_FIELD] = ["in", ["", None]]
-    elif filters.get("sales_invoice"):
-        # nothing can match an invoice while the link field is not installed
-        return []
+    # An invoice now lives on the accounts rows, which a parent filter cannot reach, so the
+    # invoice and Only-Unlinked filters are applied per row after the fan-out. Narrowing the
+    # journal set first is still worth it when one invoice is asked for.
+    wanted_invoice = filters.get("sales_invoice")
+    if wanted_invoice:
+        names = set()
+        if link_field_available():
+            names |= set(
+                frappe.get_all(
+                    "Journal Entry Account",
+                    filters={ROW_LINK_FIELD: wanted_invoice, "parenttype": SOURCE_JOURNAL},
+                    pluck="parent",
+                )
+            )
+        if legacy_link_available():
+            names |= set(
+                frappe.get_all("Journal Entry", filters={LEGACY_LINK_FIELD: wanted_invoice}, pluck="name")
+            )
+        if not names:
+            return []
+        conditions["name"] = ["in", list(names)]
 
-    fields = [
-        "name",
-        "posting_date",
-        "docstatus",
-        "workflow_state",
-        "total_debit",
-        "user_remark",
-        "cheque_no",
-        "epromise_vr_no",
-        "company",
-    ]
-    if has_link:
-        fields.append(LINK_FIELD)
+    fields = ["name", "posting_date", "docstatus", "total_debit", "user_remark", "cheque_no", "company"]
+    # workflow_state and epromise_vr_no are local to this site, exactly like the payment side's
+    fields += _present_fields("Journal Entry", ["workflow_state", "epromise_vr_no"])
+    fields += _present_fields("Journal Entry", [LEGACY_LINK_FIELD])
 
-    journals = frappe.get_all(
+    return frappe.get_all(
         "Journal Entry",
         filters=conditions,
         fields=fields,
         order_by="posting_date desc, name desc",
     )
 
-    if not has_link:
-        for journal in journals:
-            journal[LINK_FIELD] = None
-
-    return journals
-
 
 def _account_rows(journal_names):
-    """Debit / credit split + cost centre for every journal, in one query."""
+    """Every debit row kept whole, plus the voucher's funding accounts, in one query.
+
+    The debit rows are no longer folded into a single reward figure: each one carries its own
+    amount and its own invoice, so each one becomes a report row.
+    """
     detail = {}
     if not journal_names:
         return detail
 
+    fields = ["parent", "name", "idx", "account", "debit", "debit_in_account_currency", "credit", "cost_center"]
+    fields += _present_fields("Journal Entry Account", [ROW_LINK_FIELD])
+
     for row in frappe.get_all(
         "Journal Entry Account",
         filters={"parent": ["in", journal_names]},
-        fields=["parent", "account", "debit", "credit", "cost_center"],
+        fields=fields,
         order_by="idx asc",
     ):
         bucket = detail.setdefault(
             row.parent,
-            {"reward": 0.0, "reward_accounts": [], "funding_accounts": [], "cost_center": None},
+            {"debit_rows": [], "funding_accounts": [], "cost_center": None},
         )
-        if flt(row.debit):
-            bucket["reward"] += flt(row.debit)
-            if row.account not in bucket["reward_accounts"]:
-                bucket["reward_accounts"].append(row.account)
-        if flt(row.credit) and row.account not in bucket["funding_accounts"]:
+        if flt(row.debit) or flt(row.debit_in_account_currency):
+            bucket["debit_rows"].append(row)
+        elif flt(row.credit) and row.account not in bucket["funding_accounts"]:
             bucket["funding_accounts"].append(row.account)
         if not bucket["cost_center"] and row.cost_center:
             bucket["cost_center"] = row.cost_center
@@ -211,37 +226,83 @@ def _journal_rows(filters):
         return []
 
     accounts = _account_rows([journal.name for journal in journals])
+    wanted_invoice = filters.get("sales_invoice")
+    only_unlinked = filters.get("only_unlinked")
 
     rows = []
     for je in journals:
         detail = accounts.get(je.name) or {}
-        rows.append(
-            {
-                "source": SOURCE_JOURNAL,
-                "voucher_no": je.name,
-                "journal_entry": je.name,
-                "payment_entry": None,
-                "posting_date": je.posting_date,
-                "status": DOCSTATUS_LABEL.get(je.docstatus, ""),
-                "workflow_state": je.workflow_state,
-                "reward_amount": flt(detail.get("reward") or je.total_debit, PRECISION),
-                "reward_account": ", ".join(detail.get("reward_accounts") or []),
-                "funding_account": ", ".join(detail.get("funding_accounts") or []),
-                "cost_center": detail.get("cost_center"),
-                "sales_invoice": je.get(LINK_FIELD),
-                "allocated_amount": None,
-                "payment_amount": None,
-                "payment_type": None,
-                "cheque_no": je.cheque_no,
-                "epromise_vr_no": je.epromise_vr_no,
-                "remark": (je.user_remark or "").strip(),
-                "party_customer": None,
-                "party_customer_name": None,
-                "branch": None,
-            }
-        )
+        funding = ", ".join(detail.get("funding_accounts") or [])
+        legacy_invoice = je.get(LEGACY_LINK_FIELD)
+        debit_rows = detail.get("debit_rows") or []
+
+        # One row per debit row. No pro-rata split as on the payment side: each row already
+        # owns both its amount and its invoice, so there is no remainder to absorb. A template
+        # journal with no debit row still yields one row, so no voucher ever vanishes — that is
+        # the only place the voucher-level total is still used.
+        emitted = [
+            _journal_row(
+                je,
+                funding,
+                reward=flt(account_row.debit) or flt(account_row.debit_in_account_currency),
+                reward_account=account_row.account,
+                invoice=account_row.get(ROW_LINK_FIELD) or legacy_invoice,
+                cost_center=account_row.cost_center or detail.get("cost_center"),
+                row_idx=account_row.idx,
+                journal_row=account_row.name,
+            )
+            for account_row in debit_rows
+        ] or [
+            _journal_row(
+                je,
+                funding,
+                reward=je.total_debit,
+                reward_account="",
+                invoice=legacy_invoice,
+                cost_center=detail.get("cost_center"),
+                row_idx=None,
+                journal_row=None,
+            )
+        ]
+
+        for row in emitted:
+            if wanted_invoice and row["sales_invoice"] != wanted_invoice:
+                continue
+            if only_unlinked and row["sales_invoice"]:
+                continue
+            rows.append(row)
 
     return rows
+
+
+def _journal_row(je, funding, reward, reward_account, invoice, cost_center, row_idx, journal_row):
+    """One report row for one debit row of a reward journal."""
+    return {
+        "source": SOURCE_JOURNAL,
+        "voucher_no": je.name,
+        "journal_entry": je.name,
+        "payment_entry": None,
+        "row_idx": row_idx,
+        "journal_row": journal_row,
+        "posting_date": je.posting_date,
+        "status": DOCSTATUS_LABEL.get(je.docstatus, ""),
+        "workflow_state": je.get("workflow_state"),
+        "reward_amount": flt(reward, PRECISION),
+        "reward_account": reward_account,
+        "funding_account": funding,
+        "cost_center": cost_center,
+        "sales_invoice": invoice,
+        # a journal does not allocate against an invoice — that column is a payment concept
+        "allocated_amount": None,
+        "payment_amount": None,
+        "payment_type": None,
+        "cheque_no": je.cheque_no,
+        "epromise_vr_no": je.get("epromise_vr_no"),
+        "remark": (je.user_remark or "").strip(),
+        "party_customer": None,
+        "party_customer_name": None,
+        "branch": None,
+    }
 
 
 # ── Payment side ──────────────────────────────────────────────────────────────────
@@ -489,14 +550,24 @@ def get_data(filters):
     ]
 
     data.sort(
-        key=lambda row: (getdate(row["posting_date"]) if row.get("posting_date") else EPOCH, row["voucher_no"]),
+        key=lambda row: (
+            getdate(row["posting_date"]) if row.get("posting_date") else EPOCH,
+            row["voucher_no"],
+            # sibling rows of one voucher read in grid order, not an arbitrary one
+            -(row.get("row_idx") or 0),
+        ),
         reverse=True,
     )
     return data
 
 
 def summarise(rows):
-    """Customer-wise roll-up; unlinked journals collect under "(Not Linked)"."""
+    """Customer-wise roll-up; reward rows with no invoice collect under "(Not Linked)".
+
+    A voucher is counted once per customer bucket it touches, so one journal that rewards two
+    customers' invoices counts as a voucher for each of them — and rows of a part-linked journal
+    can legitimately sit in both a real customer's bucket and "(Not Linked)".
+    """
     buckets = {}
     for row in rows:
         key = row.get("customer") or UNLINKED_LABEL
@@ -505,7 +576,8 @@ def summarise(rows):
             {
                 "customer": row.get("customer"),
                 "customer_name": row.get("customer_name") or key,
-                "journals": 0,
+                # distinct vouchers, not rows: one voucher now spans several rows on both sides
+                "vouchers": set(),
                 "invoices": set(),
                 "reward_amount": 0.0,
                 "journal_reward": 0.0,
@@ -513,7 +585,8 @@ def summarise(rows):
                 "invoice_total": 0.0,
             },
         )
-        bucket["journals"] += 1
+        # keyed on the pair so a journal and a payment that share a name cannot collide
+        bucket["vouchers"].add((row.get("source"), row.get("voucher_no")))
         reward = flt(row["reward_amount"])
         bucket["reward_amount"] += reward
         if row.get("source") == SOURCE_PAYMENT:
@@ -532,7 +605,7 @@ def summarise(rows):
             {
                 "customer": bucket["customer"],
                 "customer_name": bucket["customer_name"],
-                "journals": bucket["journals"],
+                "journals": len(bucket["vouchers"]),
                 "invoices": len(bucket["invoices"]),
                 "reward_amount": flt(bucket["reward_amount"], PRECISION),
                 "journal_reward": flt(bucket["journal_reward"], PRECISION),
@@ -553,6 +626,9 @@ def get_columns():
         {"fieldname": "source", "label": _("Source"), "fieldtype": "Data", "width": 110},
         {"fieldname": "voucher_no", "label": _("Voucher"), "fieldtype": "Dynamic Link",
          "options": "source", "width": 165},
+        # which Accounts row of the journal this reward sits on — the handle for fixing a
+        # missing invoice. Blank on the payment side.
+        {"fieldname": "row_idx", "label": _("Row #"), "fieldtype": "Int", "width": 70},
         {"fieldname": "posting_date", "label": _("Date"), "fieldtype": "Date", "width": 95},
         {"fieldname": "reward_amount", "label": _("Reward"), "fieldtype": "Currency", "width": 120},
         {"fieldname": "sales_invoice", "label": _("Sales Invoice"), "fieldtype": "Link",
