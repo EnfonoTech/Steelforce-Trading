@@ -211,6 +211,50 @@ def _transitions(company):
     return transitions
 
 
+def ensure_workflow_masters():
+    """Create the Workflow State / Workflow Action Master records the transitions link to.
+
+    PM Workflow's `state` and `next_state` are Links into Frappe's own `Workflow State` table,
+    and `action` into `Workflow Action Master`. Frappe validates those links on save, so a
+    workflow naming a state that has no master record is rejected outright — which is exactly
+    what happened the first time this workflow was rebuilt with the new states.
+    """
+    created = []
+
+    styles = {
+        STATE_DRAFT: "",
+        STATE_PENDING_PURCHASE: "Warning",
+        STATE_PENDING_HO: "Warning",
+        STATE_PENDING_FINANCE: "Warning",
+        STATE_PENDING_ACCOUNTANT: "Warning",
+        STATE_APPROVED: "Success",
+        STATE_REJECTED: "Danger",
+    }
+    for state, style in styles.items():
+        if frappe.db.exists("Workflow State", state):
+            continue
+        frappe.get_doc({
+            "doctype": "Workflow State",
+            "workflow_state_name": state,
+            "style": style,
+        }).insert(ignore_permissions=True)
+        created.append("Workflow State: %s" % state)
+
+    for action in ("Send for Approval", "Approve", "Reject"):
+        if frappe.db.exists("Workflow Action Master", action):
+            continue
+        frappe.get_doc({
+            "doctype": "Workflow Action Master",
+            "workflow_action_name": action,
+        }).insert(ignore_permissions=True)
+        created.append("Workflow Action Master: %s" % action)
+
+    if created:
+        frappe.db.commit()
+
+    return created
+
+
 def ensure_roles():
     """Create the roles this workflow needs that a stock site does not have.
 
@@ -286,6 +330,7 @@ def setup_workflow(company: str = None, force: int = 0):
         frappe.throw(_("Company is required."))
 
     created_roles = ensure_roles()
+    created_masters = ensure_workflow_masters()
 
     missing = [
         role
@@ -351,6 +396,7 @@ def setup_workflow(company: str = None, force: int = 0):
         "rebuilt": bool(existing and cint(force)),
         "workflow": doc.name,
         "roles_created": created_roles,
+        "masters_created": created_masters,
         "readiness": route_readiness(),
         "states": [s.state for s in doc.states],
         "transitions": ["%s → %s (%s)" % (t.state, t.next_state, t.action) for t in doc.transitions],
