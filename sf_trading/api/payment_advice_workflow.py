@@ -15,12 +15,26 @@ whether it is active, because two behaviours have to step aside when it is:
 Creation is idempotent and non-destructive: an existing workflow is left exactly as it is
 unless `force=1` is passed, so a workflow tuned on site is never overwritten by a deploy.
 
-Shape copied from Payment Request Approval as it runs on prod:
-    Draft ──Send for Approval──▶ Pending Approval ──Approve──▶ Approved (docstatus 1)
-                                        └──────Reject──────▶ Rejected ──▶ Pending Approval
-with require_attachment on Approve, require_comment + return-for-correction on Reject,
-a 3-day reminder and 7-day escalation. Roles match it too: Purchase User raises, Accountant
-approves.
+Shape — four routes out of Draft, decided by what the advice pays for and converging on the
+same two final approvals:
+
+    several Purchase Orders   Draft → Purchase Manager ┐
+    any overdue invoice       Draft → HO Accounts      ├→ GM or Finance Manager → Bahrain Accountant → Approved
+    invoices over BHD 500     Draft ───────────────────┘
+    one PO, or under BHD 500  Draft ──────────────────────────────────────────────→ Bahrain Accountant → Approved
+
+Branch Head and Purchase Assistant raise on every route. The GM and the Finance Manager are
+interchangeable for the second approval — either one is enough. Only the Bahrain Accountant's
+approval submits the document, and only that transition demands an attachment. Any pending
+state can be rejected with a comment, which returns the advice to Draft for correction.
+
+Which route an advice takes is decided in the Payment Advice controller and stored in its
+`approval_route` field; the transitions out of Draft test that field and nothing else, because
+PM Workflow runs conditions through frappe.safe_eval with almost no globals — a condition
+cannot count child rows. Note that Administrator is exempt from condition checks in the engine,
+so an advice with no stored route still looks fine when tested as Administrator and offers a
+real preparer nothing at all: `migrate_open_advices` exists to stamp the route on advices saved
+before the field existed.
 """
 
 import frappe
@@ -430,23 +444,40 @@ def migrate_open_advices(dry_run: int = 1):
         route = compute_approval_route(advice)
         target = ROUTE_ENTRY_STATE[route]
         current = advice.get("workflow_state")
+        stored_route = advice.get("approval_route")
 
-        if current in live_states:
-            planned.append({"advice": name, "route": route, "from": current, "to": current,
-                            "action": "left alone — already on a live state"})
-            continue
+        # Every open advice needs its route stamped, whether or not its state moves. An advice
+        # saved before the field existed carries no route, and every transition out of Draft
+        # tests that field — so without this the raiser is offered nothing at all and the advice
+        # cannot be sent for approval. (Administrator is exempt from condition checks, which is
+        # exactly why this is easy to miss when testing as Administrator.)
+        needs_route = (stored_route or None) != route
+        moves = current not in live_states
 
-        planned.append({"advice": name, "route": route, "from": current, "to": target,
-                        "action": "moved"})
+        planned.append({
+            "advice": name,
+            "route": route,
+            "from": current,
+            "to": target if moves else current,
+            "action": ", ".join(
+                filter(None, [
+                    "moved" if moves else None,
+                    "route stamped" if needs_route else None,
+                ])
+            ) or "left alone — already routed and on a live state",
+        })
 
-        if cint(dry_run):
+        if cint(dry_run) or not (needs_route or moves):
             continue
 
         # the route first, so the workflow's conditions agree with where it is being put
-        frappe.db.set_value("Payment Advice", name, {
-            "approval_route": route,
-            "workflow_state": target,
-        }, update_modified=False)
+        update = {"approval_route": route}
+        if moves:
+            update["workflow_state"] = target
+        frappe.db.set_value("Payment Advice", name, update, update_modified=False)
+
+        if not moves:
+            continue
 
         # close what belonged to the retired state — those actions can never be completed
         stale = frappe.get_all(
@@ -484,7 +515,9 @@ def migrate_open_advices(dry_run: int = 1):
 
     return {
         "dry_run": bool(cint(dry_run)),
-        "count": len([p for p in planned if p["action"] == "moved"]),
+        "moved": len([p for p in planned if "moved" in p["action"]]),
+        "routed": len([p for p in planned if "route stamped" in p["action"]]),
+        "count": len([p for p in planned if p["action"].startswith(("moved", "route stamped"))]),
         "advices": planned,
     }
 
