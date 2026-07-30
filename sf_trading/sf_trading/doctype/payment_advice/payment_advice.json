@@ -16,6 +16,7 @@
   "mode_of_payment",
   "status",
   "workflow_state",
+  "approval_route",
   "auto_generated",
   "party_section",
   "party_type",
@@ -137,6 +138,16 @@
    "no_copy": 1,
    "options": "Workflow State",
    "read_only": 1
+  },
+  {
+   "fieldname": "approval_route",
+   "fieldtype": "Select",
+   "label": "Approval Route",
+   "options": "\nAccountant\nPurchase Manager\nHO Accounts\nFinance",
+   "read_only": 1,
+   "no_copy": 1,
+   "in_standard_filter": 1,
+   "description": "Worked out from the references when the advice is saved, and read by the approval workflow to decide who signs it off."
   },
   {
    "default": "0",
@@ -467,7 +478,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-07-26 09:00:00.000000",
+ "modified": "2026-07-30 07:00:00",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "Payment Advice",

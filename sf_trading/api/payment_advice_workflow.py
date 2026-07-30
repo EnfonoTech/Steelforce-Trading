@@ -31,15 +31,39 @@ WORKFLOW_NAME = "Payment Advice Approval"
 DOCTYPE = "Payment Advice"
 
 STATE_DRAFT = "Draft"
-STATE_PENDING = "Pending Approval"
+STATE_PENDING = "Pending Approval"          # retired — kept so old documents can be migrated
+STATE_PENDING_PURCHASE = "Pending Purchase Manager"
+STATE_PENDING_HO = "Pending HO Accounts"
+STATE_PENDING_FINANCE = "Pending Finance"
+STATE_PENDING_ACCOUNTANT = "Pending Accountant"
 STATE_APPROVED = "Approved"
 STATE_REJECTED = "Rejected"
 
-# Roles are the live Payment Request Approval's, unchanged: the raiser sends it up, the
-# Accountant approves. Keeping them identical means one approval convention across both
-# documents rather than two rules staff have to remember.
-ROLE_PREPARER = "Purchase User"
-ROLE_APPROVER = "Accountant"
+# Who raises an advice
+ROLE_BRANCH_HEAD = "Branch Head"
+ROLE_PURCHASE_ASSISTANT = "Purchase Assistant"
+PREPARER_ROLES = (ROLE_BRANCH_HEAD, ROLE_PURCHASE_ASSISTANT)
+
+# Who signs it off
+ROLE_PURCHASE_MANAGER = "Purchase Manager"
+ROLE_HO_ACCOUNTS = "HO Accounts"
+ROLE_GM = "General Manager"
+ROLE_FINANCE_MANAGER = "Finance Manager"
+FINANCE_ROLES = (ROLE_GM, ROLE_FINANCE_MANAGER)   # either may give the second approval
+ROLE_APPROVER = "Bahrain Accountant"              # always the last pair of eyes
+
+# The four routes, matching sf_trading.sf_trading.doctype.payment_advice.payment_advice.
+# Each names the state an advice enters when it leaves Draft.
+ROUTE_ENTRY_STATE = {
+    "Accountant": STATE_PENDING_ACCOUNTANT,
+    "Purchase Manager": STATE_PENDING_PURCHASE,
+    "HO Accounts": STATE_PENDING_HO,
+    "Finance": STATE_PENDING_FINANCE,
+}
+
+# Roles this workflow needs that are not part of a stock site. Everything else already
+# exists on the live site; only the final approver had no role of its own.
+ROLES_TO_CREATE = (ROLE_APPROVER,)
 
 
 def pm_workflow_available():
@@ -87,52 +111,159 @@ def _default_email_alert():
 
 
 def _states(company):
-    """Editable-by roles per state, mirroring the Payment Request workflow."""
+    """Every state the advice can sit in, and who may edit it there."""
     return [
-        {"state": STATE_DRAFT, "doc_status": "0", "allow_edit": ROLE_PREPARER},
-        {"state": STATE_PENDING, "doc_status": "0", "allow_edit": ROLE_APPROVER},
+        {"state": STATE_DRAFT, "doc_status": "0", "allow_edit": ROLE_BRANCH_HEAD},
+        {"state": STATE_PENDING_PURCHASE, "doc_status": "0", "allow_edit": ROLE_PURCHASE_MANAGER},
+        {"state": STATE_PENDING_HO, "doc_status": "0", "allow_edit": ROLE_HO_ACCOUNTS},
+        {"state": STATE_PENDING_FINANCE, "doc_status": "0", "allow_edit": ROLE_FINANCE_MANAGER},
+        {"state": STATE_PENDING_ACCOUNTANT, "doc_status": "0", "allow_edit": ROLE_APPROVER},
         {"state": STATE_APPROVED, "doc_status": "1", "allow_edit": ROLE_APPROVER},
-        {"state": STATE_REJECTED, "doc_status": "0", "allow_edit": ROLE_PREPARER},
+        {"state": STATE_REJECTED, "doc_status": "0", "allow_edit": ROLE_BRANCH_HEAD},
     ]
 
 
 def _transitions(company):
-    return [
-        {
-            "state": STATE_DRAFT,
-            "action": "Send for Approval",
-            "next_state": STATE_PENDING,
-            "allowed": ROLE_PREPARER,
-            "allow_self_approval": 1,
-        },
-        {
-            "state": STATE_PENDING,
+    """The four routes out of Draft, converging on Finance → Accountant.
+
+        several POs      Draft → Purchase Manager ┐
+        overdue invoice  Draft → HO Accounts      ├→ Finance (GM or Finance Manager) → Accountant → Approved
+        over the limit   Draft ────────────────────┘
+        one PO / small   Draft ──────────────────────────────────────────────────────→ Accountant → Approved
+
+    Which one an advice takes is decided when it is saved and stored in `approval_route`;
+    the conditions below only compare that string, because PM Workflow evaluates them through
+    frappe.safe_eval with almost no globals — there is no counting rows from here.
+    """
+    transitions = []
+
+    # ── leaving Draft (and leaving Rejected after a correction) ────────────────────
+    for route, entry_state in ROUTE_ENTRY_STATE.items():
+        condition = 'doc.approval_route == "%s"' % route
+        for from_state in (STATE_DRAFT, STATE_REJECTED):
+            for role in PREPARER_ROLES:
+                transitions.append({
+                    "state": from_state,
+                    "action": "Send for Approval",
+                    "next_state": entry_state,
+                    "allowed": role,
+                    "condition": condition,
+                    "allow_self_approval": 1,
+                })
+
+    # ── first approval, per route ──────────────────────────────────────────────────
+    transitions.append({
+        "state": STATE_PENDING_PURCHASE,
+        "action": "Approve",
+        "next_state": STATE_PENDING_FINANCE,
+        "allowed": ROLE_PURCHASE_MANAGER,
+        "allow_self_approval": 0,
+    })
+    transitions.append({
+        "state": STATE_PENDING_HO,
+        "action": "Approve",
+        "next_state": STATE_PENDING_FINANCE,
+        "allowed": ROLE_HO_ACCOUNTS,
+        "allow_self_approval": 0,
+    })
+
+    # ── second approval: either the GM or the Finance Manager, one is enough ───────
+    for role in FINANCE_ROLES:
+        transitions.append({
+            "state": STATE_PENDING_FINANCE,
             "action": "Approve",
-            "next_state": STATE_APPROVED,
-            "allowed": ROLE_APPROVER,
-            # same discipline as Payment Request: an approval carries its paperwork
-            "require_attachment": 1,
-            # the field defaults to 1, and Payment Request Approval leaves it off here: whoever
-            # raised the advice must not be the one approving it, even holding the approver role
+            "next_state": STATE_PENDING_ACCOUNTANT,
+            "allowed": role,
             "allow_self_approval": 0,
-        },
-        {
-            "state": STATE_PENDING,
+        })
+
+    # ── the last pair of eyes, and the only transition that submits ───────────────
+    transitions.append({
+        "state": STATE_PENDING_ACCOUNTANT,
+        "action": "Approve",
+        "next_state": STATE_APPROVED,
+        "allowed": ROLE_APPROVER,
+        # the paperwork is required once, where the money is released — asking every
+        # intermediate approver to attach the same slip only trains people to attach noise
+        "require_attachment": 1,
+        "allow_self_approval": 0,
+    })
+
+    # ── rejection, available to whoever is holding it ─────────────────────────────
+    rejecters = (
+        (STATE_PENDING_PURCHASE, ROLE_PURCHASE_MANAGER),
+        (STATE_PENDING_HO, ROLE_HO_ACCOUNTS),
+        (STATE_PENDING_FINANCE, ROLE_GM),
+        (STATE_PENDING_FINANCE, ROLE_FINANCE_MANAGER),
+        (STATE_PENDING_ACCOUNTANT, ROLE_APPROVER),
+    )
+    for state, role in rejecters:
+        transitions.append({
+            "state": state,
             "action": "Reject",
             "next_state": STATE_REJECTED,
-            "allowed": ROLE_APPROVER,
+            "allowed": role,
             "require_comment": 1,
             "is_return_for_correction": 1,
             "allow_self_approval": 0,
-        },
-        {
-            "state": STATE_REJECTED,
-            "action": "Send for Approval",
-            "next_state": STATE_PENDING,
-            "allowed": ROLE_PREPARER,
-            "allow_self_approval": 1,
-        },
+        })
+
+    return transitions
+
+
+def ensure_roles():
+    """Create the roles this workflow needs that a stock site does not have.
+
+    Only the final approver is new; Branch Head, Purchase Assistant, Purchase Manager,
+    HO Accounts, General Manager and Finance Manager already exist on the live site. A role is
+    created empty — who holds it is the client's decision, not a deploy's, and an advice
+    cannot reach its last state until somebody is given it.
+    """
+    created = []
+    for role in ROLES_TO_CREATE:
+        if frappe.db.exists("Role", role):
+            continue
+        frappe.get_doc({
+            "doctype": "Role",
+            "role_name": role,
+            "desk_access": 1,
+        }).insert(ignore_permissions=True)
+        created.append(role)
+
+    if created:
+        frappe.db.commit()
+
+    return created
+
+
+@frappe.whitelist()
+def route_readiness():
+    """Can every state of this workflow actually be reached? Who is missing?
+
+    An approval chain with a role nobody holds strands documents in that state with no way
+    forward, which is worse than no workflow at all — so this is worth checking before the
+    workflow goes live and after any staff change.
+    """
+    from frappe.utils.user import get_users_with_role
+
+    roles = list(PREPARER_ROLES) + [
+        ROLE_PURCHASE_MANAGER, ROLE_HO_ACCOUNTS, ROLE_GM, ROLE_FINANCE_MANAGER, ROLE_APPROVER
     ]
+    holders = {}
+    for role in roles:
+        holders[role] = get_users_with_role(role) if frappe.db.exists("Role", role) else []
+
+    # the second approval needs only one of the two finance roles between them
+    finance_cover = holders.get(ROLE_GM, []) + holders.get(ROLE_FINANCE_MANAGER, [])
+    blocking = [role for role in roles if role not in FINANCE_ROLES and not holders[role]]
+    if not finance_cover:
+        blocking.append("%s / %s" % (ROLE_GM, ROLE_FINANCE_MANAGER))
+
+    return {
+        "ready": not blocking,
+        "unstaffed_roles": blocking,
+        "holders": {role: len(users) for role, users in holders.items()},
+    }
 
 
 @frappe.whitelist()
@@ -154,9 +285,19 @@ def setup_workflow(company: str = None, force: int = 0):
     if not company:
         frappe.throw(_("Company is required."))
 
-    for role in (ROLE_PREPARER, ROLE_APPROVER):
-        if not frappe.db.exists("Role", role):
-            frappe.throw(_("Role %s does not exist on this site.") % frappe.bold(role))
+    created_roles = ensure_roles()
+
+    missing = [
+        role
+        for role in PREPARER_ROLES
+        + (ROLE_PURCHASE_MANAGER, ROLE_HO_ACCOUNTS, ROLE_APPROVER)
+        + FINANCE_ROLES
+        if not frappe.db.exists("Role", role)
+    ]
+    if missing:
+        frappe.throw(
+            _("These roles do not exist on this site: %s") % frappe.bold(", ".join(missing))
+        )
 
     existing = frappe.db.exists("PM Workflow", WORKFLOW_NAME)
     if existing and not cint(force):
@@ -209,10 +350,96 @@ def setup_workflow(company: str = None, force: int = 0):
         "created": not bool(existing),
         "rebuilt": bool(existing and cint(force)),
         "workflow": doc.name,
+        "roles_created": created_roles,
+        "readiness": route_readiness(),
         "states": [s.state for s in doc.states],
         "transitions": ["%s → %s (%s)" % (t.state, t.next_state, t.action) for t in doc.transitions],
         "message": _("%s is active. Payment Advice submission is now controlled by the workflow.")
         % doc.name,
+    }
+
+
+@frappe.whitelist()
+def migrate_open_advices(dry_run: int = 1):
+    """Move the advices already in flight onto the new routes.
+
+    Every draft was sitting in the retired "Pending Approval" state, which the new workflow
+    does not define — left alone they would have no transitions at all and could never be
+    approved. Each one is re-stamped with the route its own references imply and moved to that
+    route's first state, and the actions belonging to the old state are closed so nobody is
+    asked twice.
+
+    Runs as a dry run by default: pass dry_run=0 to write. Replaying it is safe — an advice
+    already sitting in a state the new workflow defines is left exactly as it is.
+    """
+    frappe.only_for(("System Manager", "Accounts Manager"))
+
+    from sf_trading.sf_trading.doctype.payment_advice.payment_advice import compute_approval_route
+
+    live_states = set(ROUTE_ENTRY_STATE.values()) | {STATE_DRAFT, STATE_REJECTED, STATE_APPROVED}
+    planned = []
+
+    for name in frappe.get_all("Payment Advice", filters={"docstatus": 0}, pluck="name"):
+        advice = frappe.get_doc("Payment Advice", name)
+        route = compute_approval_route(advice)
+        target = ROUTE_ENTRY_STATE[route]
+        current = advice.get("workflow_state")
+
+        if current in live_states:
+            planned.append({"advice": name, "route": route, "from": current, "to": current,
+                            "action": "left alone — already on a live state"})
+            continue
+
+        planned.append({"advice": name, "route": route, "from": current, "to": target,
+                        "action": "moved"})
+
+        if cint(dry_run):
+            continue
+
+        # the route first, so the workflow's conditions agree with where it is being put
+        frappe.db.set_value("Payment Advice", name, {
+            "approval_route": route,
+            "workflow_state": target,
+        }, update_modified=False)
+
+        # close what belonged to the retired state — those actions can never be completed
+        stale = frappe.get_all(
+            "PM Workflow Action",
+            filters={
+                "reference_doctype": DOCTYPE,
+                "reference_name": name,
+                "status": ["in", ["Open", "Forwarded"]],
+                "workflow_state": ["not in", list(live_states)],
+            },
+            pluck="name",
+        )
+        for action in stale:
+            frappe.db.set_value("PM Workflow Action", action, {
+                "status": "Completed",
+                "completed_by": frappe.session.user,
+            }, update_modified=False)
+
+        # and let the engine raise the actions for the state it is now in
+        try:
+            from permission_manager.permission_manager.doctype.pm_workflow_action.pm_workflow_action import (
+                process_workflow_actions,
+            )
+
+            advice.reload()
+            process_workflow_actions(advice, "on_update")
+        except Exception:
+            frappe.log_error(
+                message=frappe.get_traceback(),
+                title="sf_trading: could not raise workflow actions for %s" % name,
+            )
+
+    if not cint(dry_run):
+        frappe.db.commit()
+
+    return {
+        "dry_run": bool(cint(dry_run)),
+        "count": len([p for p in planned if p["action"] == "moved"]),
+        "advices": planned,
     }
 
 

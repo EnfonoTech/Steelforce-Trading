@@ -39,6 +39,20 @@ PAY_PARTY_TYPES = ("Supplier",)
 RECEIVE_PARTY_TYPES = ("Customer",)
 PARTY_TYPES = PAY_PARTY_TYPES + RECEIVE_PARTY_TYPES
 
+# ── Approval routing ──────────────────────────────────────────────────────────────────
+# Which approvers an advice needs depends on what it pays for. The decision is worked out
+# here and stored on the document, because the approval workflow's conditions run through
+# frappe.safe_eval with a deliberately tiny globals set — no len(), no flt(), no way to walk
+# the references table. A condition can compare a stored string and nothing more.
+ROUTE_ACCOUNTANT = "Accountant"            # straight to the Bahrain Accountant
+ROUTE_PURCHASE_MANAGER = "Purchase Manager"  # several POs: Purchase Manager, then Finance
+ROUTE_HO_ACCOUNTS = "HO Accounts"          # overdue invoices: HO Accounts, then Finance
+ROUTE_FINANCE = "Finance"                  # over the limit: GM or Finance Manager
+
+# Above this, an advice against invoices that are not overdue still needs GM/Finance sign-off.
+# At exactly the limit the approval is required: the rule reads "less than 500 goes direct".
+FINANCE_APPROVAL_LIMIT = 500.0
+
 # Reference types per party type, copied from ERPNext's own Payment Entry
 # (PaymentEntry.get_valid_reference_doctypes) so an advice can never carry a reference its
 # Payment Entry would later reject. Enforced server-side as well as in the form, because a
@@ -85,7 +99,13 @@ class PaymentAdvice(Document):
         self.validate_payment_amount()
         self.allocate_payment()
         self.set_words()
+        self.set_approval_route()
         self.set_status()
+
+    def set_approval_route(self):
+        """Stamp which approval route this advice takes, for the workflow to read."""
+        if self.meta.has_field("approval_route"):
+            self.approval_route = compute_approval_route(self)
 
     def before_submit(self):
         self.validate_approver()
@@ -486,6 +506,69 @@ def workflow_controls_submission(company=None):
     except Exception:
         # never let an approval-mode probe block a save
         return False
+
+
+# ── Approval routing ─────────────────────────────────────────────────────────────
+
+def compute_approval_route(advice):
+    """Which approval route this advice takes, from what it is paying for.
+
+    The rules, in the order they are tested:
+
+      1. any overdue Purchase Invoice   → HO Accounts, then GM/Finance, then the Accountant
+      2. more than one Purchase Order   → Purchase Manager, then GM/Finance, then the Accountant
+      3. exactly one Purchase Order     → straight to the Accountant
+      4. invoices, none overdue:
+           under the limit              → straight to the Accountant
+           at or over the limit         → GM/Finance, then the Accountant
+
+    An advice may mix orders and invoices, which the rules above do not name. Overdue wins,
+    because an overdue payable is the case the extra scrutiny exists for; the order count is
+    tested next, and the amount rule last. The longest route wins any tie, deliberately: the
+    failure worth avoiding is money leaving with too few approvals, not too many.
+    """
+    rows = [r for r in (advice.get("payment_advice_reference") or []) if r.get("reference_record")]
+
+    invoices = [r.reference_record for r in rows if r.reference_doctype == "Purchase Invoice"]
+    orders = [r.reference_record for r in rows if r.reference_doctype == "Purchase Order"]
+
+    if invoices and _has_overdue_invoice(invoices):
+        return ROUTE_HO_ACCOUNTS
+
+    if len(orders) > 1:
+        return ROUTE_PURCHASE_MANAGER
+
+    if orders and not invoices:
+        # a single order, nothing else — the simple case the rule sends straight through
+        return ROUTE_ACCOUNTANT
+
+    if flt(advice.get("payment_amount")) < FINANCE_APPROVAL_LIMIT:
+        return ROUTE_ACCOUNTANT
+
+    return ROUTE_FINANCE
+
+
+def _has_overdue_invoice(invoice_names):
+    """Is any of these Purchase Invoices past its due date with money still on it?
+
+    One query for the whole table — a per-row lookup here would run once per reference on
+    every save of every advice.
+    """
+    if not invoice_names:
+        return False
+
+    today = getdate(nowdate())
+    for invoice in frappe.get_all(
+        "Purchase Invoice",
+        filters={"name": ["in", list(set(invoice_names))], "docstatus": 1},
+        fields=["name", "due_date", "outstanding_amount"],
+    ):
+        if not invoice.due_date:
+            continue
+        if getdate(invoice.due_date) < today and flt(invoice.outstanding_amount) > 0:
+            return True
+
+    return False
 
 
 # ── Payment Entry creation ───────────────────────────────────────────────────────
