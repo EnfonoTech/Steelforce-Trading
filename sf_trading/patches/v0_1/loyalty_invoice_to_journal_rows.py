@@ -39,7 +39,9 @@ ROW_FIELD = {
     "in_list_view": 1,
     "columns": 2,
     "allow_on_submit": 1,
-    "depends_on": 'eval:parent.from_template=="%s"' % TEMPLATE,
+    "depends_on": (
+        'eval:parent.from_template=="%s" && (doc.debit || doc.debit_in_account_currency)' % TEMPLATE
+    ),
     "mandatory_depends_on": (
         'eval:parent.from_template=="%s" && (doc.debit || doc.debit_in_account_currency)' % TEMPLATE
     ),
