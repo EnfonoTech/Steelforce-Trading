@@ -140,9 +140,14 @@ class TestPaymentAdviceWorkflowDefinition(FrappeTestCase):
 			self.assertNotIn("(", condition, condition)
 			self.assertTrue(condition.startswith("doc.approval_route =="), condition)
 
-	def test_paperwork_is_required_where_the_money_leaves(self):
-		final = next(t for t in _transitions("X") if t["next_state"] == STATE_APPROVED)
-		self.assertTrue(final.get("require_attachment"))
+	def test_the_initiator_attaches_the_paperwork(self):
+		"""The raiser holds the slip; approvers have nothing new to attach."""
+		raising = [t for t in _transitions("X") if t["action"] == "Send for Approval"]
+		self.assertTrue(raising)
+		for transition in raising:
+			self.assertTrue(transition.get("require_attachment"), transition["next_state"])
+		for transition in [t for t in _transitions("X") if t["action"] == "Approve"]:
+			self.assertFalse(transition.get("require_attachment"), transition["state"])
 		for reject in [t for t in _transitions("X") if t["action"] == "Reject"]:
 			self.assertTrue(reject.get("require_comment"))
 			self.assertTrue(reject.get("is_return_for_correction"))

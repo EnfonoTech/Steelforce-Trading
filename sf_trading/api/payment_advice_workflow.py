@@ -21,12 +21,14 @@ same two final approvals:
     several Purchase Orders   Draft → Purchase Manager ┐
     any overdue invoice       Draft → HO Accounts      ├→ GM or Finance Manager → Bahrain Accountant → Approved
     invoices over BHD 500     Draft ───────────────────┘
-    one PO, or under BHD 500  Draft ──────────────────────────────────────────────→ Bahrain Accountant → Approved
+    one PO, or BHD 500 or less  Draft ──────────────────────────────────────────────→ Bahrain Accountant → Approved
 
-Branch Head and Purchase Assistant raise on every route. The GM and the Finance Manager are
+Branch Head and Purchase Assistant raise on every route, and must attach the paperwork when
+they do — the payment slip or supporting statement belongs to whoever raises the advice, not to
+an approver further up who has nothing new to attach. The GM and the Finance Manager are
 interchangeable for the second approval — either one is enough. Only the Bahrain Accountant's
-approval submits the document, and only that transition demands an attachment. Any pending
-state can be rejected with a comment, which returns the advice to Draft for correction.
+approval submits the document. Any pending state can be rejected with a comment, which returns
+the advice to Draft for correction.
 
 Which route an advice takes is decided in the Payment Advice controller and stored in its
 `approval_route` field; the transitions out of Draft test that field and nothing else, because
@@ -162,6 +164,10 @@ def _transitions(company):
                     "next_state": entry_state,
                     "allowed": role,
                     "condition": condition,
+                    # the paperwork belongs to whoever raises the advice — payment slip,
+                    # supporting invoice, outstanding statement. An approver further up the
+                    # chain has nothing to attach that the initiator did not already have.
+                    "require_attachment": 1,
                     "allow_self_approval": 1,
                 })
 
@@ -197,9 +203,6 @@ def _transitions(company):
         "action": "Approve",
         "next_state": STATE_APPROVED,
         "allowed": ROLE_APPROVER,
-        # the paperwork is required once, where the money is released — asking every
-        # intermediate approver to attach the same slip only trains people to attach noise
-        "require_attachment": 1,
         "allow_self_approval": 0,
     })
 

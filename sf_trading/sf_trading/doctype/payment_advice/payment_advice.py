@@ -50,7 +50,7 @@ ROUTE_HO_ACCOUNTS = "HO Accounts"          # overdue invoices: HO Accounts, then
 ROUTE_FINANCE = "Finance"                  # over the limit: GM or Finance Manager
 
 # Above this, an advice against invoices that are not overdue still needs GM/Finance sign-off.
-# At exactly the limit the approval is required: the rule reads "less than 500 goes direct".
+# The rule is "more than BHD 500", so the limit itself goes straight through.
 FINANCE_APPROVAL_LIMIT = 500.0
 
 # Reference types per party type, copied from ERPNext's own Payment Entry
@@ -519,8 +519,8 @@ def compute_approval_route(advice):
       2. more than one Purchase Order   → Purchase Manager, then GM/Finance, then the Accountant
       3. exactly one Purchase Order     → straight to the Accountant
       4. invoices, none overdue:
-           under the limit              → straight to the Accountant
-           at or over the limit         → GM/Finance, then the Accountant
+           BHD 500 or less              → straight to the Accountant
+           more than BHD 500            → GM or Finance Manager, then the Accountant
 
     An advice may mix orders and invoices, which the rules above do not name. Overdue wins,
     because an overdue payable is the case the extra scrutiny exists for; the order count is
@@ -542,7 +542,7 @@ def compute_approval_route(advice):
         # a single order, nothing else — the simple case the rule sends straight through
         return ROUTE_ACCOUNTANT
 
-    if flt(advice.get("payment_amount")) < FINANCE_APPROVAL_LIMIT:
+    if flt(advice.get("payment_amount")) <= FINANCE_APPROVAL_LIMIT:
         return ROUTE_ACCOUNTANT
 
     return ROUTE_FINANCE

@@ -5,7 +5,7 @@ The rules under test:
   * any overdue Purchase Invoice   → HO Accounts route
   * more than one Purchase Order   → Purchase Manager route
   * exactly one Purchase Order     → straight to the Accountant
-  * invoices, none overdue         → Accountant under the limit, Finance at or over it
+  * invoices, none overdue         → Accountant at BHD 500 or less, Finance above it
 
 Nothing is saved. Each test builds an unsaved advice and calls compute_approval_route directly,
 so a client site's advices and approvals are untouched. Real Purchase Invoices are borrowed
@@ -98,7 +98,7 @@ class TestPaymentAdviceRouting(FrappeTestCase):
             self.skipTest("no Purchase Invoice due today or later on this site")
         advice = _advice(
             [{"reference_doctype": "Purchase Invoice", "reference_record": invoice}],
-            payment_amount=FINANCE_APPROVAL_LIMIT - 1,
+            payment_amount=FINANCE_APPROVAL_LIMIT - 0.001,
         )
         self.assertEqual(compute_approval_route(advice), ROUTE_ACCOUNTANT)
 
@@ -108,12 +108,12 @@ class TestPaymentAdviceRouting(FrappeTestCase):
             self.skipTest("no Purchase Invoice due today or later on this site")
         advice = _advice(
             [{"reference_doctype": "Purchase Invoice", "reference_record": invoice}],
-            payment_amount=FINANCE_APPROVAL_LIMIT + 1,
+            payment_amount=FINANCE_APPROVAL_LIMIT + 0.001,
         )
         self.assertEqual(compute_approval_route(advice), ROUTE_FINANCE)
 
-    def test_exactly_the_limit_needs_finance(self):
-        """The rule reads 'less than 500 goes direct', so 500 itself does not."""
+    def test_exactly_the_limit_goes_straight_through(self):
+        """The rule reads 'more than 500 needs Finance', so 500 itself does not."""
         invoice = _invoice(overdue=False)
         if not invoice:
             self.skipTest("no Purchase Invoice due today or later on this site")
@@ -121,7 +121,7 @@ class TestPaymentAdviceRouting(FrappeTestCase):
             [{"reference_doctype": "Purchase Invoice", "reference_record": invoice}],
             payment_amount=FINANCE_APPROVAL_LIMIT,
         )
-        self.assertEqual(compute_approval_route(advice), ROUTE_FINANCE)
+        self.assertEqual(compute_approval_route(advice), ROUTE_ACCOUNTANT)
 
     def test_no_references_falls_back_to_the_amount_rule(self):
         self.assertEqual(compute_approval_route(_advice([], payment_amount=10.0)), ROUTE_ACCOUNTANT)
