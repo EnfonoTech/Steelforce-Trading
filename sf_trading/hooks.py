@@ -415,6 +415,7 @@ fixtures = [
 					"Sales Invoice-custom_sale_type",
 					"Purchase Receipt-custom_billing_approval_status",
 					"Purchase Taxes and Charges Template-custom_for_foreign_currency",
+					"Purchase Taxes and Charges Template-custom_for_no_tax_id_supplier",
 					"Customer-custom_vat_registration_number",
 					"Sales Invoice-custom_credit_limit",
 					"Sales Invoice-custom_contact_expairy_date",
