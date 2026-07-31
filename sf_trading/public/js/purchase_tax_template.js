@@ -35,20 +35,32 @@
 			apply_template_by_currency(frm);
 			return;
 		}
-		frappe.db.get_value("Supplier", frm.doc.supplier, "default_currency").then((r) => {
-			const supplier_currency = r.message && r.message.default_currency;
-			if (supplier_currency) {
-				apply_template_by_currency(frm);
-				return;
-			}
-			frappe.db.get_value("Company", frm.doc.company, "default_currency").then((cr) => {
-				const company_currency = cr.message && cr.message.default_currency;
-				if (company_currency && frm.doc.currency !== company_currency) {
-					frm.set_value("currency", company_currency).then(() => apply_template_by_currency(frm));
-				} else {
-					apply_template_by_currency(frm);
+		Promise.all([
+			frappe.db.get_value("Supplier", frm.doc.supplier, ["default_currency", "tax_id"]),
+			frappe.db.get_value("Company", frm.doc.company, "default_currency"),
+		]).then(([supplier_r, company_r]) => {
+			const supplier_currency = supplier_r.message && supplier_r.message.default_currency;
+			const supplier_tax_id = supplier_r.message && supplier_r.message.tax_id;
+			const company_currency = company_r.message && company_r.message.default_currency;
+
+			const finish = () => {
+				// The no-tax-id template only applies for same-currency (local) purchases.
+				const is_local = company_currency && frm.doc.currency === company_currency;
+				if (is_local && !supplier_tax_id) {
+					frappe.msgprint(
+						__("{0} has no Tax ID, so this purchase will be taxed at 0% VAT.", [
+							frappe.utils.escape_html(frm.doc.supplier),
+						])
+					);
 				}
-			});
+				apply_template_by_currency(frm);
+			};
+
+			if (!supplier_currency && company_currency && frm.doc.currency !== company_currency) {
+				frm.set_value("currency", company_currency).then(finish);
+			} else {
+				finish();
+			}
 		});
 	}
 

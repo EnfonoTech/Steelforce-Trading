@@ -90,15 +90,14 @@ def sales_invoice_on_submit(doc, method=None):
 
 
 def _apply_default_purchase_taxes(pi, branch_data: dict) -> None:
-	"""Fetch default Purchase Taxes and Charges Template and fill the taxes table."""
+	"""Fetch the Purchase Taxes and Charges Template (currency + supplier tax-id
+	aware, same rule as manual Purchase Invoices — see purchase_tax_template.py)
+	and fill the taxes table."""
 	from erpnext.controllers.accounts_controller import get_taxes_and_charges
 
-	company = pi.company
-	template = frappe.db.get_value(
-		"Purchase Taxes and Charges Template",
-		{"is_default": 1, "company": company},
-		"name",
-	)
+	from sf_trading.purchase_tax_template import get_expected_template
+
+	template = get_expected_template(pi.company, pi.currency, pi.supplier)
 	if not template:
 		return
 	pi.taxes_and_charges = template
