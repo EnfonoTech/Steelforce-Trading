@@ -72,6 +72,10 @@ ROLE_FINANCE_MANAGER = "Finance Manager"
 FINANCE_ROLES = (ROLE_GM, ROLE_FINANCE_MANAGER)   # either may give the second approval
 ROLE_APPROVER = "Bahrain Accountant"              # always the last pair of eyes
 
+# Read from the controller so the figure exists in exactly one place. It is written into the
+# transition conditions below, which is where anyone looking for "the BHD 500 rule" will look.
+from sf_trading.sf_trading.doctype.payment_advice.payment_advice import FINANCE_APPROVAL_LIMIT
+
 # The four routes, matching sf_trading.sf_trading.doctype.payment_advice.payment_advice.
 # Each names the state an advice enters when it leaves Draft.
 ROUTE_ENTRY_STATE = {
@@ -157,20 +161,45 @@ def _transitions(company):
     """
     transitions = []
 
+    # The limit, written into the conditions rather than hidden in Python, so it can be read
+    # and changed from the PM Workflow screen. `or 0` because an empty amount would otherwise
+    # raise inside safe_eval and the transition would silently disappear.
+    within_limit = "(doc.payment_amount or 0) <= %g" % FINANCE_APPROVAL_LIMIT
+    over_limit = "(doc.payment_amount or 0) > %g" % FINANCE_APPROVAL_LIMIT
+
     # ── leaving Draft (and leaving Rejected after a correction) ────────────────────
     for route, entry_state in ROUTE_ENTRY_STATE.items():
         condition = 'doc.approval_route == "%s"' % route
+        direct = entry_state == STATE_PENDING_ACCOUNTANT
         for from_state in (STATE_DRAFT, STATE_REJECTED):
             for role in PREPARER_ROLES:
+                cond = condition
+                # The accountant is the only approver on the direct route, so an advice they
+                # raise there is one they would release alone. Within the limit that is the
+                # delegation the limit grants. Over it, the row below sends it to Finance
+                # instead, so somebody else approves before it reaches their own desk.
+                if direct and role == ROLE_APPROVER:
+                    cond = "%s and %s" % (condition, within_limit)
                 transitions.append({
                     "state": from_state,
                     "action": "Send for Approval",
                     "next_state": entry_state,
                     "allowed": role,
-                    "condition": condition,
+                    "condition": cond,
                     # the paperwork belongs to whoever raises the advice — payment slip,
                     # supporting invoice, outstanding statement. An approver further up the
                     # chain has nothing to attach that the initiator did not already have.
+                    "require_attachment": 1,
+                    "allow_self_approval": 1,
+                })
+
+            if direct:
+                transitions.append({
+                    "state": from_state,
+                    "action": "Send for Approval",
+                    "next_state": STATE_PENDING_FINANCE,
+                    "allowed": ROLE_APPROVER,
+                    "condition": "%s and %s" % (condition, over_limit),
                     "require_attachment": 1,
                     "allow_self_approval": 1,
                 })

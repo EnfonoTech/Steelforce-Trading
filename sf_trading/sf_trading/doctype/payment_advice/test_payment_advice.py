@@ -432,52 +432,66 @@ class TestCreateAdvicesFromDocuments(FrappeTestCase):
         )
         self.assertGreater(flt(advice.payment_amount), 0)
 
-    # ── who raised it changes the route, when the raiser is also the final approver ──
+    # ── the amount rules live in the workflow conditions, not in Python ─────────────
 
-    def _route_for(self, owner_roles, amount, rows):
-        """compute the stamped route for an advice owned by someone with these roles."""
-        import sf_trading.sf_trading.doctype.payment_advice.payment_advice as pa
+    def _sends(self):
+        from sf_trading.api import payment_advice_workflow as wf
 
-        advice = frappe._dict({
-            "owner": "route-test@example.com",
-            "payment_amount": amount,
-            "payment_advice_reference": [frappe._dict(r) for r in rows],
-        })
-        original = frappe.get_roles
-        frappe.get_roles = lambda user=None: list(owner_roles)
-        try:
-            route = pa.compute_approval_route(advice)
-            if (
-                route == pa.ROUTE_ACCOUNTANT
-                and flt(advice.payment_amount) > pa.FINANCE_APPROVAL_LIMIT
-                and pa._raised_by_final_approver(advice)
-            ):
-                route = pa.ROUTE_FINANCE
-            return route
-        finally:
-            frappe.get_roles = original
-
-    def test_accountant_raising_a_small_advice_goes_straight_through(self):
-        """At or below the limit the accountant may raise and release it alone."""
-        rows = [{"reference_doctype": "Purchase Order", "reference_record": "PO-1"}]
-        self.assertEqual(self._route_for(["Bahrain Accountant"], 500, rows), "Accountant")
-
-    def test_accountant_raising_a_large_advice_is_escalated(self):
-        """Above the limit a second person must see it, even on the single-order route."""
-        rows = [{"reference_doctype": "Purchase Order", "reference_record": "PO-1"}]
-        self.assertEqual(self._route_for(["Bahrain Accountant"], 500.001, rows), "Finance")
-
-    def test_a_large_single_order_from_anyone_else_is_untouched(self):
-        """The escalation is about who raised it, not about the amount alone."""
-        rows = [{"reference_doctype": "Purchase Order", "reference_record": "PO-1"}]
-        self.assertEqual(self._route_for(["Branch Head"], 50000, rows), "Accountant")
-
-    def test_escalation_does_not_shorten_a_longer_route(self):
-        """An advice already going the long way round is not pulled back to Finance."""
-        rows = [
-            {"reference_doctype": "Purchase Order", "reference_record": "PO-1"},
-            {"reference_doctype": "Purchase Order", "reference_record": "PO-2"},
+        return [
+            t for t in wf._transitions("Steel Force Trading WLL")
+            if t["action"] == "Send for Approval" and t["state"] == "Draft"
         ]
-        self.assertEqual(
-            self._route_for(["Bahrain Accountant"], 90000, rows), "Purchase Manager"
+
+    def test_the_accountant_can_raise_an_advice(self):
+        """The role appears on both sides of the chain."""
+        from sf_trading.api import payment_advice_workflow as wf
+
+        self.assertIn(wf.ROLE_APPROVER, wf.PREPARER_ROLES)
+        raisers = {t["allowed"] for t in self._sends()}
+        self.assertIn(wf.ROLE_APPROVER, raisers)
+
+    def test_the_accountants_direct_route_is_capped_at_the_limit(self):
+        """Their own straight-through row only applies at or below the limit."""
+        from sf_trading.api import payment_advice_workflow as wf
+
+        rows = [
+            t for t in self._sends()
+            if t["allowed"] == wf.ROLE_APPROVER and t["next_state"] == "Pending Accountant"
+        ]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("<= 500", rows[0]["condition"])
+        self.assertIn('doc.approval_route == "Accountant"', rows[0]["condition"])
+
+    def test_the_accountants_large_direct_advice_goes_to_finance(self):
+        """Over the limit somebody else approves before it reaches their own desk."""
+        from sf_trading.api import payment_advice_workflow as wf
+
+        rows = [
+            t for t in self._sends()
+            if t["allowed"] == wf.ROLE_APPROVER
+            and t["next_state"] == "Pending Finance"
+            and "Accountant" in (t["condition"] or "")
+        ]
+        self.assertEqual(len(rows), 1)
+        self.assertIn("> 500", rows[0]["condition"])
+
+    def test_the_other_preparers_are_not_capped(self):
+        """The limit is about who raised it; Branch Head and Purchase Assistant are unaffected."""
+        from sf_trading.api import payment_advice_workflow as wf
+
+        for role in (wf.ROLE_BRANCH_HEAD, wf.ROLE_PURCHASE_ASSISTANT):
+            rows = [
+                t for t in self._sends()
+                if t["allowed"] == role and t["next_state"] == "Pending Accountant"
+            ]
+            self.assertEqual(len(rows), 1, role)
+            self.assertNotIn("payment_amount", rows[0]["condition"], role)
+
+    def test_the_limit_comes_from_one_place(self):
+        """The conditions are generated from the controller constant, not retyped."""
+        from sf_trading.api import payment_advice_workflow as wf
+        from sf_trading.sf_trading.doctype.payment_advice.payment_advice import (
+            FINANCE_APPROVAL_LIMIT,
         )
+
+        self.assertEqual(wf.FINANCE_APPROVAL_LIMIT, FINANCE_APPROVAL_LIMIT)
