@@ -53,6 +53,9 @@ ROUTE_FINANCE = "Finance"                  # over the limit: GM or Finance Manag
 # The rule is "more than BHD 500", so the limit itself goes straight through.
 FINANCE_APPROVAL_LIMIT = 500.0
 
+# The role that gives the final approval, and now also raises advices of its own.
+ROLE_FINAL_APPROVER = "Bahrain Accountant"
+
 # Reference types per party type, copied from ERPNext's own Payment Entry
 # (PaymentEntry.get_valid_reference_doctypes) so an advice can never carry a reference its
 # Payment Entry would later reject. Enforced server-side as well as in the form, because a
@@ -104,8 +107,25 @@ class PaymentAdvice(Document):
 
     def set_approval_route(self):
         """Stamp which approval route this advice takes, for the workflow to read."""
-        if self.meta.has_field("approval_route"):
-            self.approval_route = compute_approval_route(self)
+        if not self.meta.has_field("approval_route"):
+            return
+
+        route = compute_approval_route(self)
+
+        # Every route ends at the Bahrain Accountant, and that role now raises advices as well.
+        # On the direct route nobody else ever sees the advice, so an accountant raising one
+        # would be approving their own payment unaccompanied. Below the limit that is the
+        # delegation the limit exists to grant, and it goes straight through. Above it, the
+        # advice is sent to GM or Finance first, so a second person has approved before it
+        # reaches the accountant's own desk.
+        if (
+            route == ROUTE_ACCOUNTANT
+            and flt(self.get("payment_amount")) > FINANCE_APPROVAL_LIMIT
+            and _raised_by_final_approver(self)
+        ):
+            route = ROUTE_FINANCE
+
+        self.approval_route = route
 
     def before_submit(self):
         self.validate_approver()
@@ -546,6 +566,16 @@ def compute_approval_route(advice):
         return ROUTE_ACCOUNTANT
 
     return ROUTE_FINANCE
+
+
+def _raised_by_final_approver(advice):
+    """Was this advice raised by someone holding the role that gives the final approval?
+
+    Checked against the document owner rather than the session user, so the answer does not
+    change when a different person edits the advice later.
+    """
+    user = advice.get("owner") or frappe.session.user
+    return ROLE_FINAL_APPROVER in frappe.get_roles(user)
 
 
 def _has_overdue_invoice(invoice_names):

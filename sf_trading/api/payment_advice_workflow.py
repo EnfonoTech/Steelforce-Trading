@@ -58,7 +58,11 @@ STATE_REJECTED = "Rejected"
 # Who raises an advice
 ROLE_BRANCH_HEAD = "Branch Head"
 ROLE_PURCHASE_ASSISTANT = "Purchase Assistant"
-PREPARER_ROLES = (ROLE_BRANCH_HEAD, ROLE_PURCHASE_ASSISTANT)
+# The Bahrain Accountant raises advices too, for both orders and invoices, so the role appears
+# on both sides of the chain. Where that would leave an advice approved only by the person who
+# raised it, payment_advice.set_approval_route() escalates it - see the note on the final
+# transition below.
+PREPARER_ROLES = (ROLE_BRANCH_HEAD, ROLE_PURCHASE_ASSISTANT, "Bahrain Accountant")
 
 # Who signs it off
 ROLE_PURCHASE_MANAGER = "Purchase Manager"
@@ -198,12 +202,20 @@ def _transitions(company):
         })
 
     # ── the last pair of eyes, and the only transition that submits ───────────────
+    # Self-approval is permitted here, which needs saying out loud: this is the one state every
+    # route ends at, and the Bahrain Accountant is its only approver, so refusing it would strand
+    # every advice the accountant raised with nobody able to release it. It is safe because an
+    # advice only reaches this state one of two ways - either it came through Purchase Manager,
+    # HO Accounts or Finance, where somebody else already approved it, or it is within the
+    # delegated limit and was never meant to need a second signature. The case that would
+    # otherwise slip through - the accountant raising a large advice on the direct route and
+    # releasing it alone - is closed upstream, by escalating it to Finance before it gets here.
     transitions.append({
         "state": STATE_PENDING_ACCOUNTANT,
         "action": "Approve",
         "next_state": STATE_APPROVED,
         "allowed": ROLE_APPROVER,
-        "allow_self_approval": 0,
+        "allow_self_approval": 1,
     })
 
     # ── rejection, available to whoever is holding it ─────────────────────────────

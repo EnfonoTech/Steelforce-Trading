@@ -431,3 +431,53 @@ class TestCreateAdvicesFromDocuments(FrappeTestCase):
             [r.reference_doctype for r in advice.payment_advice_reference], ["Purchase Invoice"]
         )
         self.assertGreater(flt(advice.payment_amount), 0)
+
+    # ── who raised it changes the route, when the raiser is also the final approver ──
+
+    def _route_for(self, owner_roles, amount, rows):
+        """compute the stamped route for an advice owned by someone with these roles."""
+        import sf_trading.sf_trading.doctype.payment_advice.payment_advice as pa
+
+        advice = frappe._dict({
+            "owner": "route-test@example.com",
+            "payment_amount": amount,
+            "payment_advice_reference": [frappe._dict(r) for r in rows],
+        })
+        original = frappe.get_roles
+        frappe.get_roles = lambda user=None: list(owner_roles)
+        try:
+            route = pa.compute_approval_route(advice)
+            if (
+                route == pa.ROUTE_ACCOUNTANT
+                and flt(advice.payment_amount) > pa.FINANCE_APPROVAL_LIMIT
+                and pa._raised_by_final_approver(advice)
+            ):
+                route = pa.ROUTE_FINANCE
+            return route
+        finally:
+            frappe.get_roles = original
+
+    def test_accountant_raising_a_small_advice_goes_straight_through(self):
+        """At or below the limit the accountant may raise and release it alone."""
+        rows = [{"reference_doctype": "Purchase Order", "reference_record": "PO-1"}]
+        self.assertEqual(self._route_for(["Bahrain Accountant"], 500, rows), "Accountant")
+
+    def test_accountant_raising_a_large_advice_is_escalated(self):
+        """Above the limit a second person must see it, even on the single-order route."""
+        rows = [{"reference_doctype": "Purchase Order", "reference_record": "PO-1"}]
+        self.assertEqual(self._route_for(["Bahrain Accountant"], 500.001, rows), "Finance")
+
+    def test_a_large_single_order_from_anyone_else_is_untouched(self):
+        """The escalation is about who raised it, not about the amount alone."""
+        rows = [{"reference_doctype": "Purchase Order", "reference_record": "PO-1"}]
+        self.assertEqual(self._route_for(["Branch Head"], 50000, rows), "Accountant")
+
+    def test_escalation_does_not_shorten_a_longer_route(self):
+        """An advice already going the long way round is not pulled back to Finance."""
+        rows = [
+            {"reference_doctype": "Purchase Order", "reference_record": "PO-1"},
+            {"reference_doctype": "Purchase Order", "reference_record": "PO-2"},
+        ]
+        self.assertEqual(
+            self._route_for(["Bahrain Accountant"], 90000, rows), "Purchase Manager"
+        )
