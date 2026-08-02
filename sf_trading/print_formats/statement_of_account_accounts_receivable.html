@@ -1,8 +1,7 @@
 <!-- Statement of Account — Print Format for the ACCOUNTS RECEIVABLE report.
 
-     This file is the source of a Print Format record that lives in the site
-     database (it is not shipped by the app). Keep the two in step: edit here,
-     paste into the record, or edit the record and paste back.
+     This file is the source of the "Statement of Account" Print Format record
+     on the site. The record is the live copy; keep the two in step.
 
         Print Format For : Report
         Report           : Accounts Receivable
@@ -10,111 +9,208 @@
         Custom Format    : ticked
         PDF Generator    : wkhtmltopdf
 
-     Use it from Accounts Receivable > Print/PDF > Print Format = this one.
-     Run it with a single customer in the Party filter — a statement is
-     addressed to one customer.
+     Use from Accounts Receivable > Print or PDF, with ONE customer in the
+     Party filter — a statement is addressed to one customer.
 
-     Row shape, confirmed against this bench (erpnext 15.116, party-filtered run):
+     Page furniture
+     --------------
+     Everything the statement repeats per page lives in the <thead> of the one
+     table below, so it repeats on the browser Print path and the wkhtmltopdf
+     PDF path alike. This template deliberately does NOT define #header-html or
+     #footer-html: frappe/public/html/print_template.html already emits those
+     around this content when Print Settings has "Repeat Header and Footer",
+     and a second pair collides with it — only the first survives extraction,
+     which strands the rest of the layout mid-page.
+
+     So: page numbers and the letter head footer come from the wrapper (turn on
+     Repeat Header and Footer in Print Settings), while the letter head artwork
+     at the top is drawn here, from the letter head named in the print dialog or
+     the company default. Leave "With Letter head" UNTICKED — ticking it makes
+     the wrapper draw the artwork a second time.
+
+     Row shape, confirmed against this bench (erpnext 15.116, party-filtered):
        posting_date, due_date, voucher_type, voucher_no, cost_center, po_no,
        invoiced, paid, credit_note, outstanding, age, range1..range5, currency,
-       party, customer_name, territory, customer_group, remarks
-     Ageing bucket labels come from report.columns (range1..range5), so they
-     follow whatever the user set in the report's own Ageing Range filters.
+       party, customer_name, remarks
+     Ageing headings come from report.columns, so they follow the report's own
+     Ageing Range filters instead of being hardcoded.
 
      The customer block (VAT no, CR no, credit limit, terms, collector, Arabic
-     name, address) is not part of the report output, so it is read straight
-     from the Customer with a synchronous frappe.call at render time. Every
-     lookup is wrapped — if one fails the statement still prints, just with
-     that box empty.
+     name, address) is not in the report output and is read from the Customer
+     with a synchronous frappe.call, each lookup wrapped so a failure prints an
+     empty box rather than breaking the statement.
 -->
 <style>
-    /* frappe.utils.pdf reads margins declared on .print-format and passes them
-       to wkhtmltopdf. margin-top reserves the band #header-html occupies. */
+    /* wkhtmltopdf reads page setup from rules on .print-format (see
+       frappe/utils/pdf.py, get_print_format_styles). Margins stay small — the
+       header rides in the table head, not in a reserved page margin. */
     .print-format {
-        margin-top: 66mm;
-        margin-bottom: 20mm;
+        page-size: A4;
+        orientation: Portrait;
+        margin-top: 8mm;
+        margin-bottom: 10mm;
         margin-left: 7mm;
         margin-right: 7mm;
-        font-family: "Helvetica Neue", Helvetica, Arial, "Noto Naskh Arabic", sans-serif;
+        font-family: Helvetica, Arial, "DejaVu Sans", sans-serif;
         font-size: 7.5pt;
-        color: #000;
+        color: #16181d;
     }
 
-    .soa-head,
-    .soa-foot {
-        /* Cancels the padding the header/footer wrapper puts on <body>. */
-        margin-top: -15mm;
-        padding: 0 7mm;
-        font-family: "Helvetica Neue", Helvetica, Arial, "Noto Naskh Arabic", sans-serif;
+    /* The dialog offers Landscape; this statement is designed for portrait. */
+    .print-format.landscape { width: auto; }
+
+    .soa-head {
+        font-family: Helvetica, Arial, "DejaVu Sans", sans-serif;
         font-size: 7.5pt;
-        color: #000;
+        color: #16181d;
     }
 
-    .soa-head table,
-    .soa-grid,
-    .soa-totals,
-    .soa-ageing {
+    @page { size: A4 portrait; margin: 8mm; }
+
+    .soa * { box-sizing: border-box; }
+
+    .soa, .soa-cols {
         width: 100%;
         border-collapse: collapse;
         table-layout: fixed;
+        font-variant-numeric: tabular-nums;
     }
 
-    .soa-title { font-size: 12pt; font-weight: 600; text-align: right; }
-    .soa-company { font-size: 10pt; font-weight: 700; text-align: center; }
-    .soa-page { text-align: right; font-size: 8pt; padding-top: 2mm; }
+    /* Nested tables need the fixed layout too, or wkhtmltopdf sizes them from
+       their content and long Arabic lines overflow the cell instead of wrapping. */
+    .soa-mast, .soa-info, .soa-box, .soa-note { table-layout: fixed; }
 
+    /* ---------- masthead ---------- */
+    .soa-mast { width: 100%; border-collapse: collapse; }
+    .soa-mast td { vertical-align: middle; padding: 0 0 2mm 0; border: 0; }
+    .soa-logo img { max-height: 15mm; max-width: 60mm; }
+    .soa-org { font-size: 10.5pt; font-weight: 700; text-align: center; letter-spacing: .2px; }
+    .soa-doc-title {
+        text-align: right;
+        font-size: 11.5pt;
+        font-weight: 700;
+        white-space: nowrap;
+        letter-spacing: .2px;
+    }
+    .soa-doc-title .ar { font-weight: 600; }
+    .soa-rule { height: 1.4pt; background: #1b2a4a; margin-bottom: 2mm; }
+
+    /* ---------- the two info boxes ---------- */
+    .soa-info { width: 100%; border-collapse: collapse; }
+    .soa-info > tbody > tr > td { padding: 0; border: 0; vertical-align: top; }
+
+    .soa-box { width: 100%; border-collapse: collapse; }
     .soa-box td {
-        border: 0.6pt solid #000;
-        padding: 1mm 1.5mm;
+        border: 0.5pt solid #9aa3b0;
+        padding: 1.1mm 1.6mm;
         vertical-align: middle;
-        height: 7.5mm;
+    }
+    /* Arabic sits above its English label, as on the agreed sample. Floating the
+       two onto one line clips whichever runs long in a narrow box. */
+    /* This bench has no Arabic font installed — fc-list :lang=ar returns only
+       DejaVu Sans, whose Arabic runs wide. Cells therefore clip rather than let
+       a long string spill over its neighbour, and the Arabic is set a size down. */
+    .soa-box .lbl { background: #f2f4f7; overflow: hidden; }
+    .soa-box .en { display: block; font-weight: 700; font-size: 7.2pt; line-height: 1.2; }
+    .soa-box .ar {
+        display: block;
+        font-size: 6pt;
+        color: #5b6472;
+        direction: rtl;
+        text-align: right;
+        line-height: 1.15;
+        white-space: nowrap;
+        overflow: hidden;
+    }
+    .soa-box .val { font-size: 7.6pt; overflow: hidden; word-wrap: break-word; }
+    .soa-box .val-ar {
+        display: block;
+        direction: rtl;
+        font-size: 6.8pt;
+        color: #303743;
+        line-height: 1.2;
+        overflow: hidden;
     }
 
-    .soa-label-ar { display: block; text-align: right; direction: rtl; font-size: 7pt; }
-    .soa-label-en { display: block; font-weight: 600; font-size: 8pt; }
-    .soa-value { font-size: 8pt; }
-    .soa-value-ar { display: block; direction: rtl; text-align: right; font-size: 7.5pt; }
-
-    .soa-notice { padding: 1.5mm 0 1mm 0; }
-    .soa-notice td { font-size: 6.5pt; vertical-align: top; }
-    .soa-notice-blue { color: #1f3864; font-weight: 600; }
-    .soa-notice-red { color: #c00000; font-weight: 600; }
-
-    .soa-grid th,
-    .soa-grid td,
-    .soa-totals td,
-    .soa-ageing th,
-    .soa-ageing td {
-        border: 0.6pt solid #000;
-        padding: 0.8mm 1.2mm;
+    /* ---------- the notice strip ---------- */
+    .soa-note { width: 100%; border-collapse: collapse; margin: 2mm 0 2.5mm 0; }
+    .soa-note td {
+        border: 0;
+        padding: 0.4mm 0;
+        font-size: 6.4pt;
+        vertical-align: top;
+        line-height: 1.35;
+        white-space: normal;
+        word-wrap: break-word;
     }
+    .soa-note .blue { color: #1b2a4a; }
+    .soa-note .ar-line { text-align: right; direction: rtl; }
+    .soa-note .red { color: #b3121b; font-weight: 700; }
 
-    .soa-grid th,
-    .soa-ageing th { font-size: 6.5pt; font-weight: 600; text-align: center; vertical-align: middle; }
-    .soa-grid td { font-size: 7pt; vertical-align: middle; }
-    .soa-grid tbody tr { page-break-inside: avoid; }
+    /* ---------- the ledger grid ----------
+       Every rule below uses child combinators. The header band nests tables
+       inside this one, and browsers wrap their rows in an implicit <tbody>, so
+       a descendant selector like `.soa tbody td` would also hit the info boxes
+       and clip them. */
+        .soa-cols th {
+        background: #1b2a4a;
+        color: #fff;
+        border: 0.5pt solid #1b2a4a;
+        padding: 1.1mm 1.2mm;
+        font-size: 6.4pt;
+        font-weight: 700;
+        line-height: 1.25;
+        text-align: center;
+        vertical-align: middle;
+    }
+    .soa-cols th .ar { display: block; font-weight: 500; font-size: 5.6pt; opacity: .85; }
 
-    .soa-num { text-align: right; }
-    .soa-mid { text-align: center; }
-    .soa-overdue { color: #c00000; }
-
-    .soa-legend {
-        border: 0.6pt solid #000;
-        border-bottom: 0;
-        padding: 1mm 1.5mm;
+    .soa > tbody > tr > td {
+        border: 0.5pt solid #c3c9d2;
+        padding: 0.9mm 1.2mm;
         font-size: 7pt;
+        vertical-align: middle;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
+    .soa > tbody > tr:nth-child(even) > td { background: #f7f8fa; }
+    .soa > tbody > tr { page-break-inside: avoid; }
 
-    .soa-totals td { font-weight: 700; font-size: 8pt; }
-    .soa-ageing { margin-top: 2mm; }
-    .soa-ageing td { text-align: center; font-size: 7.5pt; }
+    .num { text-align: right; }
+    .mid { text-align: center; }
+    .overdue { color: #b3121b; font-weight: 700; }
+    .muted { color: #6b7280; }
 
-    .soa-empty { padding: 6mm 0; text-align: center; font-size: 9pt; }
-    .soa-foot-line { text-align: center; font-size: 7pt; }
+    /* ---------- closing blocks ---------- */
+    .soa-close { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 2.5mm; }
+    .soa-close td { border: 0.5pt solid #c3c9d2; padding: 1.2mm 1.4mm; font-size: 7.2pt; }
+    .soa-close .legend { border-color: #c3c9d2; color: #48505e; font-size: 6.6pt; }
+    .soa-close .tot-lbl { background: #f2f4f7; font-weight: 700; font-size: 7.8pt; }
+    .soa-close .tot-val { background: #f2f4f7; font-weight: 700; font-size: 7.8pt; text-align: right; }
+
+    .soa-age { width: 100%; border-collapse: collapse; table-layout: fixed; margin-top: 2.5mm; }
+    .soa-age th {
+        background: #f2f4f7;
+        border: 0.5pt solid #9aa3b0;
+        padding: 1.1mm;
+        font-size: 6.8pt;
+        font-weight: 700;
+        text-align: center;
+    }
+    .soa-age td {
+        border: 0.5pt solid #9aa3b0;
+        padding: 1.3mm;
+        font-size: 7.4pt;
+        text-align: center;
+    }
+    .soa-age .notdue { background: #fbfbfc; }
+
+    .soa-empty { padding: 8mm 0; text-align: center; font-size: 8.5pt; color: #6b7280; }
 </style>
 
 {%
-    /* ---- rows the statement prints: open items, the report's own total row dropped ---- */
+    /* ---- rows the statement prints: open items, the report total row dropped ---- */
     var rows = (data || []).filter(function (row) { return row && row.voucher_no; });
 
     var party = (filters.party && filters.party.length) ? filters.party[0] : (rows.length ? rows[0].party : "");
@@ -135,7 +231,7 @@
     var total_invoiced = 0, total_credit = 0, total_outstanding = 0;
     /* First cell is Not Due: ERPNext zeroes every ageing bucket on an item whose
        due date has not arrived (accounts_receivable.py, set_ageing), so without
-       it the band would fall short of the outstanding total. */
+       it the band reads short of the outstanding total. */
     var buckets = [0, 0, 0, 0, 0, 0];
     var earliest = "";
     for (var t = 0; t < rows.length; t++) {
@@ -154,8 +250,6 @@
         if (!earliest || (rows[t].posting_date && rows[t].posting_date < earliest)) { earliest = rows[t].posting_date; }
     }
 
-    /* Bucket headings are the report's own range columns, so they follow the
-       Ageing Range filters instead of being hardcoded here. */
     var bucket_labels = [];
     for (var c = 0; c < (columns || []).length; c++) {
         if (cstr(columns[c].fieldname).indexOf("range") === 0) { bucket_labels.push(columns[c].label + " " + __("Days")); }
@@ -165,7 +259,7 @@
     }
     bucket_labels = [__("Not Due")].concat(bucket_labels);
 
-    /* ---- customer block: not in the report output, so read it from the Customer ---- */
+    /* ---- customer block: not in the report output, so read it off the Customer ---- */
     var customer = {};
     try {
         if (party) {
@@ -176,7 +270,7 @@
                 callback: function (r) { customer = (r && r.message) || {}; }
             });
         }
-    } catch (fetch_error) { customer = {}; }
+    } catch (customer_error) { customer = {}; }
 
     var credit_limit = 0;
     var limits = customer.credit_limits || [];
@@ -205,161 +299,183 @@
         }
     } catch (address_error) { address = address || ""; }
 
+    /* ---- letter head artwork, drawn here so it repeats with the table head.
+           Skipped when the print dialog is already drawing it. ---- */
+    var logo = "";
+    var with_letter_head = print_settings && print_settings.with_letter_head;
+    try {
+        if (!with_letter_head) {
+            var head_filters = (print_settings && print_settings.letter_head)
+                ? { name: print_settings.letter_head }
+                : { is_default: 1, disabled: 0 };
+            frappe.call({
+                method: "frappe.client.get_value",
+                args: { doctype: "Letter Head", filters: head_filters, fieldname: ["content"] },
+                async: false,
+                callback: function (r) {
+                    var content = cstr(r && r.message && r.message.content);
+                    var found = content.match(/<img[^>]+src=["']([^"']+)["']/i);
+                    logo = found ? found[1] : "";
+                    /* The PDF is rendered server side with no page of its own to
+                       resolve against, so a site-relative src would come out blank. */
+                    if (logo.indexOf("/") === 0) { logo = frappe.urllib.get_base_url() + logo; }
+                }
+            });
+        }
+    } catch (letter_head_error) { logo = ""; }
+
     var company = filters.company || "";
 %}
 
-<div id="header-html">
-    <div class="soa-head">
-        <table>
+<div class="soa-head">
+        <table class="soa-mast">
             <tr>
-                <td width="34%"></td>
-                <td width="32%" class="soa-company">{{ company }}</td>
-                <td width="34%">
-                    <div class="soa-title">{%= __("Statement of Account") %} / <span dir="rtl">كشف حساب</span></div>
-                    <div class="soa-page">
-                        {%= __("Page No.") %} <span class="page"></span> {%= __("of") %} <span class="topage"></span>
-                    </div>
+                <td style="width: 60mm" class="soa-logo">
+                    {% if (logo) { %}<img src="{{ logo }}">{% } %}
+                </td>
+                <td style="width: 66mm" class="soa-org">{{ company }}</td>
+                <td style="width: 70mm" class="soa-doc-title">
+                    {%= __("Statement of Account") %} <span class="ar">/ كشف حساب</span>
                 </td>
             </tr>
         </table>
+        <div class="soa-rule"></div>
 
-        <table>
+        <table class="soa-info">
             <tr>
-                <td width="34%" style="vertical-align: top">
+                <td style="width: 68mm">
                     <table class="soa-box">
                         <tr>
-                            <td width="52%">
-                                <span class="soa-label-ar">من الفترة</span>
-                                <span class="soa-label-en">{%= __("Period From") %}</span>
+                            <td class="lbl" style="width: 30mm">
+                                <span class="ar">من الفترة</span><span class="en">{%= __("Period From") %}</span>
                             </td>
-                            <td class="soa-value">{%= on_date(earliest) %}</td>
+                            <td class="val">{%= on_date(earliest) %}</td>
                         </tr>
                         <tr>
-                            <td>
-                                <span class="soa-label-ar">إلى الفترة</span>
-                                <span class="soa-label-en">{%= __("To Period") %}</span>
+                            <td class="lbl">
+                                <span class="ar">إلى الفترة</span><span class="en">{%= __("To Period") %}</span>
                             </td>
-                            <td class="soa-value">{%= on_date(filters.report_date) %}</td>
+                            <td class="val">{%= on_date(filters.report_date) %}</td>
                         </tr>
                         <tr>
-                            <td>
-                                <span class="soa-label-ar">الحد الائتماني</span>
-                                <span class="soa-label-en">{%= __("Credit Limit") %}</span>
+                            <td class="lbl">
+                                <span class="ar">الحد الائتماني</span><span class="en">{%= __("Credit Limit") %}</span>
                             </td>
-                            <td class="soa-value">{%= credit_limit ? format_currency(flt(credit_limit), ccy) : "" %}</td>
+                            <td class="val">{%= credit_limit ? amount(credit_limit) + " " + ccy : "" %}</td>
                         </tr>
                         <tr>
-                            <td>
-                                <span class="soa-label-ar">رقم السجل التجاري للعميل</span>
-                                <span class="soa-label-en">{%= __("Customer CR No.") %}</span>
+                            <td class="lbl">
+                                <span class="ar">السجل التجاري</span><span class="en">{%= __("Customer CR No.") %}</span>
                             </td>
-                            <td class="soa-value">{{ cr_no }}</td>
+                            <td class="val">{{ cr_no }}</td>
                         </tr>
                     </table>
                 </td>
-                <td width="2%"></td>
-                <td width="64%" style="vertical-align: top">
+                <td style="width: 3mm"></td>
+                <td style="width: 125mm">
                     <table class="soa-box">
                         <tr>
-                            <td width="17%">
-                                <span class="soa-label-ar">السادة</span>
-                                <span class="soa-label-en">{%= __("M/s") %}</span>
+                            <td class="lbl" style="width: 27mm">
+                                <span class="ar">السادة</span><span class="en">{%= __("M/s") %}</span>
                             </td>
-                            <td width="45%" class="soa-value">
-                                {% if (name_ar) { %}
-                                    <span class="soa-value-ar">{{ name_ar }}</span>
-                                {% } %}
+                            <td class="val" style="width: 43mm">
+                                {% if (name_ar) { %}<span class="val-ar">{{ name_ar }}</span>{% } %}
                                 {{ customer_label }}
                             </td>
-                            <td width="18%">
-                                <span class="soa-label-ar">فترة السداد</span>
-                                <span class="soa-label-en">{%= __("Payment Term") %}</span>
+                            <td class="lbl" style="width: 27mm">
+                                <span class="ar">فترة السداد</span><span class="en">{%= __("Payment Term") %}</span>
                             </td>
-                            <td width="20%" class="soa-value">{{ customer.payment_terms || "" }}</td>
+                            <td class="val" style="width: 28mm">{{ customer.payment_terms || "" }}</td>
                         </tr>
                         <tr>
-                            <td>
-                                <span class="soa-label-ar">رقم العميل</span>
-                                <span class="soa-label-en">{%= __("Customer ID") %}</span>
+                            <td class="lbl">
+                                <span class="ar">رقم العميل</span><span class="en">{%= __("Customer ID") %}</span>
                             </td>
-                            <td class="soa-value">{{ party }}</td>
-                            <td>
-                                <span class="soa-label-ar">المحصل</span>
-                                <span class="soa-label-en">{%= __("Collector") %}</span>
+                            <td class="val">{{ party }}</td>
+                            <td class="lbl">
+                                <span class="ar">المحصل</span><span class="en">{%= __("Collector") %}</span>
                             </td>
-                            <td class="soa-value">{{ collector }}</td>
+                            <td class="val">{{ collector }}</td>
                         </tr>
                         <tr>
-                            <td>
-                                <span class="soa-label-ar">عنوان العميل</span>
-                                <span class="soa-label-en">{%= __("Customer Address") %}</span>
+                            <td class="lbl">
+                                <span class="ar">العنوان</span><span class="en">{%= __("Address") %}</span>
                             </td>
-                            <td colspan="3" class="soa-value">{{ address }}</td>
+                            <td class="val" colspan="3">{{ address }}</td>
                         </tr>
                         <tr>
-                            <td>
-                                <span class="soa-label-ar">الرقم الضريبي للعميل</span>
-                                <span class="soa-label-en">{%= __("Customer VAT No.") %}</span>
+                            <td class="lbl">
+                                <span class="ar">الرقم الضريبي</span><span class="en">{%= __("Customer VAT No.") %}</span>
                             </td>
-                            <td colspan="3" class="soa-value">{{ vat_no }}</td>
+                            <td class="val" colspan="3">{{ vat_no }}</td>
                         </tr>
                     </table>
                 </td>
             </tr>
         </table>
 
-        <table class="soa-notice">
+        <table class="soa-note">
             <tr>
-                <td width="50%" class="soa-notice-blue">
+                <td class="blue" colspan="2">
                     {%= __("This account is considered correct and approved by you if no objections are received within 15 days of the above issue date.") %}
                 </td>
-                <td width="50%" class="soa-notice-blue" dir="rtl" style="text-align: right">
+            </tr>
+            <tr>
+                <td class="blue ar-line" colspan="2" dir="rtl">
                     يُعتبر هذا الحساب صحيحاً ومعتمداً من جانبكم في حال عدم تلقينا أي اعتراض خلال 15 يوماً من تاريخ الإصدار المذكور أعلاه.
                 </td>
             </tr>
             <tr>
-                <td class="soa-notice-red">{%= __("PLEASE MAKE CHEQUE PAYABLE TO") %} {{ company }}</td>
-                <td class="soa-notice-red" dir="rtl" style="text-align: right">يرجى إصدار الشيك باسم : {{ company }}</td>
+                <td class="red" style="width: 108mm">{%= __("PLEASE MAKE CHEQUE PAYABLE TO") %} {{ company }}</td>
+                <td class="red ar-line" style="width: 88mm" dir="rtl">يرجى إصدار الشيك باسم</td>
             </tr>
         </table>
-    </div>
+
+        <table class="soa-cols">
+            <colgroup>
+                <col style="width: 10.5%"><col style="width: 10.5%"><col style="width: 6%">
+                <col style="width: 13%"><col style="width: 4.5%"><col style="width: 5%">
+                <col style="width: 12%"><col style="width: 12.5%"><col style="width: 12.5%">
+                <col style="width: 13.5%">
+            </colgroup>
+            <tr>
+        <th>{%= __("Date") %}<span class="ar">التاريخ</span></th>
+        <th>{%= __("Due Date") %}<span class="ar">تاريخ الاستحقاق</span></th>
+        <th>{%= __("Branch") %}<span class="ar">الفرع</span></th>
+        <th>{%= __("Document No") %}<span class="ar">رقم المستند</span></th>
+        <th>{%= __("Type") %}<span class="ar">النوع</span></th>
+        <th>{%= __("Age") %}<span class="ar">العمر</span></th>
+        <th>{%= __("Customer LPO") %}<span class="ar">أمر الشراء</span></th>
+        <th>{%= __("Invoiced") %}<span class="ar">مدين</span></th>
+        <th>{%= __("Paid / Credit") %}<span class="ar">دائن</span></th>
+        <th>{%= __("Outstanding") %}<span class="ar">الرصيد</span></th>
+            </tr>
+        </table>
 </div>
 
-<div id="footer-html">
-    <div class="soa-foot">
-        <div class="soa-foot-line">{{ company }}</div>
-    </div>
-</div>
+<table class="soa">
+    <colgroup>
+        <col style="width: 10.5%"><col style="width: 10.5%"><col style="width: 6%">
+        <col style="width: 13%"><col style="width: 4.5%"><col style="width: 5%">
+        <col style="width: 12%"><col style="width: 12.5%"><col style="width: 12.5%">
+        <col style="width: 13.5%">
+    </colgroup>
 
-<table class="soa-grid">
-    <thead>
-        <tr>
-            <th width="9%">التاريخ<br>{%= __("Date") %}</th>
-            <th width="9%">تاريخ الاستحقاق<br>{%= __("Due Date") %}</th>
-            <th width="6%">الفرع<br>{%= __("Branch") %}</th>
-            <th width="15%">رقم المستند<br>{%= __("Document No") %}</th>
-            <th width="5%">النوع<br>{%= __("Type") %}</th>
-            <th width="6%">العمر<br>{%= __("Age") %}</th>
-            <th width="13%">أمر الشراء<br>{%= __("Customer LPO") %}</th>
-            <th width="12%">مدين<br>{%= __("Invoiced") %}</th>
-            <th width="12%">دائن<br>{%= __("Paid / Credit") %}</th>
-            <th width="13%">الرصيد<br>{%= __("Outstanding") %}</th>
-        </tr>
-    </thead>
+
     <tbody>
         {% for (var i = 0; i < rows.length; i++) { %}
             {% var row = rows[i]; %}
             <tr>
                 <td>{%= on_date(row.posting_date) %}</td>
                 <td>{%= on_date(row.due_date) %}</td>
-                <td class="soa-mid">{{ branch_of(row.cost_center) }}</td>
+                <td class="mid">{{ branch_of(row.cost_center) }}</td>
                 <td>{{ row.voucher_no || "" }}</td>
-                <td class="soa-mid">{%= type_code(row) %}</td>
-                <td class="soa-mid soa-overdue">{%= flt(row.age) > 0 ? cint(row.age) : "" %}</td>
-                <td>{{ row.po_no || "" }}</td>
-                <td class="soa-num">{%= amount(row.invoiced) %}</td>
-                <td class="soa-num">{%= amount(flt(row.paid) + flt(row.credit_note)) %}</td>
-                <td class="soa-num">{%= amount(row.outstanding) %}</td>
+                <td class="mid">{%= type_code(row) %}</td>
+                <td class="mid overdue">{%= flt(row.age) > 0 ? cint(row.age) : "" %}</td>
+                <td class="muted">{{ row.po_no || "" }}</td>
+                <td class="num">{%= amount(row.invoiced) %}</td>
+                <td class="num">{%= amount(flt(row.paid) + flt(row.credit_note)) %}</td>
+                <td class="num">{%= amount(row.outstanding) %}</td>
             </tr>
         {% } %}
 
@@ -369,20 +485,24 @@
     </tbody>
 </table>
 
-<div class="soa-legend">
-    {%= __("PY - Payment, IN - Invoice, CR - Credit, DB - Debit Note, TR - Return, AD - Financial Adjustment") %}
-</div>
-
-<table class="soa-totals">
+<table class="soa-close">
+    <colgroup>
+        <col style="width: 61.5%"><col style="width: 12.5%"><col style="width: 12.5%"><col style="width: 13.5%">
+    </colgroup>
     <tr>
-        <td width="63%">{%= __("Total") %} <span dir="rtl">الاجمالي</span></td>
-        <td width="12%" class="soa-num">{%= amount(total_invoiced) %}</td>
-        <td width="12%" class="soa-num">{%= amount(total_credit) %}</td>
-        <td width="13%" class="soa-num">{%= amount(total_outstanding) %}</td>
+        <td class="legend" colspan="4">
+            {%= __("PY - Payment, IN - Invoice, CR - Credit, DB - Debit Note, TR - Return, AD - Financial Adjustment") %}
+        </td>
+    </tr>
+    <tr>
+        <td class="tot-lbl">{%= __("Total") %} <span dir="rtl">الاجمالي</span></td>
+        <td class="tot-val">{%= amount(total_invoiced) %}</td>
+        <td class="tot-val">{%= amount(total_credit) %}</td>
+        <td class="tot-val">{%= amount(total_outstanding) %}</td>
     </tr>
 </table>
 
-<table class="soa-ageing">
+<table class="soa-age">
     <thead>
         <tr>
             {% for (var h = 0; h < bucket_labels.length; h++) { %}
@@ -393,7 +513,7 @@
     <tbody>
         <tr>
             {% for (var v = 0; v < buckets.length; v++) { %}
-                <td>{%= amount(buckets[v]) %}</td>
+                <td class="{%= v === 0 ? "notdue" : "" %}">{%= amount(buckets[v]) %}</td>
             {% } %}
         </tr>
     </tbody>
