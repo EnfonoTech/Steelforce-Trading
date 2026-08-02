@@ -1,6 +1,9 @@
-// apps/sf_trading/sf_trading/report/cash_flow_money_in_vs_money_out/cash_flow_money_in_vs_money_out.js
+// apps/sf_trading/sf_trading/report/cash_flow_detail/cash_flow_detail.js
+//
+// Opened by clicking a period on Cash Flow Money In vs Money Out, which passes its dates,
+// direction and any account or mode filter through the URL. Also runs on its own.
 
-frappe.query_reports["Cash Flow Money In vs Money Out"] = {
+frappe.query_reports["Cash Flow Detail"] = {
 	filters: [
 		{
 			fieldname: "company",
@@ -15,7 +18,7 @@ frappe.query_reports["Cash Flow Money In vs Money Out"] = {
 			label: __("From Date"),
 			fieldtype: "Date",
 			reqd: 1,
-			default: frappe.datetime.add_months(frappe.datetime.get_today(), -6),
+			default: frappe.datetime.add_months(frappe.datetime.get_today(), -1),
 		},
 		{
 			fieldname: "to_date",
@@ -25,23 +28,33 @@ frappe.query_reports["Cash Flow Money In vs Money Out"] = {
 			default: frappe.datetime.get_today(),
 		},
 		{
-			fieldname: "periodicity",
-			label: __("Periodicity"),
+			fieldname: "group_by",
+			label: __("Group By"),
 			fieldtype: "Select",
-			options: ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"].join("\n"),
-			default: "Monthly",
+			options: [
+				"Transactions",
+				"By Party",
+				"By Voucher Type",
+				"By Account",
+				"By Mode of Payment",
+			].join("\n"),
+			default: "Transactions",
+		},
+		{
+			fieldname: "direction",
+			label: __("Direction"),
+			fieldtype: "Select",
+			options: ["", "Money In", "Money Out"].join("\n"),
 		},
 		{
 			fieldname: "account",
 			label: __("Cash / Bank Account"),
 			fieldtype: "Link",
 			options: "Account",
-			// leave blank for every money account of the company
 			get_query: function () {
-				const company = frappe.query_report.get_filter_value("company");
 				return {
 					filters: {
-						company: company,
+						company: frappe.query_report.get_filter_value("company"),
 						is_group: 0,
 						account_type: ["in", ["Cash", "Bank"]],
 					},
@@ -74,12 +87,9 @@ frappe.query_reports["Cash Flow Money In vs Money Out"] = {
 		if (column.fieldname === "money_out" && data && flt(data.money_out)) {
 			value = `<span style="color:#c62828">${value}</span>`;
 		}
-		if (column.fieldname === "net" && data && flt(data.net) < 0) {
-			value = `<span style="color:#c62828">${value}</span>`;
-		}
-		// a negative running balance is an overdraft and should be impossible to miss
-		if (column.fieldname === "net" && data && flt(data.net) > 0) {
-			value = `<span style="color:#2e7d32">${value}</span>`;
+		if (column.fieldname === "net" && data) {
+			const n = flt(data.net);
+			if (n) value = `<span style="color:${n < 0 ? "#c62828" : "#2e7d32"}">${value}</span>`;
 		}
 		if (column.fieldname === "running" && data && flt(data.running) < 0) {
 			value = `<span style="color:#c62828;font-weight:600">${value}</span>`;
