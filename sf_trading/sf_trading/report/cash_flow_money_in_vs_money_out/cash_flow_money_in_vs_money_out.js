@@ -1,6 +1,6 @@
 // apps/sf_trading/sf_trading/report/cash_flow_money_in_vs_money_out/cash_flow_money_in_vs_money_out.js
 
-frappe.query_reports["Cash Flow - Money In vs Money Out"] = {
+frappe.query_reports["Cash Flow Money In vs Money Out"] = {
 	filters: [
 		{
 			fieldname: "company",

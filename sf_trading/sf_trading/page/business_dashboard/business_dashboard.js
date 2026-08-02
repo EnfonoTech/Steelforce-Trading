@@ -24,8 +24,12 @@ class BusinessDashboard {
 		this.page = page;
 		this.charts = {};
 		this.filters = {};
-		this._build_filters();
+		// Shell first: add_field fires its change handler while the field is being created,
+		// and refresh() writes into the shell. Built the other way round the first refresh
+		// runs against an undefined body.
 		this._build_shell();
+		this._build_filters();
+		this._ready = true;
 		this.refresh();
 	}
 
@@ -36,38 +40,46 @@ class BusinessDashboard {
 		this.filters.company = this.page.add_field({
 			fieldname: "company", label: __("Company"), fieldtype: "Link", options: "Company",
 			default: frappe.defaults.get_user_default("Company"),
-			change: () => this.refresh(),
+			change: () => this._queue_refresh(),
 		});
 		this.filters.from_date = this.page.add_field({
 			fieldname: "from_date", label: __("From"), fieldtype: "Date",
 			default: frappe.datetime.add_months(today, -6),
-			change: () => this.refresh(),
+			change: () => this._queue_refresh(),
 		});
 		this.filters.to_date = this.page.add_field({
 			fieldname: "to_date", label: __("To"), fieldtype: "Date", default: today,
-			change: () => this.refresh(),
+			change: () => this._queue_refresh(),
 		});
 		this.filters.granularity = this.page.add_field({
 			fieldname: "granularity", label: __("View by"), fieldtype: "Select",
 			options: ["Daily", "Weekly", "Monthly"].join("\n"), default: "Monthly",
-			change: () => this.refresh(),
+			change: () => this._queue_refresh(),
 		});
 		this.filters.cost_center = this.page.add_field({
 			fieldname: "cost_center", label: __("Cost Center"), fieldtype: "Link",
 			options: "Cost Center",
 			get_query: () => ({ filters: { company: this._val("company"), is_group: 0 } }),
-			change: () => this.refresh(),
+			change: () => this._queue_refresh(),
 		});
 		this.filters.mode_of_payment = this.page.add_field({
 			fieldname: "mode_of_payment", label: __("Payment Mode"), fieldtype: "Link",
 			options: "Mode of Payment",
-			change: () => this.refresh(),
+			change: () => this._queue_refresh(),
 		});
 
 		this.page.set_primary_action(__("Refresh"), () => this.refresh(), "refresh");
 		this.page.add_menu_item(__("Cash Flow report"), () =>
-			frappe.set_route("query-report", "Cash Flow - Money In vs Money Out")
+			frappe.set_route("query-report", "Cash Flow Money In vs Money Out")
 		);
+	}
+
+	// Six filters each fire change while being created, and every change asked the server for
+	// the whole dashboard - fifteen identical requests on load. Coalesce them.
+	_queue_refresh() {
+		if (!this._ready) return;
+		clearTimeout(this._timer);
+		this._timer = setTimeout(() => this.refresh(), 150);
 	}
 
 	_val(name) {
@@ -125,9 +137,19 @@ class BusinessDashboard {
 					return;
 				}
 				this.data = r.message;
-				$l.hide();
-				$c.show();
-				this._render();
+				try {
+					this._render();
+					$l.hide();
+					$c.show();
+				} catch (e) {
+					// Better a visible failure than a page that says Loading for ever.
+					console.error("Business Dashboard render failed", e);
+					$c.hide();
+					$l.show().html(
+						`<div class="text-danger">${__("The dashboard loaded its data but could not draw it.")}</div>
+						 <div class="text-muted small">${frappe.utils.escape_html(String(e && e.message || e))}</div>`
+					);
+				}
 			},
 			error: () => $l.text(__("Could not load the dashboard.")),
 		});
@@ -202,6 +224,10 @@ class BusinessDashboard {
 	_chart(id, opts) {
 		const el = this.$body.find("#" + id).get(0);
 		if (!el) return;
+		if (typeof frappe.Chart === "undefined") {
+			$(el).html(`<p class="text-muted">${__("Charts are unavailable on this page.")}</p>`);
+			return;
+		}
 		if (this.charts[id]) {
 			this.charts[id].destroy && this.charts[id].destroy();
 			$(el).empty();

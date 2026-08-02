@@ -1,5 +1,5 @@
 # apps/sf_trading/sf_trading/report/cash_flow_money_in_vs_money_out/cash_flow_money_in_vs_money_out.py
-"""Cash Flow - Money In vs Money Out.
+"""Cash Flow Money In vs Money Out.
 
     Money In        = every debit posted to a Cash or Bank account
     Money Out       = every credit posted to one
