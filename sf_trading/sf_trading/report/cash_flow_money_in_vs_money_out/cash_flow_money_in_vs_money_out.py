@@ -58,7 +58,7 @@ def execute(filters=None):
     total_in = total_out = 0.0
 
     data.append({
-        "period": _("Opening Balance"),
+        "period": _("Opening Balance"), "label": _("Opening Balance"),
         "money_in": None, "money_out": None, "net": None,
         "running": opening, "is_opening": 1,
     })
@@ -69,7 +69,11 @@ def execute(filters=None):
         total_in += flt(r.money_in)
         total_out += flt(r.money_out)
         data.append({
+            # `period` carries the drill-down anchor for the table; `label` is the same period
+            # as plain text, because a chart axis renders its labels literally and would print
+            # the markup.
             "period": _detail_link(r.label, company, r.starts, r.ends, filters),
+            "label": r.label,
             "money_in": flt(r.money_in, 3),
             "money_out": flt(r.money_out, 3),
             "net": net,
@@ -77,7 +81,7 @@ def execute(filters=None):
         })
 
     data.append({
-        "period": _("Total"),
+        "period": _("Total"), "label": _("Total"),
         "money_in": flt(total_in, 3),
         "money_out": flt(total_out, 3),
         "net": flt(total_in - total_out, 3),
@@ -252,7 +256,7 @@ def _chart(data):
         return None
     return {
         "data": {
-            "labels": [d["period"] for d in points],
+            "labels": [d.get("label") or d["period"] for d in points],
             "datasets": [
                 {"name": _("Money In"), "values": [flt(d["money_in"]) for d in points]},
                 {"name": _("Money Out"), "values": [flt(d["money_out"]) for d in points]},
