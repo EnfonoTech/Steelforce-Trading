@@ -1,0 +1,400 @@
+<!-- Statement of Account — Print Format for the ACCOUNTS RECEIVABLE report.
+
+     This file is the source of a Print Format record that lives in the site
+     database (it is not shipped by the app). Keep the two in step: edit here,
+     paste into the record, or edit the record and paste back.
+
+        Print Format For : Report
+        Report           : Accounts Receivable
+        Print Format Type: JS          (client-side micro-template, plain JS)
+        Custom Format    : ticked
+        PDF Generator    : wkhtmltopdf
+
+     Use it from Accounts Receivable > Print/PDF > Print Format = this one.
+     Run it with a single customer in the Party filter — a statement is
+     addressed to one customer.
+
+     Row shape, confirmed against this bench (erpnext 15.116, party-filtered run):
+       posting_date, due_date, voucher_type, voucher_no, cost_center, po_no,
+       invoiced, paid, credit_note, outstanding, age, range1..range5, currency,
+       party, customer_name, territory, customer_group, remarks
+     Ageing bucket labels come from report.columns (range1..range5), so they
+     follow whatever the user set in the report's own Ageing Range filters.
+
+     The customer block (VAT no, CR no, credit limit, terms, collector, Arabic
+     name, address) is not part of the report output, so it is read straight
+     from the Customer with a synchronous frappe.call at render time. Every
+     lookup is wrapped — if one fails the statement still prints, just with
+     that box empty.
+-->
+<style>
+    /* frappe.utils.pdf reads margins declared on .print-format and passes them
+       to wkhtmltopdf. margin-top reserves the band #header-html occupies. */
+    .print-format {
+        margin-top: 66mm;
+        margin-bottom: 20mm;
+        margin-left: 7mm;
+        margin-right: 7mm;
+        font-family: "Helvetica Neue", Helvetica, Arial, "Noto Naskh Arabic", sans-serif;
+        font-size: 7.5pt;
+        color: #000;
+    }
+
+    .soa-head,
+    .soa-foot {
+        /* Cancels the padding the header/footer wrapper puts on <body>. */
+        margin-top: -15mm;
+        padding: 0 7mm;
+        font-family: "Helvetica Neue", Helvetica, Arial, "Noto Naskh Arabic", sans-serif;
+        font-size: 7.5pt;
+        color: #000;
+    }
+
+    .soa-head table,
+    .soa-grid,
+    .soa-totals,
+    .soa-ageing {
+        width: 100%;
+        border-collapse: collapse;
+        table-layout: fixed;
+    }
+
+    .soa-title { font-size: 12pt; font-weight: 600; text-align: right; }
+    .soa-company { font-size: 10pt; font-weight: 700; text-align: center; }
+    .soa-page { text-align: right; font-size: 8pt; padding-top: 2mm; }
+
+    .soa-box td {
+        border: 0.6pt solid #000;
+        padding: 1mm 1.5mm;
+        vertical-align: middle;
+        height: 7.5mm;
+    }
+
+    .soa-label-ar { display: block; text-align: right; direction: rtl; font-size: 7pt; }
+    .soa-label-en { display: block; font-weight: 600; font-size: 8pt; }
+    .soa-value { font-size: 8pt; }
+    .soa-value-ar { display: block; direction: rtl; text-align: right; font-size: 7.5pt; }
+
+    .soa-notice { padding: 1.5mm 0 1mm 0; }
+    .soa-notice td { font-size: 6.5pt; vertical-align: top; }
+    .soa-notice-blue { color: #1f3864; font-weight: 600; }
+    .soa-notice-red { color: #c00000; font-weight: 600; }
+
+    .soa-grid th,
+    .soa-grid td,
+    .soa-totals td,
+    .soa-ageing th,
+    .soa-ageing td {
+        border: 0.6pt solid #000;
+        padding: 0.8mm 1.2mm;
+    }
+
+    .soa-grid th,
+    .soa-ageing th { font-size: 6.5pt; font-weight: 600; text-align: center; vertical-align: middle; }
+    .soa-grid td { font-size: 7pt; vertical-align: middle; }
+    .soa-grid tbody tr { page-break-inside: avoid; }
+
+    .soa-num { text-align: right; }
+    .soa-mid { text-align: center; }
+    .soa-overdue { color: #c00000; }
+
+    .soa-legend {
+        border: 0.6pt solid #000;
+        border-bottom: 0;
+        padding: 1mm 1.5mm;
+        font-size: 7pt;
+    }
+
+    .soa-totals td { font-weight: 700; font-size: 8pt; }
+    .soa-ageing { margin-top: 2mm; }
+    .soa-ageing td { text-align: center; font-size: 7.5pt; }
+
+    .soa-empty { padding: 6mm 0; text-align: center; font-size: 9pt; }
+    .soa-foot-line { text-align: center; font-size: 7pt; }
+</style>
+
+{%
+    /* ---- rows the statement prints: open items, the report's own total row dropped ---- */
+    var rows = (data || []).filter(function (row) { return row && row.voucher_no; });
+
+    var party = (filters.party && filters.party.length) ? filters.party[0] : (rows.length ? rows[0].party : "");
+    var ccy = rows.length ? (rows[0].currency || "") : "";
+    var nf = get_number_format(ccy);
+    var amount = function (value) { return format_number(flt(value), nf); };
+    var on_date = function (value) { return value ? frappe.datetime.str_to_user(value) : ""; };
+    var branch_of = function (value) { return cstr(value).split(" - ")[0]; };
+
+    var type_code = function (row) {
+        if (row.voucher_type === "Payment Entry") { return "PY"; }
+        if (row.voucher_type === "Journal Entry") { return "AD"; }
+        if (flt(row.credit_note) > 0 || flt(row.invoiced) < 0) { return "CR"; }
+        return "IN";
+    };
+
+    /* ---- totals and the ageing band, both from ERPNext's own figures ---- */
+    var total_invoiced = 0, total_credit = 0, total_outstanding = 0;
+    /* First cell is Not Due: ERPNext zeroes every ageing bucket on an item whose
+       due date has not arrived (accounts_receivable.py, set_ageing), so without
+       it the band would fall short of the outstanding total. */
+    var buckets = [0, 0, 0, 0, 0, 0];
+    var earliest = "";
+    for (var t = 0; t < rows.length; t++) {
+        total_invoiced += flt(rows[t].invoiced);
+        total_credit += flt(rows[t].paid) + flt(rows[t].credit_note);
+        total_outstanding += flt(rows[t].outstanding);
+
+        var aged = 0;
+        for (var b = 0; b < 5; b++) {
+            var bucket = flt(rows[t]["range" + (b + 1)]);
+            aged += bucket;
+            buckets[b + 1] += bucket;
+        }
+        buckets[0] += flt(rows[t].outstanding) - aged;
+
+        if (!earliest || (rows[t].posting_date && rows[t].posting_date < earliest)) { earliest = rows[t].posting_date; }
+    }
+
+    /* Bucket headings are the report's own range columns, so they follow the
+       Ageing Range filters instead of being hardcoded here. */
+    var bucket_labels = [];
+    for (var c = 0; c < (columns || []).length; c++) {
+        if (cstr(columns[c].fieldname).indexOf("range") === 0) { bucket_labels.push(columns[c].label + " " + __("Days")); }
+    }
+    if (!bucket_labels.length) {
+        bucket_labels = ["0-30 " + __("Days"), "31-60 " + __("Days"), "61-90 " + __("Days"), "91-120 " + __("Days"), "121-Above " + __("Days")];
+    }
+    bucket_labels = [__("Not Due")].concat(bucket_labels);
+
+    /* ---- customer block: not in the report output, so read it from the Customer ---- */
+    var customer = {};
+    try {
+        if (party) {
+            frappe.call({
+                method: "frappe.client.get",
+                args: { doctype: "Customer", name: party },
+                async: false,
+                callback: function (r) { customer = (r && r.message) || {}; }
+            });
+        }
+    } catch (fetch_error) { customer = {}; }
+
+    var credit_limit = 0;
+    var limits = customer.credit_limits || [];
+    for (var l = 0; l < limits.length; l++) {
+        if (!filters.company || limits[l].company === filters.company) { credit_limit = limits[l].credit_limit; }
+    }
+
+    var collector = (customer.sales_team && customer.sales_team.length) ? customer.sales_team[0].sales_person : "";
+    var vat_no = customer.tax_id || customer.custom_vat_registration_number || "";
+    var cr_no = customer.custom_commercial_registration_number || "";
+    var name_ar = customer.customer_name_in_arabic || customer.custom_customer_name_arabic || "";
+    var customer_label = customer.customer_name || (rows.length ? rows[0].customer_name : "") || party;
+
+    var address = cstr(customer.primary_address).replace(/<br>/g, ", ");
+    try {
+        if (!address && customer.customer_primary_address) {
+            frappe.call({
+                method: "frappe.client.get",
+                args: { doctype: "Address", name: customer.customer_primary_address },
+                async: false,
+                callback: function (r) {
+                    var a = (r && r.message) || {};
+                    address = [a.address_line1, a.address_line2, a.city, a.pincode].filter(Boolean).join(", ");
+                }
+            });
+        }
+    } catch (address_error) { address = address || ""; }
+
+    var company = filters.company || "";
+%}
+
+<div id="header-html">
+    <div class="soa-head">
+        <table>
+            <tr>
+                <td width="34%"></td>
+                <td width="32%" class="soa-company">{{ company }}</td>
+                <td width="34%">
+                    <div class="soa-title">{%= __("Statement of Account") %} / <span dir="rtl">كشف حساب</span></div>
+                    <div class="soa-page">
+                        {%= __("Page No.") %} <span class="page"></span> {%= __("of") %} <span class="topage"></span>
+                    </div>
+                </td>
+            </tr>
+        </table>
+
+        <table>
+            <tr>
+                <td width="34%" style="vertical-align: top">
+                    <table class="soa-box">
+                        <tr>
+                            <td width="52%">
+                                <span class="soa-label-ar">من الفترة</span>
+                                <span class="soa-label-en">{%= __("Period From") %}</span>
+                            </td>
+                            <td class="soa-value">{%= on_date(earliest) %}</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <span class="soa-label-ar">إلى الفترة</span>
+                                <span class="soa-label-en">{%= __("To Period") %}</span>
+                            </td>
+                            <td class="soa-value">{%= on_date(filters.report_date) %}</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <span class="soa-label-ar">الحد الائتماني</span>
+                                <span class="soa-label-en">{%= __("Credit Limit") %}</span>
+                            </td>
+                            <td class="soa-value">{%= credit_limit ? format_currency(flt(credit_limit), ccy) : "" %}</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <span class="soa-label-ar">رقم السجل التجاري للعميل</span>
+                                <span class="soa-label-en">{%= __("Customer CR No.") %}</span>
+                            </td>
+                            <td class="soa-value">{{ cr_no }}</td>
+                        </tr>
+                    </table>
+                </td>
+                <td width="2%"></td>
+                <td width="64%" style="vertical-align: top">
+                    <table class="soa-box">
+                        <tr>
+                            <td width="17%">
+                                <span class="soa-label-ar">السادة</span>
+                                <span class="soa-label-en">{%= __("M/s") %}</span>
+                            </td>
+                            <td width="45%" class="soa-value">
+                                {% if (name_ar) { %}
+                                    <span class="soa-value-ar">{{ name_ar }}</span>
+                                {% } %}
+                                {{ customer_label }}
+                            </td>
+                            <td width="18%">
+                                <span class="soa-label-ar">فترة السداد</span>
+                                <span class="soa-label-en">{%= __("Payment Term") %}</span>
+                            </td>
+                            <td width="20%" class="soa-value">{{ customer.payment_terms || "" }}</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <span class="soa-label-ar">رقم العميل</span>
+                                <span class="soa-label-en">{%= __("Customer ID") %}</span>
+                            </td>
+                            <td class="soa-value">{{ party }}</td>
+                            <td>
+                                <span class="soa-label-ar">المحصل</span>
+                                <span class="soa-label-en">{%= __("Collector") %}</span>
+                            </td>
+                            <td class="soa-value">{{ collector }}</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <span class="soa-label-ar">عنوان العميل</span>
+                                <span class="soa-label-en">{%= __("Customer Address") %}</span>
+                            </td>
+                            <td colspan="3" class="soa-value">{{ address }}</td>
+                        </tr>
+                        <tr>
+                            <td>
+                                <span class="soa-label-ar">الرقم الضريبي للعميل</span>
+                                <span class="soa-label-en">{%= __("Customer VAT No.") %}</span>
+                            </td>
+                            <td colspan="3" class="soa-value">{{ vat_no }}</td>
+                        </tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
+
+        <table class="soa-notice">
+            <tr>
+                <td width="50%" class="soa-notice-blue">
+                    {%= __("This account is considered correct and approved by you if no objections are received within 15 days of the above issue date.") %}
+                </td>
+                <td width="50%" class="soa-notice-blue" dir="rtl" style="text-align: right">
+                    يُعتبر هذا الحساب صحيحاً ومعتمداً من جانبكم في حال عدم تلقينا أي اعتراض خلال 15 يوماً من تاريخ الإصدار المذكور أعلاه.
+                </td>
+            </tr>
+            <tr>
+                <td class="soa-notice-red">{%= __("PLEASE MAKE CHEQUE PAYABLE TO") %} {{ company }}</td>
+                <td class="soa-notice-red" dir="rtl" style="text-align: right">يرجى إصدار الشيك باسم : {{ company }}</td>
+            </tr>
+        </table>
+    </div>
+</div>
+
+<div id="footer-html">
+    <div class="soa-foot">
+        <div class="soa-foot-line">{{ company }}</div>
+    </div>
+</div>
+
+<table class="soa-grid">
+    <thead>
+        <tr>
+            <th width="9%">التاريخ<br>{%= __("Date") %}</th>
+            <th width="9%">تاريخ الاستحقاق<br>{%= __("Due Date") %}</th>
+            <th width="6%">الفرع<br>{%= __("Branch") %}</th>
+            <th width="15%">رقم المستند<br>{%= __("Document No") %}</th>
+            <th width="5%">النوع<br>{%= __("Type") %}</th>
+            <th width="6%">العمر<br>{%= __("Age") %}</th>
+            <th width="13%">أمر الشراء<br>{%= __("Customer LPO") %}</th>
+            <th width="12%">مدين<br>{%= __("Invoiced") %}</th>
+            <th width="12%">دائن<br>{%= __("Paid / Credit") %}</th>
+            <th width="13%">الرصيد<br>{%= __("Outstanding") %}</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for (var i = 0; i < rows.length; i++) { %}
+            {% var row = rows[i]; %}
+            <tr>
+                <td>{%= on_date(row.posting_date) %}</td>
+                <td>{%= on_date(row.due_date) %}</td>
+                <td class="soa-mid">{{ branch_of(row.cost_center) }}</td>
+                <td>{{ row.voucher_no || "" }}</td>
+                <td class="soa-mid">{%= type_code(row) %}</td>
+                <td class="soa-mid soa-overdue">{%= flt(row.age) > 0 ? cint(row.age) : "" %}</td>
+                <td>{{ row.po_no || "" }}</td>
+                <td class="soa-num">{%= amount(row.invoiced) %}</td>
+                <td class="soa-num">{%= amount(flt(row.paid) + flt(row.credit_note)) %}</td>
+                <td class="soa-num">{%= amount(row.outstanding) %}</td>
+            </tr>
+        {% } %}
+
+        {% if (!rows.length) { %}
+            <tr><td colspan="10" class="soa-empty">{%= __("No outstanding items for this customer.") %}</td></tr>
+        {% } %}
+    </tbody>
+</table>
+
+<div class="soa-legend">
+    {%= __("PY - Payment, IN - Invoice, CR - Credit, DB - Debit Note, TR - Return, AD - Financial Adjustment") %}
+</div>
+
+<table class="soa-totals">
+    <tr>
+        <td width="63%">{%= __("Total") %} <span dir="rtl">الاجمالي</span></td>
+        <td width="12%" class="soa-num">{%= amount(total_invoiced) %}</td>
+        <td width="12%" class="soa-num">{%= amount(total_credit) %}</td>
+        <td width="13%" class="soa-num">{%= amount(total_outstanding) %}</td>
+    </tr>
+</table>
+
+<table class="soa-ageing">
+    <thead>
+        <tr>
+            {% for (var h = 0; h < bucket_labels.length; h++) { %}
+                <th>{{ bucket_labels[h] }}</th>
+            {% } %}
+        </tr>
+    </thead>
+    <tbody>
+        <tr>
+            {% for (var v = 0; v < buckets.length; v++) { %}
+                <td>{%= amount(buckets[v]) %}</td>
+            {% } %}
+        </tr>
+    </tbody>
+</table>
