@@ -170,15 +170,22 @@
     }
     .soa-cols th .ar { display: block; font-weight: 500; font-size: 5.6pt; opacity: .85; }
 
+    /* Text columns wrap; they must never ellipsize. Column widths are
+       percentages of whatever width the print job ends up with, and that varies
+       with the paper, the margins and the scale chosen in the print dialog — so
+       a width that fits here can clip elsewhere. Wrapping degrades to a second
+       line instead of silently hiding a voucher number. Dates and amounts have
+       known widths and stay on one line. */
     .soa > tbody > tr > td {
         border: 0.5pt solid #c3c9d2;
         padding: 0.9mm 1.2mm;
         font-size: 7pt;
         vertical-align: middle;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
+    .soa > tbody > tr > td.nowrap { white-space: nowrap; overflow-wrap: normal; word-break: normal; }
     .soa > tbody > tr:nth-child(even) > td { background: #f7f8fa; }
     .soa > tbody > tr { page-break-inside: avoid; }
 
@@ -460,10 +467,10 @@
 
         <table class="soa-cols">
             <colgroup>
-                <col style="width: 10.5%"><col style="width: 10.5%"><col style="width: 6%">
-                <col style="width: 16%"><col style="width: 4.5%"><col style="width: 5%">
-                <col style="width: 9%"><col style="width: 12.5%"><col style="width: 12.5%">
-                <col style="width: 13.5%">
+                <col style="width: 9.5%"><col style="width: 9.5%"><col style="width: 5.5%">
+                <col style="width: 19%"><col style="width: 5.5%"><col style="width: 4.5%">
+                <col style="width: 8%"><col style="width: 12%"><col style="width: 12%">
+                <col style="width: 14.5%">
             </colgroup>
             <tr>
         <th>{%= __("Date") %}<span class="ar">التاريخ</span></th>
@@ -472,7 +479,7 @@
         <th>{%= __("Document No") %}<span class="ar">رقم المستند</span></th>
         <th>{%= __("Type") %}<span class="ar">النوع</span></th>
         <th>{%= __("Age") %}<span class="ar">العمر</span></th>
-        <th>{%= __("Customer LPO") %}<span class="ar">أمر الشراء</span></th>
+        <th>{%= __("LPO") %}<span class="ar">أمر الشراء</span></th>
         <th>{%= __("Invoiced") %}<span class="ar">مدين</span></th>
         <th>{%= __("Paid / Credit") %}<span class="ar">دائن</span></th>
         <th>{%= __("Outstanding") %}<span class="ar">الرصيد</span></th>
@@ -482,10 +489,10 @@
 
 <table class="soa">
     <colgroup>
-        <col style="width: 10.5%"><col style="width: 10.5%"><col style="width: 6%">
-        <col style="width: 16%"><col style="width: 4.5%"><col style="width: 5%">
-        <col style="width: 9%"><col style="width: 12.5%"><col style="width: 12.5%">
-        <col style="width: 13.5%">
+        <col style="width: 9.5%"><col style="width: 9.5%"><col style="width: 5.5%">
+        <col style="width: 19%"><col style="width: 5.5%"><col style="width: 4.5%">
+        <col style="width: 8%"><col style="width: 12%"><col style="width: 12%">
+        <col style="width: 14.5%">
     </colgroup>
 
 
@@ -493,16 +500,16 @@
         {% for (var i = 0; i < rows.length; i++) { %}
             {% var row = rows[i]; %}
             <tr>
-                <td>{%= on_date(row.posting_date) %}</td>
-                <td>{%= on_date(row.due_date) %}</td>
+                <td class="nowrap">{%= on_date(row.posting_date) %}</td>
+                <td class="nowrap">{%= on_date(row.due_date) %}</td>
                 <td class="mid">{{ branch_of(row.cost_center) }}</td>
                 <td>{{ row.voucher_no || "" }}</td>
                 <td class="mid">{%= type_code(row) %}</td>
                 <td class="mid overdue">{%= flt(row.age) > 0 ? cint(row.age) : "" %}</td>
                 <td class="muted">{{ row.po_no || "" }}</td>
-                <td class="num">{%= amount(row.invoiced) %}</td>
-                <td class="num">{%= amount(flt(row.paid) + flt(row.credit_note)) %}</td>
-                <td class="num">{%= amount(row.outstanding) %}</td>
+                <td class="num nowrap">{%= amount(row.invoiced) %}</td>
+                <td class="num nowrap">{%= amount(flt(row.paid) + flt(row.credit_note)) %}</td>
+                <td class="num nowrap">{%= amount(row.outstanding) %}</td>
             </tr>
         {% } %}
 
