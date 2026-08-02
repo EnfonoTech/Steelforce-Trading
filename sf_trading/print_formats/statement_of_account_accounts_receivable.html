@@ -28,12 +28,17 @@
      the company default. Leave "With Letter head" UNTICKED — ticking it makes
      the wrapper draw the artwork a second time.
 
+     NO APOSTROPHES anywhere in this file. frappe.template.compile builds the
+     render function by quoting literal text with single quotes and escapes only
+     the FIRST apostrophe in each literal run, so a second one ends the string
+     early and the format dies with "missing ) after argument list".
+
      Row shape, confirmed against this bench (erpnext 15.116, party-filtered):
        posting_date, due_date, voucher_type, voucher_no, cost_center, po_no,
        invoiced, paid, credit_note, outstanding, age, range1..range5, currency,
        party, customer_name, remarks
-     Ageing headings come from report.columns, so they follow the report's own
-     Ageing Range filters instead of being hardcoded.
+     Ageing headings come from report.columns, so they follow the Ageing Range
+     filters set on the report itself instead of being hardcoded.
 
      The customer block (VAT no, CR no, credit limit, terms, collector, Arabic
      name, address) is not in the report output and is read from the Customer
@@ -207,6 +212,28 @@
     .soa-age .notdue { background: #fbfbfc; }
 
     .soa-empty { padding: 8mm 0; text-align: center; font-size: 8.5pt; color: #6b7280; }
+
+    /* ---------- letter head placement ----------
+       The Letter Head record positions its artwork with position:fixed, which
+       takes it out of the flow: the browser then repaints it over every page
+       and the statement disappears underneath — the masthead and the first row
+       of each info box at the top, the totals and ageing band at the bottom.
+
+       Reserving the band with repeating thead/tfoot spacers was tried and
+       costs a blank first page: Chrome starts a table carrying a thead on a
+       fresh sheet, with spacers of any height, tfoot before or after tbody.
+
+       Putting the artwork back in the flow is what works. It then prints once,
+       at the top, with the statement below it and nothing overlapping. This
+       styles the printed copy only; the Letter Head record is untouched. */
+    @media print {
+        .letter-head .header,
+        .letter-head-footer .footer {
+            position: static !important;
+        }
+        .letter-head { margin-bottom: 3mm; }
+        .letter-head-footer { margin-top: 4mm; }
+    }
 </style>
 
 {%
@@ -227,7 +254,7 @@
         return "IN";
     };
 
-    /* ---- totals and the ageing band, both from ERPNext's own figures ---- */
+    /* ---- totals and the ageing band, both from figures ERPNext produced ---- */
     var total_invoiced = 0, total_credit = 0, total_outstanding = 0;
     /* First cell is Not Due: ERPNext zeroes every ageing bucket on an item whose
        due date has not arrived (accounts_receivable.py, set_ageing), so without
@@ -333,7 +360,7 @@
                 <td style="width: 60mm" class="soa-logo">
                     {% if (logo) { %}<img src="{{ logo }}">{% } %}
                 </td>
-                <td style="width: 66mm" class="soa-org">{{ company }}</td>
+                <td style="width: 66mm" class="soa-org">{% if (!with_letter_head) { %}{{ company }}{% } %}</td>
                 <td style="width: 70mm" class="soa-doc-title">
                     {%= __("Statement of Account") %} <span class="ar">/ كشف حساب</span>
                 </td>
@@ -434,8 +461,8 @@
         <table class="soa-cols">
             <colgroup>
                 <col style="width: 10.5%"><col style="width: 10.5%"><col style="width: 6%">
-                <col style="width: 13%"><col style="width: 4.5%"><col style="width: 5%">
-                <col style="width: 12%"><col style="width: 12.5%"><col style="width: 12.5%">
+                <col style="width: 16%"><col style="width: 4.5%"><col style="width: 5%">
+                <col style="width: 9%"><col style="width: 12.5%"><col style="width: 12.5%">
                 <col style="width: 13.5%">
             </colgroup>
             <tr>
@@ -456,8 +483,8 @@
 <table class="soa">
     <colgroup>
         <col style="width: 10.5%"><col style="width: 10.5%"><col style="width: 6%">
-        <col style="width: 13%"><col style="width: 4.5%"><col style="width: 5%">
-        <col style="width: 12%"><col style="width: 12.5%"><col style="width: 12.5%">
+        <col style="width: 16%"><col style="width: 4.5%"><col style="width: 5%">
+        <col style="width: 9%"><col style="width: 12.5%"><col style="width: 12.5%">
         <col style="width: 13.5%">
     </colgroup>
 
