@@ -25,11 +25,26 @@ frappe.query_reports["Cash Flow Money In vs Money Out"] = {
 			default: frappe.datetime.get_today(),
 		},
 		{
+			fieldname: "view",
+			label: __("View"),
+			fieldtype: "Select",
+			options: [
+				"Summary by Period",
+				"Transactions",
+				"By Party",
+				"By Voucher Type",
+				"By Account",
+				"By Mode of Payment",
+			].join("\n"),
+			default: "Summary by Period",
+		},
+		{
 			fieldname: "periodicity",
 			label: __("Periodicity"),
 			fieldtype: "Select",
 			options: ["Daily", "Weekly", "Monthly", "Quarterly", "Yearly"].join("\n"),
 			default: "Monthly",
+			depends_on: 'eval:!doc.view || doc.view=="Summary by Period"',
 		},
 		{
 			fieldname: "account",
@@ -78,6 +93,9 @@ frappe.query_reports["Cash Flow Money In vs Money Out"] = {
 			value = `<span style="color:#c62828">${value}</span>`;
 		}
 		// a negative running balance is an overdraft and should be impossible to miss
+		if (column.fieldname === "net" && data && flt(data.net) > 0) {
+			value = `<span style="color:#2e7d32">${value}</span>`;
+		}
 		if (column.fieldname === "running" && data && flt(data.running) < 0) {
 			value = `<span style="color:#c62828;font-weight:600">${value}</span>`;
 		}
