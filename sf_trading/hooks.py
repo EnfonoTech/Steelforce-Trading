@@ -285,6 +285,10 @@ doc_events = {
 		"before_validate": [_CC_HOOK, _PTT_HOOK],
 		"validate": _LH_HOOK,
 	},
+	# core logs the impersonation but drops the reason — put it back on the row
+	"Activity Log": {
+		"before_insert": "sf_trading.api.impersonation_log.capture_impersonation_reason",
+	},
 }
 
 # Scheduled Tasks
@@ -441,6 +445,7 @@ fixtures = [
 					"Item Group-custom_min_margin_pct",
 					"Price List-custom_enforce_min_price",
 					"Material Request Item-custom_source_mr",
+					"Activity Log-custom_impersonation_reason",
 				)
 			]
 		]
