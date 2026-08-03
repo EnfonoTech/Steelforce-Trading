@@ -524,10 +524,13 @@ def compute_approval_route(advice):
 
       1. any overdue Purchase Invoice   → HO Accounts, then GM/Finance, then the Accountant
       2. more than one Purchase Order   → Purchase Manager, then GM/Finance, then the Accountant
-      3. exactly one Purchase Order     → straight to the Accountant
-      4. invoices, none overdue:
+      3. everything else, on the amount:
            BHD 500 or less              → straight to the Accountant
            more than BHD 500            → GM or Finance Manager, then the Accountant
+
+    A single purchase order used to go straight to the Accountant whatever it was worth, which
+    let BHD 6,364 reach the accountant on the raiser's send alone. The amount now decides for
+    orders exactly as it does for invoices.
 
     An advice may mix orders and invoices, which the rules above do not name. Overdue wins,
     because an overdue payable is the case the extra scrutiny exists for; the order count is
@@ -544,10 +547,6 @@ def compute_approval_route(advice):
 
     if len(orders) > 1:
         return ROUTE_PURCHASE_MANAGER
-
-    if orders and not invoices:
-        # a single order, nothing else — the simple case the rule sends straight through
-        return ROUTE_ACCOUNTANT
 
     if flt(advice.get("payment_amount")) <= FINANCE_APPROVAL_LIMIT:
         return ROUTE_ACCOUNTANT

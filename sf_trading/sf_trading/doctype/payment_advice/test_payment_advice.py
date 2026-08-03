@@ -495,3 +495,37 @@ class TestCreateAdvicesFromDocuments(FrappeTestCase):
         )
 
         self.assertEqual(wf.FINANCE_APPROVAL_LIMIT, FINANCE_APPROVAL_LIMIT)
+
+    # ── the amount decides for orders too, not just invoices ───────────────────
+
+    def _route(self, rows, amount):
+        import sf_trading.sf_trading.doctype.payment_advice.payment_advice as pa
+
+        advice = frappe._dict({
+            "payment_amount": amount,
+            "payment_advice_reference": [frappe._dict(r) for r in rows],
+        })
+        return pa.compute_approval_route(advice)
+
+    def test_single_order_within_the_limit_goes_direct(self):
+        rows = [{"reference_doctype": "Purchase Order", "reference_record": "PO-1"}]
+        self.assertEqual(self._route(rows, 500), "Accountant")
+
+    def test_single_order_over_the_limit_goes_to_finance(self):
+        """A single order used to bypass the limit; BHD 6,364 reached the accountant alone."""
+        rows = [{"reference_doctype": "Purchase Order", "reference_record": "PO-1"}]
+        self.assertEqual(self._route(rows, 6364.458), "Finance")
+
+    def test_single_invoice_is_unchanged(self):
+        rows = [{"reference_doctype": "Purchase Invoice", "reference_record": "PI-1"}]
+        self.assertEqual(self._route(rows, 500), "Accountant")
+        self.assertEqual(self._route(rows, 500.001), "Finance")
+
+    def test_several_orders_still_go_to_the_purchase_manager(self):
+        """The order count is tested before the amount, so a small multi-order advice still
+        takes the longer route."""
+        rows = [
+            {"reference_doctype": "Purchase Order", "reference_record": "PO-1"},
+            {"reference_doctype": "Purchase Order", "reference_record": "PO-2"},
+        ]
+        self.assertEqual(self._route(rows, 10), "Purchase Manager")
