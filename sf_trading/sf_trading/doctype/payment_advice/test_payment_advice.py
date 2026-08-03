@@ -511,9 +511,18 @@ class TestCreateAdvicesFromDocuments(FrappeTestCase):
         rows = [{"reference_doctype": "Purchase Order", "reference_record": "PO-1"}]
         self.assertEqual(self._route(rows, 500), "Accountant")
 
-    def test_single_order_over_the_limit_goes_to_finance(self):
-        """A single order used to bypass the limit; BHD 6,364 reached the accountant alone."""
+    def test_single_order_over_the_limit_goes_to_the_purchase_manager(self):
+        """A single large order takes the same route as several: Purchase Manager first.
+
+        It used to bypass the limit entirely, which is how BHD 6,364 was released on one
+        signature.
+        """
         rows = [{"reference_doctype": "Purchase Order", "reference_record": "PO-1"}]
+        self.assertEqual(self._route(rows, 6364.458), "Purchase Manager")
+
+    def test_a_large_invoice_still_goes_to_finance_not_purchase(self):
+        """Orders and invoices part company above the limit: the order was already approved."""
+        rows = [{"reference_doctype": "Purchase Invoice", "reference_record": "PI-1"}]
         self.assertEqual(self._route(rows, 6364.458), "Finance")
 
     def test_single_invoice_is_unchanged(self):

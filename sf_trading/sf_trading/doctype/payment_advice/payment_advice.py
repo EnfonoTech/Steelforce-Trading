@@ -523,14 +523,18 @@ def compute_approval_route(advice):
     The rules, in the order they are tested:
 
       1. any overdue Purchase Invoice   → HO Accounts, then GM/Finance, then the Accountant
-      2. more than one Purchase Order   → Purchase Manager, then GM/Finance, then the Accountant
-      3. everything else, on the amount:
+      2. any Purchase Order that is either one of several, or on its own worth more than
+         BHD 500                        → Purchase Manager, then GM/Finance, then the Accountant
+      3. a single Purchase Order at or below BHD 500 → straight to the Accountant
+      4. invoices, none overdue:
            BHD 500 or less              → straight to the Accountant
            more than BHD 500            → GM or Finance Manager, then the Accountant
 
-    A single purchase order used to go straight to the Accountant whatever it was worth, which
-    let BHD 6,364 reach the accountant on the raiser's send alone. The amount now decides for
-    orders exactly as it does for invoices.
+    Orders and invoices part company above the limit. A large order goes through the Purchase
+    Manager first, because somebody who knows the purchase should see it before Finance does;
+    a large invoice goes straight to Finance, the order having already been approved when it
+    was raised. A single order used to reach the Accountant on the raiser's send alone whatever
+    it was worth, which is how BHD 6,364 was released with one signature.
 
     An advice may mix orders and invoices, which the rules above do not name. Overdue wins,
     because an overdue payable is the case the extra scrutiny exists for; the order count is
@@ -545,7 +549,9 @@ def compute_approval_route(advice):
     if invoices and _has_overdue_invoice(invoices):
         return ROUTE_HO_ACCOUNTS
 
-    if len(orders) > 1:
+    # One order or several, the purchase route applies as soon as the money is worth a second
+    # opinion from the person who knows the purchase.
+    if orders and (len(orders) > 1 or flt(advice.get("payment_amount")) > FINANCE_APPROVAL_LIMIT):
         return ROUTE_PURCHASE_MANAGER
 
     if flt(advice.get("payment_amount")) <= FINANCE_APPROVAL_LIMIT:
