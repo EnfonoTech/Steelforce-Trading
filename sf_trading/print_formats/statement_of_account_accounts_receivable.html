@@ -220,6 +220,13 @@
 
     .soa-empty { padding: 8mm 0; text-align: center; font-size: 8.5pt; color: #6b7280; }
 
+    /* The artwork this template draws itself, at full content width so it reads the
+       same as the band the print wrapper draws when a letter head is picked. */
+    .letter-head, .letter-head-footer { text-align: center; }
+    .letter-head { margin-bottom: 3mm; }
+    .letter-head-footer { margin-top: 4mm; }
+    .letter-head img, .letter-head-footer img { max-width: 100%; height: auto; }
+
     /* ---------- letter head placement ----------
        The Letter Head record positions its artwork with position:fixed, which
        takes it out of the flow: the browser then repaints it over every page
@@ -333,41 +340,53 @@
         }
     } catch (address_error) { address = address || ""; }
 
-    /* ---- letter head artwork, drawn here so it repeats with the table head.
-           Skipped when the print dialog is already drawing it. ---- */
-    var logo = "";
+    /* ---- letter head artwork, both ends, drawn by this template.
+
+           frappe/public/html/print_template.html wraps this content for the browser
+           Print path and the PDF path alike, but it draws the letter head only when
+           the print dialog has With Letter head ticked, and it draws the footer band
+           only when Repeat Header and Footer is ticked on top of that. Leave the
+           dialog alone - which is the normal way to export - and the statement came
+           out with no artwork at either end, while the Print button, where the
+           letter head was ticked, carried it. Fetching both ends here makes the two
+           match without anybody having to remember a checkbox.
+
+           Skipped when the dialog is already drawing the artwork, so ticking the box
+           never doubles it up. ---- */
+    var lh_header = "", lh_footer = "";
     var with_letter_head = print_settings && print_settings.with_letter_head;
     try {
         if (!with_letter_head) {
-            var head_filters = (print_settings && print_settings.letter_head)
-                ? { name: print_settings.letter_head }
-                : { is_default: 1, disabled: 0 };
             frappe.call({
-                method: "frappe.client.get_value",
-                args: { doctype: "Letter Head", filters: head_filters, fieldname: ["content"] },
+                method: "sf_trading.api.statement_of_account.get_letter_head_artwork",
+                args: {
+                    letter_head: (print_settings && print_settings.letter_head_name) || null,
+                    company: filters.company || null,
+                },
                 async: false,
                 callback: function (r) {
-                    var content = cstr(r && r.message && r.message.content);
-                    var found = content.match(/<img[^>]+src=["']([^"']+)["']/i);
-                    logo = found ? found[1] : "";
-                    /* The PDF is rendered server side with no page of its own to
-                       resolve against, so a site-relative src would come out blank. */
-                    if (logo.indexOf("/") === 0) { logo = frappe.urllib.get_base_url() + logo; }
+                    var art = (r && r.message) || {};
+                    /* Absolute already: wkhtmltopdf renders each band as a document of
+                       its own, with no site to resolve a site-relative src against. */
+                    lh_header = cstr(art.header_image);
+                    lh_footer = cstr(art.footer_image);
                 }
             });
         }
-    } catch (letter_head_error) { logo = ""; }
+    } catch (letter_head_error) { lh_header = ""; lh_footer = ""; }
 
     var company = filters.company || "";
 %}
 
+{% if (lh_header) { %}
+<div class="letter-head"><div class="header"><img src="{{ lh_header }}"></div></div>
+{% } %}
+
 <div class="soa-head">
         <table class="soa-mast">
             <tr>
-                <td style="width: 60mm" class="soa-logo">
-                    {% if (logo) { %}<img src="{{ logo }}">{% } %}
-                </td>
-                <td style="width: 66mm" class="soa-org">{% if (!with_letter_head) { %}{{ company }}{% } %}</td>
+                <td style="width: 60mm" class="soa-logo"></td>
+                <td style="width: 66mm" class="soa-org">{% if (!with_letter_head && !lh_header) { %}{{ company }}{% } %}</td>
                 <td style="width: 70mm" class="soa-doc-title">
                     {%= __("Statement of Account") %} <span class="ar">/ كشف حساب</span>
                 </td>
@@ -552,3 +571,7 @@
         </tr>
     </tbody>
 </table>
+
+{% if (lh_footer) { %}
+<div class="letter-head-footer"><div class="footer"><img src="{{ lh_footer }}"></div></div>
+{% } %}

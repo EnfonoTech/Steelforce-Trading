@@ -74,19 +74,43 @@ def get_collector(customer):
     )
 
 
-def get_letter_head_images(company):
+def get_letter_head_images(company, letter_head=None):
     """Header and footer artwork from the company's letter head, if it has any.
 
     Steel Force's letter head is a pair of images rather than markup, so the
     statement reuses them instead of rebuilding the branding in the template.
+
+    `letter_head` names one explicitly; without it the site default is used.
     """
-    letter_head = frappe.db.get_value(
-        "Letter Head", {"disabled": 0, "is_default": 1}, ["content", "footer"], as_dict=True
-    )
-    if not letter_head:
+    row = None
+    if letter_head:
+        row = frappe.db.get_value(
+            "Letter Head", letter_head, ["content", "footer"], as_dict=True
+        )
+    if not row:
+        row = frappe.db.get_value(
+            "Letter Head", {"disabled": 0, "is_default": 1}, ["content", "footer"], as_dict=True
+        )
+    if not row:
         return "", ""
 
-    return first_image(letter_head.content), first_image(letter_head.footer)
+    return first_image(row.content), first_image(row.footer)
+
+
+@frappe.whitelist()
+def get_letter_head_artwork(letter_head: str | None = None, company: str | None = None):
+    """The two images a statement needs when no letter head was picked in the print dialog.
+
+    The print wrapper draws the letter head only when With Letter head is ticked, and the
+    footer band only when Repeat Header and Footer is ticked as well, so a statement
+    exported with the dialog left alone had no artwork at either end. The print format
+    calls this and draws both ends itself.
+
+    Returns nothing but branding artwork already published under /files, so it is readable
+    by any signed-in user - the same artwork every printed document carries.
+    """
+    header_image, footer_image = get_letter_head_images(company, letter_head=letter_head)
+    return {"header_image": header_image, "footer_image": footer_image}
 
 
 def first_image(html):
