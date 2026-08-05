@@ -501,6 +501,75 @@
   .content-body { padding: 28px 20px 56px; }
   .content-body h2 { font-size: 1.35rem; margin-top: 2.4rem; }
 }
+
+/* ── Search ──────────────────────────────────────────────────────────────────
+   A handbook is only as good as the reader's ability to land on the one
+   paragraph they need. The box filters the sidebar and the body together, so
+   what is listed is exactly what is left on the page. */
+.search-wrap { padding: 14px 16px 10px; border-bottom: 1px solid rgba(255,255,255,.08); }
+.search-box { position: relative; }
+.search-box input {
+  width: 100%; padding: 8px 28px 8px 30px;
+  background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.12);
+  border-radius: 8px; color: #fff; font-size: 13px; font-family: inherit;
+}
+.search-box input::placeholder { color: #6b7299; }
+/* the browser draws its own clear cross on a search input; ours is the one that
+   also resets the page, so hide the native one rather than show two */
+.search-box input::-webkit-search-cancel-button,
+.search-box input::-webkit-search-decoration { -webkit-appearance: none; appearance: none; }
+.search-box input:focus { outline: none; border-color: #2563eb; background: rgba(255,255,255,.1); }
+.search-box .s-icon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%);
+  color: #6b7299; font-size: 13px; pointer-events: none; }
+.search-box .s-clear { position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  background: none; border: 0; color: #6b7299; cursor: pointer; font-size: 15px;
+  padding: 2px 5px; line-height: 1; display: none; }
+.search-box .s-clear:hover { color: #fff; }
+.search-hint { font-size: 10.5px; color: #4a5180; margin-top: 6px; }
+.search-count { font-size: 11px; color: #93c5fd; margin-top: 6px; display: none; }
+
+/* ── Sidebar nav: two levels, second level folds away ───────────────────── */
+.nav-sub { display: none; }
+.nav-item.open + .nav-sub, .nav-sub.show { display: block; }
+.nav-item.sub { padding-left: 42px; font-size: 12.5px; color: #7b83ab; }
+.nav-item.active { background: rgba(37,99,235,.16); color: #fff; border-left-color: #2563eb; }
+.nav-item .nav-caret { margin-left: auto; font-size: 9px; color: #4a5180; transition: transform .15s; }
+.nav-item.open .nav-caret { transform: rotate(90deg); }
+
+/* ── Body sections, built at load so each one can be hidden or folded ───── */
+.guide-sec { margin-bottom: 1rem; }
+/* the heading rules above use :first-of-type, which once every h2 sits in its own
+   wrapper would give all of them the reduced top margin and run the sections together */
+.guide-sec > h2 { margin-top: 3.2rem; }
+.guide-sec:first-of-type > h2 { margin-top: .6rem; }
+.guide-sec.hidden, .guide-sub.hidden { display: none; }
+.guide-sec > h2 { cursor: pointer; }
+.guide-sec > h2::after {
+  content: "–"; float: right; color: #b8c2d4; font-weight: 400; font-size: 1.1rem;
+}
+.guide-sec.folded > h2::after { content: "+"; }
+.guide-sec.folded > *:not(h2) { display: none; }
+
+mark.hit { background: #fde68a; color: #14213d; padding: 0 2px; border-radius: 3px; }
+
+.no-results {
+  display: none; padding: 2.5rem 1rem; text-align: center; color: #64748b;
+  background: #fff; border: 1px dashed #cbd5e1; border-radius: 12px; margin-top: 1.5rem;
+}
+.no-results strong { color: #14213d; }
+
+.to-top {
+  position: fixed; right: 26px; bottom: 26px; width: 42px; height: 42px;
+  border-radius: 50%; border: 0; background: #1a1a2e; color: #fff; cursor: pointer;
+  font-size: 17px; box-shadow: 0 4px 14px rgba(20,33,61,.28); display: none; z-index: 90;
+}
+.to-top:hover { background: #2563eb; }
+
+@media print {
+  .search-wrap, .to-top, .no-results { display: none !important; }
+  .guide-sec.folded > *:not(h2) { display: revert !important; }
+  .guide-sec > h2::after { content: "" !important; }
+}
 </style>
 </head>
 <body>
@@ -517,6 +586,16 @@
         <p>User Guide</p>
       </div>
     </div>
+  </div>
+  <div class="search-wrap">
+    <div class="search-box">
+      <span class="s-icon">&#9906;</span>
+      <input type="search" id="guide-search" placeholder="Search the handbook"
+             autocomplete="off" spellcheck="false" aria-label="Search the handbook" />
+      <button class="s-clear" id="guide-search-clear" type="button" aria-label="Clear search">&times;</button>
+    </div>
+    <div class="search-hint">Press <code>/</code> to search, <code>Esc</code> to clear</div>
+    <div class="search-count" id="guide-search-count"></div>
   </div>
   <nav class="sidebar-nav" id="guide-index">
     <div class="nav-group-label">On this page</div>
@@ -535,26 +614,270 @@
     </div>
   </div>
 
-  <div class="content-body section">
+  <div class="content-body section" id="guide-body">
     {{ guide_html }}
+  </div>
+  <div class="no-results" id="guide-no-results">
+    Nothing in the handbook matches <strong id="guide-no-results-term"></strong>.<br />
+    Try a shorter word, or a phrase from the error message you are looking at.
   </div>
 </main>
 
+<button class="to-top" id="guide-to-top" type="button" aria-label="Back to top">&uarr;</button>
+
 <script>
-// build the sidebar index from the rendered headings, same idea as the desk page
-document.addEventListener("DOMContentLoaded", function () {
-  var nav = document.getElementById("guide-index");
-  document.querySelectorAll(".content-body h2, .content-body h3").forEach(function (h, i) {
-    var id = "sec-" + i;
-    h.id = id;
-    var a = document.createElement("a");
-    a.className = "nav-item";
-    a.href = "#" + id;
-    a.textContent = h.textContent;
-    if (h.tagName === "H3") { a.style.paddingLeft = "1.9rem"; a.style.fontSize = "0.8rem"; }
-    nav.appendChild(a);
+/* The handbook is one rendered markdown document. Everything below turns that flat
+   run of headings and paragraphs into something a reader can navigate: real sections
+   that fold, a two-level index, and a search that filters the sidebar and the page
+   together so what is listed is exactly what is left. */
+(function () {
+  var body, nav, input, clearBtn, countEl, noRes, noResTerm, toTop;
+  var sections = [], subs = [];
+
+  function slug(text, fallback) {
+    var s = String(text).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+    return s.slice(0, 60) || fallback;
+  }
+
+  /* ── 1. Group the flat output into sections (per h2) and sub-blocks (per h3) ── */
+  function buildSections() {
+    var nodes = Array.prototype.slice.call(body.childNodes);
+    var section = null, sub = null;
+
+    nodes.forEach(function (node) {
+      var isEl = node.nodeType === 1;
+
+      if (isEl && node.tagName === "H2") {
+        section = document.createElement("div");
+        section.className = "guide-sec";
+        node.id = slug(node.textContent, "sec-" + sections.length);
+        body.insertBefore(section, node);
+        section.appendChild(node);
+        sections.push(section);
+        sub = null;
+        return;
+      }
+      if (!section) return;                 // the intro above the first heading stays put
+
+      if (isEl && node.tagName === "H3") {
+        sub = document.createElement("div");
+        sub.className = "guide-sub";
+        node.id = slug(node.textContent, "sub-" + subs.length);
+        section.appendChild(sub);
+        subs.push(sub);
+        sub.appendChild(node);
+        return;
+      }
+      (sub || section).appendChild(node);
+    });
+  }
+
+  /* ── 2. Sidebar index, two levels, the second folded until its section is open ── */
+  function buildIndex() {
+    sections.forEach(function (section) {
+      var h2 = section.querySelector(":scope > h2");
+      var mySubs = Array.prototype.slice.call(section.querySelectorAll(":scope > .guide-sub > h3"));
+
+      var a = document.createElement("a");
+      a.className = "nav-item";
+      a.href = "#" + h2.id;
+      a.textContent = h2.textContent;
+      a.dataset.target = h2.id;
+      if (mySubs.length) {
+        var caret = document.createElement("span");
+        caret.className = "nav-caret";
+        caret.textContent = "▶";
+        a.appendChild(caret);
+      }
+      nav.appendChild(a);
+
+      if (!mySubs.length) return;
+      var group = document.createElement("div");
+      group.className = "nav-sub";
+      mySubs.forEach(function (h3) {
+        var s = document.createElement("a");
+        s.className = "nav-item sub";
+        s.href = "#" + h3.id;
+        s.textContent = h3.textContent;
+        s.dataset.target = h3.id;
+        group.appendChild(s);
+      });
+      nav.appendChild(group);
+    });
+  }
+
+  /* ── 3. Highlighting. Unwrapping marks is safer than restoring saved HTML,
+        because every element reference stays valid. ── */
+  var SKIP = { MARK: 1, PRE: 1, CODE: 1, SCRIPT: 1, STYLE: 1 };
+
+  function unhighlight(root) {
+    root.querySelectorAll("mark.hit").forEach(function (m) {
+      m.parentNode.replaceChild(document.createTextNode(m.textContent), m);
+    });
+    root.normalize();
+  }
+
+  function highlight(root, term) {
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode: function (n) {
+        if (!n.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        if (SKIP[n.parentNode.nodeName]) return NodeFilter.FILTER_REJECT;
+        return n.nodeValue.toLowerCase().indexOf(term) === -1
+          ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    var hits = [], node;
+    while ((node = walker.nextNode())) hits.push(node);
+
+    hits.forEach(function (text) {
+      var lower = text.nodeValue.toLowerCase();
+      var frag = document.createDocumentFragment();
+      var at = 0, found;
+      while ((found = lower.indexOf(term, at)) !== -1) {
+        if (found > at) frag.appendChild(document.createTextNode(text.nodeValue.slice(at, found)));
+        var mark = document.createElement("mark");
+        mark.className = "hit";
+        mark.textContent = text.nodeValue.slice(found, found + term.length);
+        frag.appendChild(mark);
+        at = found + term.length;
+      }
+      if (at < text.nodeValue.length) frag.appendChild(document.createTextNode(text.nodeValue.slice(at)));
+      text.parentNode.replaceChild(frag, text);
+    });
+  }
+
+  /* ── 4. Search ── */
+  function ownText(section) {
+    // the section's own words, not counting its sub-blocks
+    var clone = section.cloneNode(true);
+    clone.querySelectorAll(".guide-sub").forEach(function (s) { s.remove(); });
+    return clone.textContent.toLowerCase();
+  }
+
+  function resetSearch() {
+    unhighlight(body);
+    sections.forEach(function (s) { s.classList.remove("hidden"); });
+    subs.forEach(function (s) { s.classList.remove("hidden"); });
+    nav.querySelectorAll(".nav-item").forEach(function (a) { a.style.display = ""; });
+    nav.querySelectorAll(".nav-sub").forEach(function (g) { g.classList.remove("show"); });
+    countEl.textContent = "";
+    countEl.style.display = "none";
+    noRes.style.display = "none";
+    clearBtn.style.display = "none";
+  }
+
+  function runSearch(raw) {
+    var term = raw.trim().toLowerCase();
+    clearBtn.style.display = term ? "block" : "none";
+    if (term.length < 2) { resetSearch(); return; }
+
+    unhighlight(body);
+    var secMatches = 0, subMatches = 0, visibleIds = {};
+
+    sections.forEach(function (section) {
+      var mySubs = Array.prototype.slice.call(section.querySelectorAll(":scope > .guide-sub"));
+      var selfHit = ownText(section).indexOf(term) !== -1;
+      var subHits = 0;
+
+      mySubs.forEach(function (sub) {
+        var hit = sub.textContent.toLowerCase().indexOf(term) !== -1;
+        sub.classList.toggle("hidden", !hit && !selfHit);
+        if (hit) {
+          subHits++;
+          visibleIds[sub.querySelector("h3").id] = 1;
+          highlight(sub, term);
+        }
+      });
+
+      var keep = selfHit || subHits > 0;
+      section.classList.toggle("hidden", !keep);
+      if (keep) {
+        section.classList.remove("folded");           // never hide a match behind a fold
+        secMatches++;
+        subMatches += subHits;
+        visibleIds[section.querySelector(":scope > h2").id] = 1;
+        if (selfHit) highlight(section, term);
+      }
+    });
+
+    // the index shows only what survived
+    nav.querySelectorAll(".nav-item").forEach(function (a) {
+      a.style.display = visibleIds[a.dataset.target] ? "" : "none";
+    });
+    nav.querySelectorAll(".nav-sub").forEach(function (g) { g.classList.add("show"); });
+
+    var said = secMatches + (secMatches === 1 ? " section" : " sections");
+    if (subMatches) said += ", " + subMatches + (subMatches === 1 ? " topic" : " topics");
+    countEl.textContent = secMatches ? said : "nothing found";
+    countEl.style.display = "block";
+    noResTerm.textContent = '"' + raw.trim() + '"';
+    noRes.style.display = secMatches ? "none" : "block";
+  }
+
+  /* ── 5. Which section am I reading ── */
+  function trackActive() {
+    if (!("IntersectionObserver" in window)) return;
+    var heads = body.querySelectorAll(".guide-sec > h2, .guide-sub > h3");
+    var seen = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (!e.isIntersecting) return;
+        nav.querySelectorAll(".nav-item.active").forEach(function (a) { a.classList.remove("active"); });
+        var link = nav.querySelector('.nav-item[data-target="' + e.target.id + '"]');
+        if (!link) return;
+        link.classList.add("active");
+        var group = link.classList.contains("sub") ? link.parentNode : link.nextElementSibling;
+        if (group && group.classList.contains("nav-sub")) group.classList.add("show");
+      });
+    }, { rootMargin: "-10% 0px -80% 0px" });
+    heads.forEach(function (h) { seen.observe(h); });
+  }
+
+  function wire() {
+    input.addEventListener("input", function () { runSearch(input.value); });
+    clearBtn.addEventListener("click", function () { input.value = ""; resetSearch(); input.focus(); });
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "/" && document.activeElement !== input) { e.preventDefault(); input.focus(); }
+      if (e.key === "Escape" && document.activeElement === input) { input.value = ""; resetSearch(); input.blur(); }
+    });
+
+    // fold a section by clicking its heading, so a long page can be collapsed to its index
+    sections.forEach(function (section) {
+      section.querySelector(":scope > h2").addEventListener("click", function () {
+        section.classList.toggle("folded");
+      });
+    });
+
+    nav.addEventListener("click", function (e) {
+      var link = e.target.closest(".nav-item");
+      if (!link || link.classList.contains("sub")) return;
+      var group = link.nextElementSibling;
+      if (group && group.classList.contains("nav-sub")) group.classList.add("show");
+    });
+
+    window.addEventListener("scroll", function () {
+      toTop.style.display = window.scrollY > 600 ? "block" : "none";
+    });
+    toTop.addEventListener("click", function () { window.scrollTo({ top: 0, behavior: "smooth" }); });
+  }
+
+  document.addEventListener("DOMContentLoaded", function () {
+    body = document.getElementById("guide-body");
+    nav = document.getElementById("guide-index");
+    input = document.getElementById("guide-search");
+    clearBtn = document.getElementById("guide-search-clear");
+    countEl = document.getElementById("guide-search-count");
+    noRes = document.getElementById("guide-no-results");
+    noResTerm = document.getElementById("guide-no-results-term");
+    toTop = document.getElementById("guide-to-top");
+    if (!body || !nav) return;
+
+    buildSections();
+    buildIndex();
+    trackActive();
+    wire();
   });
-});
+})();
 </script>
 </body>
 </html>
