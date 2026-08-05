@@ -11,6 +11,8 @@ Every feature is written the same way: what it is, where to find it, the steps t
 
 Both read the same file, so they can never disagree with each other.
 
+**Looking for how to run the system rather than what it does?** The **Technical Guide** at `/technical-guide` is written for the client's own system administrator: what may be configured in the live system, the steps, the routine checks, and the short list of jobs that need Enfono. This handbook explains the features; that one explains the running of them.
+
 ---
 
 ## 1. What this app does
