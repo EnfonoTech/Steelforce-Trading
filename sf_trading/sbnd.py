@@ -241,10 +241,104 @@ def estimate_valuation_rate(doc, item) -> float:
 	return flt(rate)
 
 
+def return_qualifies(doc) -> bool:
+	"""A credit note can only unwind what an invoice parked in SBND."""
+	config = get_company_config(doc.company)
+
+	if not (cint(config.get(ENABLE_FIELD)) and config.get(ACCOUNT_FIELD)):
+		return False
+
+	if cint(doc.get("update_stock")) or not doc.get("is_return") or not doc.get("return_against"):
+		return False
+
+	return bool(cint(erpnext.is_perpetual_inventory_enabled(doc.company)))
+
+
+def get_return_reversal_entries(doc) -> list:
+	"""Credit note side: give back the cost the invoice recognised early.
+
+	Cancelling an invoice that was raised ahead of delivery leaves COGS carrying
+	a cost for goods that never left, and SBND carrying a liability nothing will
+	ever clear — no delivery is coming for a returned invoice. So unwind the
+	pair, but only for the part that is still undelivered: anything already
+	delivered has cleared SBND on its own, and the goods coming back is the
+	return Delivery Note's business.
+	"""
+	config = get_company_config(doc.company)
+	sbnd_account = config.get(ACCOUNT_FIELD)
+
+	gl_entries = []
+	for item in doc.get("items"):
+		source_row = item.get("sales_invoice_item")
+		if not source_row:
+			continue
+
+		source = frappe.db.get_value(
+			"Sales Invoice Item",
+			source_row,
+			["qty", "stock_qty", "delivered_qty", RATE_FIELD],
+			as_dict=True,
+		)
+		if not source or not flt(source.get(RATE_FIELD)):
+			continue
+
+		conversion = flt(source.stock_qty) / flt(source.qty) if flt(source.qty) else 1
+		undelivered_stock_qty = flt(source.stock_qty) - flt(source.delivered_qty) * conversion
+		reversal_qty = min(abs(flt(item.stock_qty)), max(undelivered_stock_qty, 0))
+		if not reversal_qty:
+			continue
+
+		amount = flt(flt(source.get(RATE_FIELD)) * reversal_qty, doc.precision("base_net_total"))
+		if not amount:
+			continue
+
+		cogs_account = resolve_cogs_account(doc, item, sbnd_account)
+		if not cogs_account or cogs_account == sbnd_account:
+			continue
+
+		cost_center = item.get("cost_center") or doc.get("cost_center")
+
+		gl_entries.append(
+			doc.get_gl_dict(
+				{
+					"account": sbnd_account,
+					"against": cogs_account,
+					"debit": amount,
+					"debit_in_account_currency": amount,
+					"cost_center": cost_center,
+					"project": item.get("project") or doc.get("project"),
+					"remarks": _("Stock billed but not delivered, released on return"),
+				},
+				get_account_currency(sbnd_account),
+				item=item,
+			)
+		)
+		gl_entries.append(
+			doc.get_gl_dict(
+				{
+					"account": cogs_account,
+					"against": sbnd_account,
+					"credit": amount,
+					"credit_in_account_currency": amount,
+					"cost_center": cost_center,
+					"project": item.get("project") or doc.get("project"),
+					"remarks": _("Cost of goods reversed, delivery never made"),
+				},
+				get_account_currency(cogs_account),
+				item=item,
+			)
+		)
+
+	return gl_entries
+
+
 def get_sbnd_gl_entries(doc) -> list:
 	"""Sales Invoice side: Dr COGS / Cr SBND at the frozen estimate."""
 	config = get_company_config(doc.company)
 	sbnd_account = config.get(ACCOUNT_FIELD)
+
+	if return_qualifies(doc):
+		return get_return_reversal_entries(doc)
 
 	if not invoice_qualifies(doc):
 		return []
