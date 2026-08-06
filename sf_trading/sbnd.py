@@ -509,6 +509,10 @@ def ensure_custom_fields():
 					"label": "SBND Valuation Rate",
 					"fieldtype": "Currency",
 					"options": "Company:company:default_currency",
+					# valuation precision, not currency precision — at BHD's 3 decimals
+					# a cheap item's rate rounds enough to manufacture a variance on
+					# every single line
+					"precision": "9",
 					"insert_after": "expense_account",
 					"read_only": 1,
 					"no_copy": 1,
