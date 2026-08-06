@@ -236,7 +236,7 @@ def _get_sdbnb_booking_for_item(doc, item):
 		if item.get("dn_detail")
 		else None
 	)
-	if not _is_sdbnb_account(dn_expense_account):
+	if not is_sdbnb_account(dn_expense_account):
 		return None
 
 	cogs_account = _resolve_cogs_account(doc, item, dn_expense_account)
@@ -272,7 +272,7 @@ def _get_sdbnb_booking_for_item(doc, item):
 	}
 
 
-def _is_sdbnb_account(account) -> bool:
+def is_sdbnb_account(account) -> bool:
 	return bool(
 		account and frappe.get_cached_value("Account", account, "account_type") == SDBNB_ACCOUNT_TYPE
 	)
@@ -281,7 +281,7 @@ def _is_sdbnb_account(account) -> bool:
 def _resolve_cogs_account(doc, item, sdbnb_account):
 	"""The account the cost belongs in once the delivery is billed."""
 	candidate = item.get("expense_account")
-	if candidate and candidate != sdbnb_account and not _is_sdbnb_account(candidate):
+	if candidate and candidate != sdbnb_account and not is_sdbnb_account(candidate):
 		return candidate
 
 	item_group = frappe.get_cached_value("Item", item.item_code, "item_group")
