@@ -135,8 +135,8 @@ doctype_list_js = {
 
 after_migrate = [
 	"sf_trading.inter_branch.ensure_branch_accounting_dimension",
-	# Company fields + the "Stock Delivered But Not Billed" Account Type option
-	"sf_trading.sdbnb.setup_sdbnb",
+	# Company/Sales Invoice Item fields + the two stock-timing Account Types
+	"sf_trading.stock_billing_setup.setup",
 ]
 
 # Uninstallation
@@ -209,6 +209,9 @@ _PTT_HOOK = "sf_trading.purchase_tax_template.set_template_by_currency"
 # Books a Delivery Note's cost to the Stock Delivered But Not Billed account
 # instead of COGS, for companies that enable it. See sf_trading/sdbnb.py.
 _SDBNB_DN_HOOK = "sf_trading.sdbnb.set_delivery_note_expense_account"
+# The mirror case — invoiced before delivery. Runs after _SDBNB_DN_HOOK so the
+# invoice-linked rows it claims are the ones SDBNB deliberately left alone.
+_SBND_DN_HOOK = "sf_trading.sbnd.set_delivery_note_expense_account"
 
 doc_events = {
 	"Payment Entry": {
@@ -249,6 +252,8 @@ doc_events = {
 			_BRANCH_HOOK,
 			_LH_HOOK,
 			_SP_HOOK,
+			# freezes the valuation rate on rows invoiced ahead of delivery
+			"sf_trading.sbnd.freeze_valuation_rate",
 		],
 		"on_submit": [
 			"sf_trading.inter_company.sales_invoice_on_submit",
@@ -269,10 +274,13 @@ doc_events = {
 		# _SDBNB_DN_HOOK last: it reads the expense_account the controller and the
 		# earlier hooks have already settled on, then re-points stock rows at the
 		# Stock Delivered But Not Billed account when the company opts in.
-		"validate": [_BRANCH_HOOK, _LH_HOOK, _SP_HOOK, _SDBNB_DN_HOOK],
+		"validate": [_BRANCH_HOOK, _LH_HOOK, _SP_HOOK, _SDBNB_DN_HOOK, _SBND_DN_HOOK],
 	},
 	"Company": {
-		"validate": "sf_trading.sdbnb.validate_company_sdbnb",
+		"validate": [
+			"sf_trading.sdbnb.validate_company_sdbnb",
+			"sf_trading.sbnd.validate_company_sbnd",
+		],
 	},
 	"Purchase Invoice": {
 		"before_validate": [
@@ -433,6 +441,9 @@ fixtures = [
 					"Company-custom_enable_stock_delivered_but_not_billed",
 					"Company-custom_stock_delivered_but_not_billed",
 					"Company-custom_disable_sdbnb_in_sr",
+					"Company-custom_enable_stock_billed_but_not_delivered",
+					"Company-custom_stock_billed_but_not_delivered",
+					"Sales Invoice Item-custom_sbnd_valuation_rate",
 					"Customer Credit Limit-custom_credit_days",
 					"Customer-custom_commercial_registration_number",
 					"Sales Invoice-inter_company_branch",

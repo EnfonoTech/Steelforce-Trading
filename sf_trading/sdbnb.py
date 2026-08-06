@@ -239,7 +239,7 @@ def _get_sdbnb_booking_for_item(doc, item):
 	if not is_sdbnb_account(dn_expense_account):
 		return None
 
-	cogs_account = _resolve_cogs_account(doc, item, dn_expense_account)
+	cogs_account = resolve_cogs_account(doc, item, dn_expense_account)
 	if not cogs_account or cogs_account == dn_expense_account:
 		return None
 
@@ -278,7 +278,7 @@ def is_sdbnb_account(account) -> bool:
 	)
 
 
-def _resolve_cogs_account(doc, item, sdbnb_account):
+def resolve_cogs_account(doc, item, sdbnb_account):
 	"""The account the cost belongs in once the delivery is billed."""
 	candidate = item.get("expense_account")
 	if candidate and candidate != sdbnb_account and not is_sdbnb_account(candidate):
@@ -348,9 +348,10 @@ def _append_sdbnb_gl_entries(doc, item, booking, gl_entries) -> None:
 
 
 def setup_sdbnb():
-	"""after_migrate hook: provision the fields this feature needs."""
-	ensure_custom_fields()
-	ensure_account_type_option()
+	"""Kept as an entry point; provisioning lives in one place for both features."""
+	from sf_trading.stock_billing_setup import setup
+
+	setup()
 
 
 def ensure_custom_fields():
@@ -394,56 +395,6 @@ def ensure_custom_fields():
 	)
 
 
-def ensure_account_type_option():
-	"""Add the SDBNB option to Account.account_type without freezing the core list.
-
-	The options are re-derived from the shipped DocField on every migrate, so an
-	option added by a future ERPNext release is picked up rather than dropped.
-	"""
-	core_options = frappe.db.get_value(
-		"DocField", {"parent": "Account", "fieldname": "account_type"}, "options"
-	)
-	if not core_options:
-		return
-
-	options = core_options.split("\n")
-
-	if SDBNB_ACCOUNT_TYPE in options:
-		# core caught up with us — drop our override so the shipped list wins
-		frappe.db.delete(
-			"Property Setter",
-			{"doc_type": "Account", "field_name": "account_type", "property": "options"},
-		)
-		frappe.clear_cache(doctype="Account")
-		return
-
-	value = "\n".join(options + [SDBNB_ACCOUNT_TYPE])
-
-	existing = frappe.db.get_value(
-		"Property Setter",
-		{"doc_type": "Account", "field_name": "account_type", "property": "options"},
-		"name",
-	)
-
-	if existing:
-		if frappe.db.get_value("Property Setter", existing, "value") != value:
-			frappe.db.set_value("Property Setter", existing, "value", value)
-	else:
-		frappe.get_doc(
-			{
-				"doctype": "Property Setter",
-				"doctype_or_field": "DocField",
-				"doc_type": "Account",
-				"field_name": "account_type",
-				"property": "options",
-				"property_type": "Text",
-				"value": value,
-			}
-		).insert(ignore_permissions=True)
-
-	frappe.clear_cache(doctype="Account")
-
-
 @frappe.whitelist()
 def create_sdbnb_account(company: str, account_name: str = "Stock Delivered But Not Billed", parent_account=None) -> str:
 	"""Create (or return) the SDBNB account for a company, under Stock Assets.
@@ -453,7 +404,9 @@ def create_sdbnb_account(company: str, account_name: str = "Stock Delivered But 
 	"""
 	frappe.has_permission("Account", "create", throw=True)
 
-	ensure_account_type_option()
+	from sf_trading.stock_billing_setup import ensure_account_type_options
+
+	ensure_account_type_options()
 
 	abbr = frappe.get_cached_value("Company", company, "abbr")
 	name = account_name + " - " + abbr
