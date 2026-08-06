@@ -133,7 +133,11 @@ doctype_list_js = {
 # before_install = "sf_trading.install.before_install"
 # after_install = "sf_trading.install.after_install"
 
-after_migrate = ["sf_trading.inter_branch.ensure_branch_accounting_dimension"]
+after_migrate = [
+	"sf_trading.inter_branch.ensure_branch_accounting_dimension",
+	# Company fields + the "Stock Delivered But Not Billed" Account Type option
+	"sf_trading.sdbnb.setup_sdbnb",
+]
 
 # Uninstallation
 # ------------
@@ -201,6 +205,10 @@ _SP_HOOK = "sf_trading.api.selling_price_validation.validate_selling_price"
 # template for company-currency docs, "Import VAT 0%" otherwise).
 _PTT_HOOK = "sf_trading.purchase_tax_template.set_template_by_currency"
 
+# Books a Delivery Note's cost to the Stock Delivered But Not Billed account
+# instead of COGS, for companies that enable it. See sf_trading/sdbnb.py.
+_SDBNB_DN_HOOK = "sf_trading.sdbnb.set_delivery_note_expense_account"
+
 doc_events = {
 	"Payment Entry": {
 		"validate": "sf_trading.api.payment_advice_hooks.validate_payment_entry_advice",
@@ -257,7 +265,13 @@ doc_events = {
 	},
 	"Delivery Note": {
 		"before_validate": _CC_HOOK,
-		"validate": [_BRANCH_HOOK, _LH_HOOK, _SP_HOOK],
+		# _SDBNB_DN_HOOK last: it reads the expense_account the controller and the
+		# earlier hooks have already settled on, then re-points stock rows at the
+		# Stock Delivered But Not Billed account when the company opts in.
+		"validate": [_BRANCH_HOOK, _LH_HOOK, _SP_HOOK, _SDBNB_DN_HOOK],
+	},
+	"Company": {
+		"validate": "sf_trading.sdbnb.validate_company_sdbnb",
 	},
 	"Purchase Invoice": {
 		"before_validate": [
@@ -413,6 +427,11 @@ fixtures = [
 					"Company-custom_print_formats",
 					"Company-custom_delivery_note_print_format",
 					"Company-custom_max_payment_write_off",
+					# created by sf_trading.sdbnb.setup_sdbnb on migrate; listed
+					# here so an export keeps them in step
+					"Company-custom_enable_stock_delivered_but_not_billed",
+					"Company-custom_stock_delivered_but_not_billed",
+					"Company-custom_disable_sdbnb_in_sr",
 					"Customer Credit Limit-custom_credit_days",
 					"Customer-custom_commercial_registration_number",
 					"Sales Invoice-inter_company_branch",
