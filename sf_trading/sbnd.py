@@ -189,18 +189,21 @@ def freeze_valuation_rate(doc, method=None):
 		if not flt(item.get(RATE_FIELD)) and not cint(item.get("allow_zero_valuation_rate")):
 			unvalued.append(item)
 
-	if unvalued and cint(doc.docstatus) == 1:
-		warn_missing_valuation(unvalued)
+	if unvalued and not already_submitted:
+		throw_missing_valuation(unvalued)
 
 
-def warn_missing_valuation(rows):
-	"""Tell the user this invoice carries no cost, rather than let it pass silently.
+def throw_missing_valuation(rows):
+	"""Refuse to save an invoice that would carry no cost, until it is acknowledged.
 
-	Core blocks a stock transaction it cannot value, because it is about to write a
-	stock ledger entry. An invoice raised ahead of delivery writes none, and the sale
-	is perfectly legitimate — the cost just is not knowable yet. So this warns instead
-	of blocking, and honours the same `Allow Zero Valuation Rate` row checkbox core
-	uses as the "yes, I know" acknowledgement.
+	An invoice raised ahead of delivery writes no stock ledger entry, so core never
+	asks about valuation on it — the row simply freezes at zero and the whole cost
+	lands on the delivery instead. Asked for the same treatment core gives a stock
+	transaction: stop, and require the `Allow Zero Valuation Rate` row checkbox, the
+	same field and the same acknowledgement staff already know.
+
+	Raised on every save, not just at submit, so the entry is caught while it is
+	being written rather than at the end.
 	"""
 	lines = "".join(
 		"<li>"
@@ -209,17 +212,20 @@ def warn_missing_valuation(rows):
 		for row in rows
 	)
 
-	frappe.msgprint(
-		_("No valuation is available for these rows, so this invoice recognises no cost of goods:")
-		+ "<ul>"
-		+ lines
-		+ "</ul>"
-		+ _("The full cost will be booked when the Delivery Note is made. Tick {0} on the row if the item is genuinely zero-valued.").format(
-			frappe.bold(_("Allow Zero Valuation Rate"))
-		),
-		title=_("No Valuation Available"),
-		indicator="orange",
+	message = _("Valuation Rate is required to recognise the cost of goods for these rows:")
+	message += "<ul>" + lines + "</ul>"
+	message += _("Here are the options to proceed:")
+	message += (
+		"<ul><li>"
+		+ _(
+			"If the item is transacting as a Zero Valuation Rate item in this entry, please enable {0} in the Sales Invoice Item table."
+		).format(frappe.bold(_("Allow Zero Valuation Rate")))
+		+ "</li><li>"
+		+ _("If not, create an incoming stock transaction for the Item, or set a Valuation Rate in the Item master.")
+		+ "</li></ul>"
 	)
+
+	frappe.throw(msg=message, title=_("Valuation Rate Missing"))
 
 
 def invoice_qualifies(doc) -> bool:

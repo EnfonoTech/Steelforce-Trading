@@ -127,6 +127,43 @@ class TestSBND(FrappeTestCase):
 			frappe.db.exists("GL Entry", {"voucher_no": si.name, "account": self.account, "is_cancelled": 0})
 		)
 
+	def test_zero_valuation_row_blocks_save_until_acknowledged(self):
+		from erpnext.stock.doctype.item.test_item import make_item
+
+		unvalued = make_item("SBND Unvalued Item", properties={"is_stock_item": 1}).name
+
+		def build(allow_zero):
+			return frappe.get_doc(
+				{
+					"doctype": "Sales Invoice",
+					"company": COMPANY,
+					"customer": "_Test Customer",
+					"update_stock": 0,
+					"cost_center": self.cost_center,
+					"items": [
+						{
+							"item_code": unvalued,
+							"qty": 1,
+							"rate": 10,
+							"warehouse": self.warehouse,
+							"cost_center": self.cost_center,
+							"allow_zero_valuation_rate": allow_zero,
+						}
+					],
+				}
+			)
+
+		# no valuation anywhere and the row does not own up to it — refuse the save
+		with self.assertRaises(frappe.ValidationError):
+			build(0).insert()
+
+		# ticking core's own checkbox is the acknowledgement, and the save goes through
+		si = build(1)
+		si.insert()
+		self.assertFalse(si.items[0].get(RATE_FIELD))
+
+		frappe.db.rollback()
+
 	def test_enabling_without_account_throws(self):
 		company = frappe.get_doc("Company", COMPANY)
 		company.set(ACCOUNT_FIELD, None)
