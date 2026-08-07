@@ -174,6 +174,7 @@ def freeze_valuation_rate(doc, method=None):
 	# longer points at.
 	already_submitted = cint((doc.get_doc_before_save() or frappe._dict()).get("docstatus")) == 1
 
+	unvalued = []
 	for item in doc.get("items"):
 		if not row_qualifies(doc, item):
 			item.set(RATE_FIELD, 0)
@@ -184,6 +185,41 @@ def freeze_valuation_rate(doc, method=None):
 			continue
 
 		item.set(RATE_FIELD, estimate_valuation_rate(doc, item))
+
+		if not flt(item.get(RATE_FIELD)) and not cint(item.get("allow_zero_valuation_rate")):
+			unvalued.append(item)
+
+	if unvalued and cint(doc.docstatus) == 1:
+		warn_missing_valuation(unvalued)
+
+
+def warn_missing_valuation(rows):
+	"""Tell the user this invoice carries no cost, rather than let it pass silently.
+
+	Core blocks a stock transaction it cannot value, because it is about to write a
+	stock ledger entry. An invoice raised ahead of delivery writes none, and the sale
+	is perfectly legitimate — the cost just is not knowable yet. So this warns instead
+	of blocking, and honours the same `Allow Zero Valuation Rate` row checkbox core
+	uses as the "yes, I know" acknowledgement.
+	"""
+	lines = "".join(
+		"<li>"
+		+ _("Row #{0}: {1} in {2}").format(row.idx, frappe.bold(row.item_code), frappe.bold(row.warehouse))
+		+ "</li>"
+		for row in rows
+	)
+
+	frappe.msgprint(
+		_("No valuation is available for these rows, so this invoice recognises no cost of goods:")
+		+ "<ul>"
+		+ lines
+		+ "</ul>"
+		+ _("The full cost will be booked when the Delivery Note is made. Tick {0} on the row if the item is genuinely zero-valued.").format(
+			frappe.bold(_("Allow Zero Valuation Rate"))
+		),
+		title=_("No Valuation Available"),
+		indicator="orange",
+	)
 
 
 def invoice_qualifies(doc) -> bool:
