@@ -162,6 +162,8 @@ def freeze_valuation_rate(doc, method=None):
 	Stamped before the document is saved, so the number the GL is built from
 	never moves again — including on a Repost Accounting Ledger.
 	"""
+	validate_zero_valuation_rows(doc)
+
 	if not invoice_qualifies(doc):
 		for item in doc.get("items"):
 			if item.get(RATE_FIELD):
@@ -174,7 +176,6 @@ def freeze_valuation_rate(doc, method=None):
 	# longer points at.
 	already_submitted = cint((doc.get_doc_before_save() or frappe._dict()).get("docstatus")) == 1
 
-	unvalued = []
 	for item in doc.get("items"):
 		if not row_qualifies(doc, item):
 			item.set(RATE_FIELD, 0)
@@ -186,10 +187,49 @@ def freeze_valuation_rate(doc, method=None):
 
 		item.set(RATE_FIELD, estimate_valuation_rate(doc, item))
 
-		if not flt(item.get(RATE_FIELD)) and not cint(item.get("allow_zero_valuation_rate")):
+
+def validate_zero_valuation_rows(doc):
+	"""Refuse a sales row whose stock carries no valuation, however the row posts.
+
+	Core only asks about valuation when it can find no rate at all. Stock that was
+	received at zero leaves a rate of zero on record, which satisfies that lookup, so
+	the sale goes through booking revenue and no cost — silently, whether the invoice
+	updates stock itself or waits for a Delivery Note.
+
+	This asks the question core would have asked, and takes the same answer: the
+	per-row `Allow Zero Valuation Rate` checkbox.
+	"""
+	config = get_company_config(doc.company)
+
+	if not (cint(config.get(ENABLE_FIELD)) and config.get(ACCOUNT_FIELD)):
+		return
+
+	if doc.get("is_return") or not cint(erpnext.is_perpetual_inventory_enabled(doc.company)):
+		return
+
+	if cint((doc.get_doc_before_save() or frappe._dict()).get("docstatus")) == 1:
+		# already submitted — an update or a repost must not be blocked by this
+		return
+
+	unvalued = []
+	for item in doc.get("items"):
+		if item.get("dn_detail") or item.get("delivery_note"):
+			# the delivery already valued this row
+			continue
+
+		if not item.get("item_code") or not item.get("warehouse") or item.get("is_fixed_asset"):
+			continue
+
+		if cint(item.get("allow_zero_valuation_rate")):
+			continue
+
+		if not frappe.get_cached_value("Item", item.item_code, "is_stock_item"):
+			continue
+
+		if not flt(estimate_valuation_rate(doc, item)):
 			unvalued.append(item)
 
-	if unvalued and not already_submitted:
+	if unvalued:
 		throw_missing_valuation(unvalued)
 
 
