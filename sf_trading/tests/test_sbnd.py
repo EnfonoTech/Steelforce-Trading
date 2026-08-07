@@ -127,18 +127,18 @@ class TestSBND(FrappeTestCase):
 			frappe.db.exists("GL Entry", {"voucher_no": si.name, "account": self.account, "is_cancelled": 0})
 		)
 
-	def test_zero_valuation_row_blocks_save_until_acknowledged(self):
+	def test_zero_valuation_row_blocks_only_when_the_invoice_updates_stock(self):
 		from erpnext.stock.doctype.item.test_item import make_item
 
 		unvalued = make_item("SBND Unvalued Item", properties={"is_stock_item": 1}).name
 
-		def build(allow_zero):
+		def build(update_stock, allow_zero):
 			return frappe.get_doc(
 				{
 					"doctype": "Sales Invoice",
 					"company": COMPANY,
 					"customer": "_Test Customer",
-					"update_stock": 0,
+					"update_stock": update_stock,
 					"cost_center": self.cost_center,
 					"items": [
 						{
@@ -153,12 +153,16 @@ class TestSBND(FrappeTestCase):
 				}
 			)
 
-		# no valuation anywhere and the row does not own up to it — refuse the save
+		# writes the stock ledger itself and cannot value the row — refuse the save
 		with self.assertRaises(frappe.ValidationError):
-			build(0).insert()
+			build(1, 0).insert()
 
-		# ticking core's own checkbox is the acknowledgement, and the save goes through
-		si = build(1)
+		# core's own checkbox is the acknowledgement, and validation lets it through
+		build(1, 1).insert()
+
+		# no stock ledger entry to value: nothing in core reads that checkbox here and
+		# the cost is not knowable yet, so the invoice saves untouched
+		si = build(0, 0)
 		si.insert()
 		self.assertFalse(si.items[0].get(RATE_FIELD))
 
