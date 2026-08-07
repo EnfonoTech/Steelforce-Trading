@@ -168,13 +168,19 @@ def freeze_valuation_rate(doc, method=None):
 				item.set(RATE_FIELD, 0)
 		return
 
+	# A draft is still editable — the warehouse, item or qty can all change after a
+	# save, so re-estimate every time and only let the number set at submit. Keeping
+	# the first estimate would leave a rate belonging to a warehouse the row no
+	# longer points at.
+	already_submitted = cint((doc.get_doc_before_save() or frappe._dict()).get("docstatus")) == 1
+
 	for item in doc.get("items"):
 		if not row_qualifies(doc, item):
 			item.set(RATE_FIELD, 0)
 			continue
 
-		if flt(item.get(RATE_FIELD)):
-			# already frozen on an earlier save — leave it alone
+		if already_submitted and flt(item.get(RATE_FIELD)):
+			# final — a repost or an update-after-submit must not move it
 			continue
 
 		item.set(RATE_FIELD, estimate_valuation_rate(doc, item))
