@@ -146,11 +146,13 @@ def base_rows(parent_doctype, party_field, filters, extra_conditions=None):
 			& (parent.company == filters.get("company"))
 			& (parent.posting_date <= as_on)
 			& (child.qty > 0)
-			& (item.is_stock_item == 1)
 		)
 		.orderby(parent.posting_date)
 		.orderby(parent.name)
 	)
+
+	if not includes_non_stock(filters):
+		query = query.where(item.is_stock_item == 1)
 
 	if extra_conditions:
 		for condition in extra_conditions(parent, child):
@@ -231,6 +233,17 @@ def invoiced_items_to_be_delivered(filters):
 	)
 
 	return build_open_rows(rows, [delivered, credited], ["delivered_qty", "returned_qty"], filters)
+
+
+def includes_non_stock(filters) -> bool:
+	"""Whether rows for items that are not stock items belong in the answer.
+
+	The open item reports are about goods movement, so they ask only about
+	stock items. A purchases register has to be able to widen that, because the
+	invoice side of it counts service bills and dropping their receipts would
+	leave the two halves disagreeing with each other.
+	"""
+	return bool(cint(filters.get("include_non_stock")))
 
 
 def ignores_document_status(filters) -> bool:

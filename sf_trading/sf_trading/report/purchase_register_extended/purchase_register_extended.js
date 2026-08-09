@@ -68,6 +68,17 @@ frappe.query_reports["Purchase Register Extended"] = {
 			options: "Item Group",
 		},
 		{
+			// goods by default: purchases in the trading account means stock. All
+			// Items widens BOTH halves together and lines the invoice half back up
+			// with core's Purchase Register, which counts service bills too.
+			fieldname: "item_type",
+			label: __("Item Type"),
+			fieldtype: "Select",
+			options: ["Stock Items Only", "All Items"].join("\n"),
+			default: "Stock Items Only",
+			reqd: 1,
+		},
+		{
 			// a Select, not a checkbox: query_report.js drops filters whose value is
 			// falsy, so an unticked Check never reaches the server and the receipts
 			// could not be switched off

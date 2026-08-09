@@ -68,6 +68,7 @@ to the supplier bill.
 import frappe
 from frappe import _
 from frappe.query_builder.custom import ConstantColumn
+from frappe.query_builder import Case
 from frappe.query_builder.functions import Sum
 from frappe.utils import cint, flt, getdate
 
@@ -82,6 +83,9 @@ UNBILLED_RETURN = "Unbilled Purchase Return"
 SCOPE_BOTH = "Invoices and Unbilled Receipts"
 SCOPE_INVOICES = "Invoices Only"
 SCOPE_RECEIPTS = "Unbilled Receipts Only"
+
+ITEM_TYPE_STOCK = "Stock Items Only"
+ITEM_TYPE_ALL = "All Items"
 
 
 def execute(filters=None):
@@ -124,6 +128,17 @@ def resolve_scope(filters):
 		return SCOPE_INVOICES
 
 	return SCOPE_BOTH
+
+
+def stock_items_only(filters) -> bool:
+	"""Default to goods, because the register exists to feed the trading account.
+
+	Purchases in Opening + Purchases - Closing = COGS means goods. A freight or
+	consultancy bill is an expense, not inventory, so it is left out unless the
+	reader asks for All Items — at which point BOTH halves widen together, and
+	the invoice half lines up with core's Purchase Register again.
+	"""
+	return filters.get("item_type", ITEM_TYPE_STOCK) != ITEM_TYPE_ALL
 
 
 def validate_filters(filters):
@@ -185,9 +200,29 @@ def get_invoice_rows(filters):
 
 	records = query.run(as_dict=True)
 	item_totals = get_invoice_item_totals([record.voucher_no for record in records])
+	goods_only = stock_items_only(filters)
 
 	rows = []
 	for record in records:
+		totals = item_totals.get(record.voucher_no) or {}
+		full_net = flt(totals.get("net")) or flt(record.base_net_total)
+		stock_net = flt(totals.get("stock_net"))
+
+		net = stock_net if goods_only else full_net
+		tax = flt(record.base_total_taxes_and_charges)
+		total = flt(record.base_grand_total)
+
+		if goods_only:
+			if not net:
+				# nothing on this bill is goods — a pure service invoice
+				continue
+			if abs(stock_net - full_net) > 0.005 and full_net:
+				# mixed bill: carry the goods share of the tax with the goods, so
+				# the line still adds up on its own
+				share = stock_net / full_net
+				tax = flt(tax * share, 2)
+				total = flt(net + tax, 2)
+
 		if cint(record.is_return):
 			status = DEBIT_NOTE
 		elif cint(record.update_stock):
@@ -214,30 +249,45 @@ def get_invoice_rows(filters):
 				# header holds only what the supplier is owed. Matching core keeps
 				# the invoice half of this report identical to the register people
 				# already reconcile against — verified equal on production.
-				"net_amount": flt(item_totals.get(record.voucher_no, record.base_net_total)),
-				"tax_amount": flt(record.base_total_taxes_and_charges),
-				"total_amount": flt(record.base_grand_total),
+				"net_amount": flt(net),
+				"tax_amount": flt(tax),
+				"total_amount": flt(total),
 			}
 		)
 	return rows
 
 
 def get_invoice_item_totals(names):
-	"""Net per invoice summed off the item rows, the way core totals it."""
+	"""Net per invoice off the item rows, split into the stock part and the whole.
+
+	Core totals an invoice from its items rather than its header, and on this
+	site the two disagree, so both figures come from the same place. The stock
+	share is what lets a mixed invoice contribute only its goods.
+	"""
 	if not names:
 		return {}
 
 	item = frappe.qb.DocType("Purchase Invoice Item")
+	master = frappe.qb.DocType("Item")
 	records = (
 		frappe.qb.from_(item)
-		.select(item.parent, Sum(item.base_net_amount).as_("net"))
+		.join(master)
+		.on(master.name == item.item_code)
+		.select(
+			item.parent,
+			Sum(item.base_net_amount).as_("net"),
+			Sum(
+				Case().when(master.is_stock_item == 1, item.base_net_amount).else_(0)
+			).as_("stock_net"),
+		)
 		.where(item.parent.isin(names))
 		.groupby(item.parent)
 	).run(as_dict=True)
 
-	# `or` the header value back in for an invoice whose items sum to nothing,
-	# mirroring core's own fallback
-	return {record.parent: flt(record.net) for record in records if flt(record.net)}
+	return {
+		record.parent: {"net": flt(record.net), "stock_net": flt(record.stock_net)}
+		for record in records
+	}
 
 
 def parents_with_item_field(child_doctype, fieldname, value):
@@ -278,6 +328,7 @@ def get_receipt_rows(filters):
 			"ignore_return_netting": 1,
 			"warehouse": filters.get("warehouse"),
 			"item_group": filters.get("item_group"),
+			"include_non_stock": 0 if stock_items_only(filters) else 1,
 		}
 	)
 
@@ -379,9 +430,11 @@ def get_return_rows(filters):
 			& (receipt.posting_date >= getdate(filters.from_date))
 			& (receipt.posting_date <= getdate(filters.to_date))
 			& (line.qty < 0)
-			& (item.is_stock_item == 1)
 		)
 	)
+
+	if stock_items_only(filters):
+		query = query.where(item.is_stock_item == 1)
 
 	if filters.get("supplier"):
 		query = query.where(receipt.supplier == filters.supplier)
