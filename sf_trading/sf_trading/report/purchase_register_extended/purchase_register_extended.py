@@ -67,7 +67,6 @@ to the supplier bill.
 
 import frappe
 from frappe import _
-from frappe.query_builder import Criterion
 from frappe.query_builder.custom import ConstantColumn
 from frappe.query_builder.functions import Sum
 from frappe.utils import cint, flt, getdate
@@ -179,7 +178,9 @@ def get_invoice_rows(filters):
 	for fieldname in ("cost_center", "warehouse", "item_group"):
 		if filters.get(fieldname):
 			query = query.where(
-				item_field_exists("Purchase Invoice Item", invoice.name, fieldname, filters.get(fieldname))
+				invoice.name.isin(
+					parents_with_item_field("Purchase Invoice Item", fieldname, filters.get(fieldname))
+				)
 			)
 
 	records = query.run(as_dict=True)
@@ -239,18 +240,15 @@ def get_invoice_item_totals(names):
 	return {record.parent: flt(record.net) for record in records if flt(record.net)}
 
 
-def item_field_exists(child_doctype, parent_field, fieldname, value):
-	"""Match the parent when any of its item rows carries this value.
+def parents_with_item_field(child_doctype, fieldname, value):
+	"""Sub-select of parents having an item row that carries this value.
 
 	Branch, warehouse and item group all live on the item rows here, the same
-	place core's Purchase Register looks for them.
+	place core's Purchase Register looks for them. Expressed as a sub-select
+	rather than EXISTS because pypika on this bench has no exists criterion.
 	"""
 	child = frappe.qb.DocType(child_doctype)
-	return Criterion.exists(
-		frappe.qb.from_(child)
-		.select(child.name)
-		.where((child.parent == parent_field) & (child[fieldname] == value))
-	)
+	return frappe.qb.from_(child).select(child.parent).where(child[fieldname] == value)
 
 
 # ---------------------------------------------------------------------------
