@@ -662,7 +662,16 @@ fixtures = [
 	},
 	{
 		"doctype": "Workspace",
-		"filters": [["name", "in", ("Supplier Payments",)]],
+		"filters": [["name", "in", ("Supplier Payments", "Open Items")]],
+	},
+	{
+		"doctype": "Number Card",
+		"filters": [["name", "in", (
+			"Pending Delivery Value",
+			"Unbilled Deliveries Value",
+			"Unbilled Receipts Value",
+			"Pending Receipt Value",
+		)]],
 	},
 ]
 
