@@ -1,26 +1,30 @@
 // Copyright (c) 2026, Enfono Technologies and contributors
 // For license information, please see license.txt
 
-// Open item census on the Period Closing Voucher form. Draft only — the
-// numbers are live (recomputed on every refresh), so once the voucher is
-// submitted they would no longer describe the moment it was submitted.
+// Open item census on the Period Closing Voucher form. Saved drafts only —
+// the numbers are live (recomputed on every refresh), so an unsaved form has
+// nothing committed to judge yet, and a submitted voucher's census would no
+// longer describe the moment it was submitted. Renders through `refresh`
+// alone: field edits do not redraw until the document is saved.
 
 frappe.ui.form.on("Period Closing Voucher", {
 	refresh(frm) {
 		render_open_items(frm);
 	},
-	company(frm) {
-		render_open_items(frm);
-	},
-	period_end_date(frm) {
-		render_open_items(frm);
-	},
 });
 
 function render_open_items(frm) {
-	if (frm.doc.docstatus !== 0 || !frm.doc.company || !frm.doc.period_end_date) {
+	if (
+		frm.doc.docstatus !== 0 ||
+		frm.is_new() ||
+		!frm.doc.company ||
+		!frm.doc.period_end_date
+	) {
 		return;
 	}
+
+	// stale-response guard: only the latest request may draw
+	const seq = (frm._sf_open_items_seq = (frm._sf_open_items_seq || 0) + 1);
 
 	frappe.call({
 		method: "sf_trading.period_closing.pending_open_items",
@@ -29,7 +33,13 @@ function render_open_items(frm) {
 			period_end_date: frm.doc.period_end_date,
 		},
 		callback(r) {
-			if (!r.message) return;
+			if (!r.message || seq !== frm._sf_open_items_seq) return;
+
+			// replace, never stack — an earlier section may survive a partial refresh
+			if (frm._sf_open_items_section) {
+				frm._sf_open_items_section.remove();
+				frm._sf_open_items_section = null;
+			}
 
 			const rows = r.message;
 			const total_items = rows.reduce((sum, row) => sum + row.items, 0);
@@ -74,8 +84,8 @@ function render_open_items(frm) {
 				</div>`;
 			}
 
-			frm.dashboard.clear_headline();
 			const section = frm.dashboard.add_section(html, __("Open Items"));
+			frm._sf_open_items_section = section;
 			section.on("click", ".sf-open-items-link", function (e) {
 				e.preventDefault();
 				frappe.route_options = {
