@@ -358,3 +358,75 @@ class TestOpenItems(FrappeTestCase):
 		rows = self.rows_for(invoiced_items_to_be_delivered(self.filters()), si.name)
 		self.assertEqual(rows[0].age, 45)
 		self.assertEqual(rows[0].bucket, "31-60")
+
+	# ------------------------------------------------------------------
+	# party-wise summaries
+	# ------------------------------------------------------------------
+
+	def summary_row(self, data, party):
+		rows = [row for row in data if row.party == party]
+		return rows[0] if rows else None
+
+	def test_customer_summary_reconciles_with_detail(self):
+		from sf_trading.open_items import customer_open_items_summary
+
+		si = self.make_si(qty=5)          # bill-first: 750 to deliver
+		dn = self.make_dn(qty=4)          # deliver-first
+		self.make_si_from_dn(dn, qty=1)   # 3 qty / 450 left unbilled
+
+		filters = self.filters()
+		detail_1 = invoiced_items_to_be_delivered(filters)
+		detail_2 = delivered_items_pending_billing(filters)
+		to_deliver = sum(r.pending_amount for r in detail_1 if r.party == CUSTOMER)
+		unbilled = sum(r.pending_amount for r in detail_2 if r.party == CUSTOMER)
+
+		row = self.summary_row(customer_open_items_summary(filters), CUSTOMER)
+		self.assertIsNotNone(row)
+		self.assertAlmostEqual(row.to_deliver_value, to_deliver, places=2)
+		self.assertAlmostEqual(row.unbilled_delivery_value, unbilled, places=2)
+		self.assertAlmostEqual(row.total_value, to_deliver + unbilled, places=2)
+
+		detail_rows = [r for r in detail_1 + detail_2 if r.party == CUSTOMER]
+		self.assertEqual(row.open_items, len(detail_rows))
+		self.assertEqual(row.open_docs, len({r.document for r in detail_rows}))
+		self.assertEqual(row.oldest, max(r.age for r in detail_rows))
+
+		bucket_sum = sum(row.get(f"range{i}") or 0 for i in range(1, 6))
+		self.assertAlmostEqual(bucket_sum, row.total_value, places=2)
+
+	def test_supplier_summary_reconciles_with_detail(self):
+		from sf_trading.open_items import supplier_open_items_summary
+
+		pr = self.make_pr(qty=6)
+		self.make_pi_from_pr(pr, qty=2)   # 4 qty left unbilled
+		self.make_pi(qty=3)               # bill-first: 3 qty to receive
+
+		filters = self.filters()
+		unbilled = sum(
+			r.pending_amount for r in received_items_pending_billing(filters) if r.party == SUPPLIER
+		)
+		to_receive = sum(
+			r.pending_amount for r in billed_items_pending_receipt(filters) if r.party == SUPPLIER
+		)
+
+		row = self.summary_row(supplier_open_items_summary(filters), SUPPLIER)
+		self.assertIsNotNone(row)
+		self.assertAlmostEqual(row.unbilled_receipt_value, unbilled, places=2)
+		self.assertAlmostEqual(row.pending_receipt_value, to_receive, places=2)
+		self.assertAlmostEqual(row.total_value, unbilled + to_receive, places=2)
+
+	def test_summary_party_group_filter(self):
+		from sf_trading.open_items import customer_open_items_summary
+
+		self.make_si(qty=1)
+		group = frappe.db.get_value("Customer", CUSTOMER, "customer_group")
+
+		matching = customer_open_items_summary(self.filters(party_group=group))
+		self.assertIsNotNone(self.summary_row(matching, CUSTOMER))
+
+		other_group = frappe.get_all(
+			"Customer Group", filters={"name": ["!=", group], "is_group": 0}, limit=1, pluck="name"
+		)
+		if other_group:
+			non_matching = customer_open_items_summary(self.filters(party_group=other_group[0]))
+			self.assertIsNone(self.summary_row(non_matching, CUSTOMER))

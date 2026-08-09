@@ -59,6 +59,24 @@ def ageing_bucket(age, ranges):
 	return f"{ranges[-1] + 1}-{_('Above')}"
 
 
+def bucket_index(age, ranges):
+	"""0-based bucket position for an age; len(ranges) = the Above bucket."""
+	for position, upper in enumerate(ranges):
+		if age <= upper:
+			return position
+	return len(ranges)
+
+
+def bucket_labels(ranges):
+	labels = []
+	lower = 0
+	for upper in ranges:
+		labels.append(f"{lower}-{upper}")
+		lower = upper + 1
+	labels.append(f"{ranges[-1] + 1}-{_('Above')}")
+	return labels
+
+
 def matched_qty_map(child_doctype, parent_doctype, link_field, as_on, is_return=None):
 	"""Sum of row qty per counterpart row name, submitted and posted by as_on.
 
@@ -369,3 +387,147 @@ def report_columns(document_doctype, party_doctype, matched_fieldname, matched_l
 			"width": 120,
 		},
 	]
+
+
+# ---------------------------------------------------------------------------
+# party-wise summaries — one row per customer / supplier
+# ---------------------------------------------------------------------------
+
+
+def party_open_summary(flow_specs, party_doctype, filters):
+	"""Aggregate detail flows into one row per party.
+
+	flow_specs: ordered [(flow_function, value_fieldname)]. Every number here
+	is a sum over the SAME rows the detail reports print, so summary and
+	detail always reconcile — there is no second query path to drift.
+	"""
+	ranges = ageing_ranges(filters)
+	parties = {}
+	documents = {}
+
+	for flow, fieldname in flow_specs:
+		for row in flow(filters):
+			party = parties.get(row.party)
+			if party is None:
+				party = frappe._dict(
+					party=row.party,
+					party_name=row.party_name,
+					company=row.company,
+					open_docs=0,
+					open_items=0,
+					oldest=0,
+					total_value=0.0,
+				)
+				for _flow, value_field in flow_specs:
+					party[value_field] = 0.0
+				for position in range(len(ranges) + 1):
+					party[f"range{position + 1}"] = 0.0
+				parties[row.party] = party
+				documents[row.party] = set()
+
+			pending = flt(row.pending_amount)
+			party[fieldname] += pending
+			party.total_value += pending
+			party[f"range{bucket_index(row.age, ranges) + 1}"] += pending
+			party.open_items += 1
+			party.oldest = max(party.oldest, row.age)
+			documents[row.party].add(row.document)
+
+	if filters.get("party_group"):
+		group_field = frappe.scrub(party_doctype) + "_group"
+		in_group = set(
+			frappe.get_all(
+				party_doctype,
+				filters={
+					"name": ["in", list(parties)],
+					group_field: filters.get("party_group"),
+				},
+				pluck="name",
+			)
+		)
+		parties = {name: row for name, row in parties.items() if name in in_group}
+
+	rows = []
+	for name, party in parties.items():
+		party.open_docs = len(documents[name])
+		for key, value in list(party.items()):
+			if isinstance(value, float):
+				party[key] = flt(value, 2)
+		rows.append(party)
+
+	return sorted(rows, key=lambda row: row.total_value, reverse=True)
+
+
+def summary_columns(party_doctype, flow_columns, filters):
+	"""flow_columns: ordered [(value_fieldname, label, drill_report_name)]."""
+	columns = [
+		{
+			"label": _(party_doctype),
+			"fieldname": "party",
+			"fieldtype": "Link",
+			"options": party_doctype,
+			"width": 150,
+		},
+		{
+			"label": _(party_doctype + " Name"),
+			"fieldname": "party_name",
+			"fieldtype": "Data",
+			"width": 180,
+		},
+	]
+	for fieldname, label, drill_report in flow_columns:
+		columns.append(
+			{
+				"label": label,
+				"fieldname": fieldname,
+				"fieldtype": "Currency",
+				"options": "Company:company:default_currency",
+				"width": 140,
+				"drill_report": drill_report,
+			}
+		)
+	columns += [
+		{
+			"label": _("Total Open Value"),
+			"fieldname": "total_value",
+			"fieldtype": "Currency",
+			"options": "Company:company:default_currency",
+			"width": 140,
+		},
+		{"label": _("Open Docs"), "fieldname": "open_docs", "fieldtype": "Int", "width": 90},
+		{"label": _("Open Items"), "fieldname": "open_items", "fieldtype": "Int", "width": 90},
+		{"label": _("Oldest (Days)"), "fieldname": "oldest", "fieldtype": "Int", "width": 100},
+	]
+	for position, label in enumerate(bucket_labels(ageing_ranges(filters))):
+		columns.append(
+			{
+				"label": label,
+				"fieldname": f"range{position + 1}",
+				"fieldtype": "Currency",
+				"options": "Company:company:default_currency",
+				"width": 110,
+			}
+		)
+	return columns
+
+
+def customer_open_items_summary(filters):
+	return party_open_summary(
+		[
+			(invoiced_items_to_be_delivered, "to_deliver_value"),
+			(delivered_items_pending_billing, "unbilled_delivery_value"),
+		],
+		"Customer",
+		filters,
+	)
+
+
+def supplier_open_items_summary(filters):
+	return party_open_summary(
+		[
+			(received_items_pending_billing, "unbilled_receipt_value"),
+			(billed_items_pending_receipt, "pending_receipt_value"),
+		],
+		"Supplier",
+		filters,
+	)

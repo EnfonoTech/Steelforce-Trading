@@ -196,11 +196,22 @@
     "hidden": 0,
     "is_query_report": 0,
     "label": "Sales",
-    "link_count": 2,
+    "link_count": 3,
     "link_to": null,
     "link_type": null,
     "onboard": 0,
     "type": "Card Break"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Customer Open Items Summary",
+    "link_count": 0,
+    "link_to": "Customer Open Items Summary",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
    },
    {
     "dependencies": "",
@@ -229,11 +240,22 @@
     "hidden": 0,
     "is_query_report": 0,
     "label": "Purchase",
-    "link_count": 2,
+    "link_count": 3,
     "link_to": null,
     "link_type": null,
     "onboard": 0,
     "type": "Card Break"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Supplier Open Items Summary",
+    "link_count": 0,
+    "link_to": "Supplier Open Items Summary",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
    },
    {
     "dependencies": "",
