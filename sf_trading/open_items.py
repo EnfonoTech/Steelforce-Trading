@@ -233,20 +233,33 @@ def invoiced_items_to_be_delivered(filters):
 	return build_open_rows(rows, [delivered, credited], ["delivered_qty", "returned_qty"], filters)
 
 
+def ignores_document_status(filters) -> bool:
+	"""Whether the caller wants the parent status left out of the reckoning.
+
+	Status is a snapshot of TODAY — a receipt invoiced this month reads
+	Completed now even though it was outstanding at the end of last month — so
+	a caller asking an as-of-a-past-date question must be able to switch it
+	off, or the answer silently changes as documents get billed. Billed-ness is
+	established from the row links either way, which is the accurate test; the
+	status filter only ever added operational tidiness on top.
+	"""
+	return bool(cint(filters.get("ignore_document_status")))
+
+
 def delivered_items_pending_billing(filters):
 	"""Delivery Note rows still waiting for a Sales Invoice."""
 	as_on = as_on_date(filters)
 
-	rows = base_rows(
-		"Delivery Note",
-		"customer",
-		filters,
-		extra_conditions=lambda parent, child: [
-			parent.status.notin(["Closed"]),
+	def conditions(parent, child):
+		clauses = [
 			(child.si_detail.isnull()) | (child.si_detail == ""),
 			(child.against_sales_invoice.isnull()) | (child.against_sales_invoice == ""),
-		],
-	)
+		]
+		if not ignores_document_status(filters):
+			clauses.append(parent.status.notin(["Closed"]))
+		return clauses
+
+	rows = base_rows("Delivery Note", "customer", filters, extra_conditions=conditions)
 
 	billed = matched_qty_map("Sales Invoice Item", "Sales Invoice", "dn_detail", as_on)
 	returned = matched_qty_map("Delivery Note Item", "Delivery Note", "dn_detail", as_on, is_return=1)
@@ -258,16 +271,16 @@ def received_items_pending_billing(filters):
 	"""Purchase Receipt rows still waiting for a Purchase Invoice."""
 	as_on = as_on_date(filters)
 
-	rows = base_rows(
-		"Purchase Receipt",
-		"supplier",
-		filters,
-		extra_conditions=lambda parent, child: [
-			parent.status.notin(["Closed", "Completed"]),
+	def conditions(parent, child):
+		clauses = [
 			(child.purchase_invoice_item.isnull()) | (child.purchase_invoice_item == ""),
 			(child.purchase_invoice.isnull()) | (child.purchase_invoice == ""),
-		],
-	)
+		]
+		if not ignores_document_status(filters):
+			clauses.append(parent.status.notin(["Closed", "Completed"]))
+		return clauses
+
+	rows = base_rows("Purchase Receipt", "supplier", filters, extra_conditions=conditions)
 
 	billed = matched_qty_map("Purchase Invoice Item", "Purchase Invoice", "pr_detail", as_on)
 	returned = matched_qty_map(

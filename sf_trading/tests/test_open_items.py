@@ -497,3 +497,83 @@ class TestOpenItems(FrappeTestCase):
 			row["report"]: row["items"] for row in pending_open_items(COMPANY, yesterday)["rows"]
 		}
 		self.assertEqual(census, baseline)
+
+	# ------------------------------------------------------------------
+	# Purchase Register Extended
+	# ------------------------------------------------------------------
+
+	def run_register(self, **overrides):
+		from sf_trading.sf_trading.report.purchase_register_extended.purchase_register_extended import (
+			execute,
+		)
+
+		filters = frappe._dict(
+			{
+				"company": COMPANY,
+				"from_date": add_days(nowdate(), -5),
+				"to_date": nowdate(),
+				"include_unbilled_receipts": 1,
+			}
+		)
+		filters.update(overrides)
+		_columns, rows = execute(filters)
+		return rows
+
+	def register_row(self, rows, voucher_no):
+		found = [row for row in rows if row["voucher_no"] == voucher_no]
+		return found[0] if found else None
+
+	def test_register_adds_only_the_unbilled_part_of_a_receipt(self):
+		pr = self.make_pr(qty=6, rate=90)          # 540 received
+		self.make_pi_from_pr(pr, qty=2)            # 180 billed
+
+		rows = self.run_register()
+		receipt = self.register_row(rows, pr.name)
+		self.assertIsNotNone(receipt, "a partly billed receipt must appear")
+		self.assertEqual(receipt["voucher_type"], "Purchase Receipt")
+		# only the remainder, never the whole receipt
+		self.assertAlmostEqual(receipt["net_amount"], 360, places=2)
+		self.assertAlmostEqual(receipt["pending_qty"], 4, places=3)
+
+		# and the invoice carries the billed part on its own line
+		invoices = [r for r in rows if r["voucher_type"] == "Purchase Invoice"]
+		self.assertTrue(invoices)
+
+	def test_register_drops_a_fully_billed_receipt(self):
+		pr = self.make_pr(qty=6, rate=90)
+		self.make_pi_from_pr(pr)                   # billed in full
+
+		rows = self.run_register()
+		self.assertIsNone(self.register_row(rows, pr.name))
+
+	def test_register_never_lists_a_voucher_twice(self):
+		pr = self.make_pr(qty=4, rate=50)
+		self.make_pi_from_pr(pr, qty=1)
+
+		rows = self.run_register()
+		keys = [(row["voucher_type"], row["voucher_no"]) for row in rows]
+		self.assertEqual(len(keys), len(set(keys)))
+
+	def test_register_keeps_a_receipt_invoiced_after_the_period_end(self):
+		"""The whole point of measuring as of the period end rather than today."""
+		pr = self.make_pr(qty=3, rate=100)
+		yesterday = add_days(nowdate(), -1)
+		frappe.db.set_value("Purchase Receipt", pr.name, "posting_date", yesterday)
+
+		# invoiced today, i.e. after a period that closed yesterday
+		self.make_pi_from_pr(pr)
+
+		rows = self.run_register(from_date=add_days(nowdate(), -5), to_date=yesterday)
+		receipt = self.register_row(rows, pr.name)
+		self.assertIsNotNone(receipt, "a receipt unbilled at period end must stay in the period")
+		self.assertAlmostEqual(receipt["net_amount"], 300, places=2)
+
+		# and once the period includes the invoice, the receipt drops out
+		rows_today = self.run_register()
+		self.assertIsNone(self.register_row(rows_today, pr.name))
+
+	def test_register_can_exclude_receipts_entirely(self):
+		pr = self.make_pr(qty=2, rate=75)
+		rows = self.run_register(include_unbilled_receipts=0)
+		self.assertIsNone(self.register_row(rows, pr.name))
+		self.assertFalse([r for r in rows if r["voucher_type"] == "Purchase Receipt"])

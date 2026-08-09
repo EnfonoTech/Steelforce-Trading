@@ -32,14 +32,21 @@ re-running January next year gives the same answer. Measuring against today
 instead would quietly move that value out of January the moment the invoice was
 raised, and January would under-report for good.
 
-SCOPE, INHERITED DELIBERATELY FROM THE OPEN ITEM ENGINE
--------------------------------------------------------
-Receipt rows are submitted, non-return, stock-item rows whose receipt is not
-Closed or Completed, excluding rows raised from an invoice (the bill-first
-flow, where the invoice already carries the value). Keeping the same scope
-means this report and `Received Items Pending Billing` always agree; a figure
-that disagreed with the operational report would be worse than a slightly
-narrower one.
+SCOPE, AND THE ONE PLACE IT PARTS FROM THE OPERATIONAL REPORT
+--------------------------------------------------------------
+Receipt rows are submitted, non-return, stock-item rows, excluding rows raised
+from an invoice (the bill-first flow, where the invoice already carries the
+value).
+
+`Received Items Pending Billing` additionally skips receipts marked Closed or
+Completed, which is right for a to-do list. This report does NOT, because that
+status describes today: a July receipt invoiced in August reads Completed now,
+and judging by it would erase the receipt from July even though July closed
+with it unbilled. Billed-ness here is established from the dated row links
+instead, which is the accurate test and the only one that stays stable when the
+period is re-run later. The two reports therefore agree for the current period
+and can differ for a closed one — by exactly the receipts invoiced after it
+ended, which is the intended behaviour.
 
 Landed Cost Voucher charges are shown per document wherever any were applied.
 They are the charges recorded on the document as a whole, not a share of the
@@ -52,6 +59,7 @@ import frappe
 from frappe import _
 from frappe.query_builder import Criterion
 from frappe.query_builder.custom import ConstantColumn
+from frappe.query_builder.functions import Sum
 from frappe.utils import cint, flt, getdate
 
 from sf_trading.open_items import received_items_pending_billing
@@ -128,8 +136,11 @@ def get_invoice_rows(filters):
 			cost_center_exists("Purchase Invoice Item", invoice.name, filters.cost_center)
 		)
 
+	records = query.run(as_dict=True)
+	item_totals = get_invoice_item_totals([record.voucher_no for record in records])
+
 	rows = []
-	for record in query.run(as_dict=True):
+	for record in records:
 		if cint(record.is_return):
 			status = DEBIT_NOTE
 		elif cint(record.update_stock):
@@ -150,12 +161,36 @@ def get_invoice_rows(filters):
 				"bill_no": record.bill_no,
 				"bill_date": record.bill_date,
 				"pending_qty": 0.0,
-				"net_amount": flt(record.base_net_total),
+				# Item level, not the header, because core's Purchase Register sums
+				# the expense side and the two disagree here: 93 invoices imported
+				# from ePromise carry landed cost inside the item rate while the
+				# header holds only what the supplier is owed. Matching core keeps
+				# the invoice half of this report identical to the register people
+				# already reconcile against — verified equal on production.
+				"net_amount": flt(item_totals.get(record.voucher_no, record.base_net_total)),
 				"tax_amount": flt(record.base_total_taxes_and_charges),
 				"total_amount": flt(record.base_grand_total),
 			}
 		)
 	return rows
+
+
+def get_invoice_item_totals(names):
+	"""Net per invoice summed off the item rows, the way core totals it."""
+	if not names:
+		return {}
+
+	item = frappe.qb.DocType("Purchase Invoice Item")
+	records = (
+		frappe.qb.from_(item)
+		.select(item.parent, Sum(item.base_net_amount).as_("net"))
+		.where(item.parent.isin(names))
+		.groupby(item.parent)
+	).run(as_dict=True)
+
+	# `or` the header value back in for an invoice whose items sum to nothing,
+	# mirroring core's own fallback
+	return {record.parent: flt(record.net) for record in records if flt(record.net)}
 
 
 def cost_center_exists(child_doctype, parent_field, cost_center):
@@ -184,6 +219,11 @@ def get_receipt_rows(filters):
 			"as_on": getdate(filters.to_date),
 			"party": filters.get("supplier"),
 			"cost_center": filters.get("cost_center"),
+			# Purchase Receipt status reads Completed the moment an invoice lands,
+			# including an invoice raised AFTER this period ended, so judging by it
+			# would drop that receipt out of a period it genuinely belonged to.
+			# Billed-ness comes from the row links, dated, which is the honest test.
+			"ignore_document_status": 1,
 		}
 	)
 
