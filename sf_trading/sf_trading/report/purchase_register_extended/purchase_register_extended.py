@@ -63,6 +63,24 @@ They are the charges recorded on the document as a whole, not a share of the
 unbilled remainder, and they sit in their own column rather than inside the
 purchase value, because a Landed Cost Voucher posts to stock valuation and not
 to the supplier bill.
+
+HOW THE INVOICE HALF RELATES TO CORE'S PURCHASE REGISTER
+---------------------------------------------------------
+Both total an invoice from its item rows rather than its header, so they agree
+on most data and did so exactly for July on production. They can still differ,
+and the reason is worth knowing before anyone reconciles the two.
+
+Core folds a Purchase Taxes and Charges row into its net_total when the row is
+categorised Total and its ACCOUNT HEAD also happens to be used as an item
+expense account somewhere in the same filtered set — a Deduct row arriving as a
+negative. Whether a given charge lands in net_total or in its own tax column
+therefore depends on the mix of invoices on screen, so core's net_total is not
+a fixed definition of purchase value. On UAT that pulls three Customs Clearance
+charges (55.56 in July) out of core's total while leaving Customs Duty and
+Freight in tax columns.
+
+This report always reports the same thing: the goods value on the bill, the sum
+of the item rows. It does not move when the filters change.
 """
 
 import frappe
@@ -243,12 +261,10 @@ def get_invoice_rows(filters):
 				"bill_no": record.bill_no,
 				"bill_date": record.bill_date,
 				"pending_qty": 0.0,
-				# Item level, not the header, because core's Purchase Register sums
-				# the expense side and the two disagree here: 93 invoices imported
-				# from ePromise carry landed cost inside the item rate while the
-				# header holds only what the supplier is owed. Matching core keeps
-				# the invoice half of this report identical to the register people
-				# already reconcile against — verified equal on production.
+				# Item level, not the header. The two disagree on this data because
+				# invoices imported from ePromise carry landed cost inside the item
+				# rate while the header holds only what the supplier is owed, and
+				# the goods value is what a trading account needs.
 				"net_amount": flt(net),
 				"tax_amount": flt(tax),
 				"total_amount": flt(total),
