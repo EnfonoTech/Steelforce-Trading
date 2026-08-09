@@ -641,3 +641,58 @@ class TestOpenItems(FrappeTestCase):
 		row = self.register_row(self.run_register(), pr.name)
 		self.assertIsNotNone(row)
 		self.assertAlmostEqual(row["net_amount"], 1600, places=2)
+
+	def test_register_item_type_filters_both_halves(self):
+		from erpnext.stock.doctype.item.test_item import make_item
+
+		service = make_item("Open Items Service Item", properties={"is_stock_item": 0}).name
+
+		# a service-only bill, and a receipt line for the same service
+		si = frappe.get_doc(
+			{
+				"doctype": "Purchase Invoice",
+				"company": COMPANY,
+				"supplier": SUPPLIER,
+				"update_stock": 0,
+				"cost_center": self.cost_center,
+				"items": [
+					{
+						"item_code": service,
+						"qty": 1,
+						"rate": 90,
+						"cost_center": self.cost_center,
+						"expense_account": frappe.db.get_value(
+							"Company", COMPANY, "default_expense_account"
+						),
+					}
+				],
+			}
+		)
+		si.insert()
+		si.submit()
+
+		# default is goods only: the service bill is not a purchase for the
+		# trading account and must not be listed
+		goods = self.run_register()
+		self.assertIsNone(self.register_row(goods, si.name))
+
+		# widening includes it, and both halves widen together
+		everything = self.run_register(item_type="All Items")
+		self.assertIsNotNone(self.register_row(everything, si.name))
+		self.assertGreaterEqual(
+			sum(row["net_amount"] for row in everything),
+			sum(row["net_amount"] for row in goods),
+		)
+
+	def test_register_keeps_disabled_items(self):
+		"""Disabling an item stops new transactions; it does not un-purchase old ones."""
+		pr = self.make_pr(qty=2, rate=55)
+		frappe.db.set_value("Item", self.item_code, "disabled", 1)
+		frappe.clear_cache(doctype="Item")
+		try:
+			row = self.register_row(self.run_register(), pr.name)
+			self.assertIsNotNone(row, "a receipt of a now-disabled item is still a purchase")
+			self.assertAlmostEqual(row["net_amount"], 110, places=2)
+		finally:
+			frappe.db.set_value("Item", self.item_code, "disabled", 0)
+			frappe.clear_cache(doctype="Item")
