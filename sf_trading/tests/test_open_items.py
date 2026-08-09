@@ -430,3 +430,42 @@ class TestOpenItems(FrappeTestCase):
 		if other_group:
 			non_matching = customer_open_items_summary(self.filters(party_group=other_group[0]))
 			self.assertIsNone(self.summary_row(non_matching, CUSTOMER))
+
+	# ------------------------------------------------------------------
+	# period closing gate
+	# ------------------------------------------------------------------
+
+	def test_period_closing_gate(self):
+		from sf_trading.period_closing import pending_open_items, validate_open_items
+
+		si = self.make_si(qty=2)
+
+		voucher = frappe._dict(company=COMPANY, period_end_date=nowdate())
+		with self.assertRaises(frappe.ValidationError):
+			validate_open_items(voucher)
+
+		census = {row["report"]: row for row in pending_open_items(COMPANY, nowdate())}
+		self.assertGreaterEqual(census["Invoiced Items To Be Delivered"]["items"], 1)
+
+		# clearing today unblocks the period even though the delivery is
+		# dated after items created earlier in it
+		self.make_dn_from_si(si)
+		remaining = [
+			row
+			for row in pending_open_items(COMPANY, nowdate())
+			if row["items"] and row["report"] == "Invoiced Items To Be Delivered"
+		]
+		before = census["Invoiced Items To Be Delivered"]["items"]
+		after = remaining[0]["items"] if remaining else 0
+		self.assertEqual(after, before - 1)
+
+	def test_period_closing_ignores_items_after_period_end(self):
+		from sf_trading.period_closing import pending_open_items
+
+		yesterday = add_days(nowdate(), -1)
+		baseline = {
+			row["report"]: row["items"] for row in pending_open_items(COMPANY, yesterday)
+		}
+		self.make_si(qty=1)  # dated today — outside a period ending yesterday
+		census = {row["report"]: row["items"] for row in pending_open_items(COMPANY, yesterday)}
+		self.assertEqual(census, baseline)

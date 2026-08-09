@@ -68,6 +68,8 @@ doctype_js = {
 		"public/js/purchase_tax_template.js",
 		"public/js/payment_advice_form_action.js",
 	],
+	# open item census + submit gate companion view
+	"Period Closing Voucher": "public/js/period_closing_voucher.js",
 }
 
 # include js, css files in header of web template
@@ -214,6 +216,10 @@ _SDBNB_DN_HOOK = "sf_trading.sdbnb.set_delivery_note_expense_account"
 _SBND_DN_HOOK = "sf_trading.sbnd.set_delivery_note_expense_account"
 
 doc_events = {
+	"Period Closing Voucher": {
+		# a period must not close while it still carries unbilled / undelivered items
+		"before_submit": "sf_trading.period_closing.validate_open_items",
+	},
 	"Payment Entry": {
 		"validate": "sf_trading.api.payment_advice_hooks.validate_payment_entry_advice",
 		"on_submit": "sf_trading.api.payment_advice_hooks.on_payment_entry_submit",
