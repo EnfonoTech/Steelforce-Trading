@@ -1,0 +1,371 @@
+"""Open item engine — the four unbilled/undelivered flows.
+
+A sales or purchase document row stays "open" until its counterpart document
+row closes it. The links that pair rows up are core's own mapper fields:
+
+    Sales Invoice Item.dn_detail        -> Delivery Note Item.name   (bill after delivery)
+    Delivery Note Item.si_detail        -> Sales Invoice Item.name   (deliver after billing)
+    Purchase Invoice Item.pr_detail     -> Purchase Receipt Item.name (bill after receipt)
+    Purchase Receipt Item.purchase_invoice_item -> Purchase Invoice Item.name (receive after billing)
+
+Every report here reconstructs the matched quantity from those links as of a
+date, instead of reading the live denormalised fields (`billed_amt`,
+`delivered_qty`, `per_received`). The live fields only know today's state, so
+"open as of 30 June" comes out wrong through them — the linked rows carry
+their own posting dates and do not have that problem. It also means a row
+whose counterpart was cancelled re-opens by itself.
+
+Returns net the same way: a return document's rows point at the original row
+(`sales_invoice_item` / `dn_detail` / `purchase_receipt_item` /
+`purchase_invoice_item`) with negative quantities.
+
+Used by the four Script Reports in sf_trading/report/:
+    Invoiced Items To Be Delivered
+    Delivered Items Pending Billing
+    Received Items Pending Billing
+    Billed Items Pending Receipt
+"""
+
+import frappe
+from frappe import _
+from frappe.query_builder.functions import Sum
+from frappe.utils import cint, date_diff, flt, getdate, nowdate
+
+QTY_PRECISION = 3
+
+
+# ---------------------------------------------------------------------------
+# shared plumbing
+# ---------------------------------------------------------------------------
+
+
+def as_on_date(filters):
+	return getdate(filters.get("as_on") or nowdate())
+
+
+def ageing_ranges(filters):
+	"""Parse "30, 60, 90" into [30, 60, 90]; fall back to the default split."""
+	raw = str(filters.get("range") or "30, 60, 90")
+	ranges = [cint(part) for part in raw.split(",") if cint(part) > 0]
+	return sorted(set(ranges)) or [30, 60, 90]
+
+
+def ageing_bucket(age, ranges):
+	lower = 0
+	for upper in ranges:
+		if age <= upper:
+			return f"{lower}-{upper}"
+		lower = upper + 1
+	return f"{ranges[-1] + 1}-{_('Above')}"
+
+
+def matched_qty_map(child_doctype, parent_doctype, link_field, as_on, is_return=None):
+	"""Sum of row qty per counterpart row name, submitted and posted by as_on.
+
+	Return documents carry negative quantities, so summing every submitted row
+	that points at the link nets returns out without a second pass.
+	"""
+	child = frappe.qb.DocType(child_doctype)
+	parent = frappe.qb.DocType(parent_doctype)
+
+	query = (
+		frappe.qb.from_(child)
+		.join(parent)
+		.on(parent.name == child.parent)
+		.select(child[link_field].as_("link"), Sum(child.qty).as_("qty"))
+		.where(
+			(parent.docstatus == 1)
+			& (parent.posting_date <= as_on)
+			& (child[link_field].isnotnull())
+			& (child[link_field] != "")
+		)
+		.groupby(child[link_field])
+	)
+
+	if is_return is not None:
+		query = query.where(parent.is_return == cint(is_return))
+
+	return {row.link: flt(row.qty) for row in query.run(as_dict=True)}
+
+
+def base_rows(parent_doctype, party_field, filters, extra_conditions=None):
+	"""Submitted stock-item rows of the source document, with row-level filters.
+
+	Positive-qty rows only: return documents enter the calculation through the
+	matched-qty maps, never as open items of their own.
+	"""
+	parent = frappe.qb.DocType(parent_doctype)
+	child = frappe.qb.DocType(parent_doctype + " Item")
+	item = frappe.qb.DocType("Item")
+	as_on = as_on_date(filters)
+
+	query = (
+		frappe.qb.from_(parent)
+		.join(child)
+		.on(parent.name == child.parent)
+		.join(item)
+		.on(item.name == child.item_code)
+		.select(
+			parent.name.as_("document"),
+			parent.posting_date,
+			parent[party_field].as_("party"),
+			parent[party_field + "_name"].as_("party_name"),
+			parent.company,
+			child.name.as_("row_name"),
+			child.item_code,
+			child.item_name,
+			child.item_group,
+			child.warehouse,
+			child.cost_center,
+			child.uom,
+			child.qty,
+			child.base_net_rate,
+			child.base_net_amount,
+		)
+		.where(
+			(parent.docstatus == 1)
+			& (parent.is_return == 0)
+			& (parent.company == filters.get("company"))
+			& (parent.posting_date <= as_on)
+			& (child.qty > 0)
+			& (item.is_stock_item == 1)
+		)
+		.orderby(parent.posting_date)
+		.orderby(parent.name)
+	)
+
+	if extra_conditions:
+		for condition in extra_conditions(parent, child):
+			query = query.where(condition)
+
+	if filters.get("party"):
+		query = query.where(parent[party_field] == filters.get("party"))
+	if filters.get("item_code"):
+		query = query.where(child.item_code == filters.get("item_code"))
+	if filters.get("item_group"):
+		query = query.where(child.item_group == filters.get("item_group"))
+	if filters.get("warehouse"):
+		query = query.where(child.warehouse == filters.get("warehouse"))
+	if filters.get("cost_center"):
+		query = query.where(child.cost_center == filters.get("cost_center"))
+
+	return query.run(as_dict=True)
+
+
+def build_open_rows(rows, matched_maps, matched_fieldnames, filters):
+	"""Net each source row against its matched maps; keep what stays open.
+
+	matched_maps and matched_fieldnames run in step: the first map's total is
+	reported under the first fieldname, and so on. Pending is qty minus every
+	matched quantity (matched maps built from return documents already carry
+	negative sums, so their absolute value is what got returned).
+	"""
+	as_on = as_on_date(filters)
+	ranges = ageing_ranges(filters)
+	open_rows = []
+
+	for row in rows:
+		pending = flt(row.qty, QTY_PRECISION)
+		for matched_map, fieldname in zip(matched_maps, matched_fieldnames):
+			matched = flt(matched_map.get(row.row_name, 0), QTY_PRECISION)
+			row[fieldname] = abs(matched)
+			pending -= abs(matched)
+
+		pending = flt(pending, QTY_PRECISION)
+		if pending <= 0:
+			continue
+
+		row.pending_qty = pending
+		row.pending_amount = flt(
+			flt(row.base_net_amount) * pending / flt(row.qty), 2
+		) if flt(row.qty) else 0
+		row.age = max(date_diff(as_on, row.posting_date), 0)
+		row.bucket = ageing_bucket(row.age, ranges)
+		open_rows.append(row)
+
+	return open_rows
+
+
+# ---------------------------------------------------------------------------
+# the four flows
+# ---------------------------------------------------------------------------
+
+
+def invoiced_items_to_be_delivered(filters):
+	"""Sales Invoice rows (no Update Stock) still waiting for a Delivery Note."""
+	as_on = as_on_date(filters)
+
+	rows = base_rows(
+		"Sales Invoice",
+		"customer",
+		filters,
+		extra_conditions=lambda parent, child: [
+			parent.update_stock == 0,
+			parent.is_opening != "Yes",
+			(child.dn_detail.isnull()) | (child.dn_detail == ""),
+			(child.delivery_note.isnull()) | (child.delivery_note == ""),
+		],
+	)
+
+	delivered = matched_qty_map("Delivery Note Item", "Delivery Note", "si_detail", as_on)
+	credited = matched_qty_map(
+		"Sales Invoice Item", "Sales Invoice", "sales_invoice_item", as_on, is_return=1
+	)
+
+	return build_open_rows(rows, [delivered, credited], ["delivered_qty", "returned_qty"], filters)
+
+
+def delivered_items_pending_billing(filters):
+	"""Delivery Note rows still waiting for a Sales Invoice."""
+	as_on = as_on_date(filters)
+
+	rows = base_rows(
+		"Delivery Note",
+		"customer",
+		filters,
+		extra_conditions=lambda parent, child: [
+			parent.status.notin(["Closed"]),
+			(child.si_detail.isnull()) | (child.si_detail == ""),
+			(child.against_sales_invoice.isnull()) | (child.against_sales_invoice == ""),
+		],
+	)
+
+	billed = matched_qty_map("Sales Invoice Item", "Sales Invoice", "dn_detail", as_on)
+	returned = matched_qty_map("Delivery Note Item", "Delivery Note", "dn_detail", as_on, is_return=1)
+
+	return build_open_rows(rows, [billed, returned], ["billed_qty", "returned_qty"], filters)
+
+
+def received_items_pending_billing(filters):
+	"""Purchase Receipt rows still waiting for a Purchase Invoice."""
+	as_on = as_on_date(filters)
+
+	rows = base_rows(
+		"Purchase Receipt",
+		"supplier",
+		filters,
+		extra_conditions=lambda parent, child: [
+			parent.status.notin(["Closed", "Completed"]),
+			(child.purchase_invoice_item.isnull()) | (child.purchase_invoice_item == ""),
+			(child.purchase_invoice.isnull()) | (child.purchase_invoice == ""),
+		],
+	)
+
+	billed = matched_qty_map("Purchase Invoice Item", "Purchase Invoice", "pr_detail", as_on)
+	returned = matched_qty_map(
+		"Purchase Receipt Item", "Purchase Receipt", "purchase_receipt_item", as_on, is_return=1
+	)
+
+	return build_open_rows(rows, [billed, returned], ["billed_qty", "returned_qty"], filters)
+
+
+def billed_items_pending_receipt(filters):
+	"""Purchase Invoice rows (no Update Stock) still waiting for a Purchase Receipt."""
+	as_on = as_on_date(filters)
+
+	rows = base_rows(
+		"Purchase Invoice",
+		"supplier",
+		filters,
+		extra_conditions=lambda parent, child: [
+			parent.update_stock == 0,
+			parent.is_opening != "Yes",
+			(child.pr_detail.isnull()) | (child.pr_detail == ""),
+			(child.purchase_receipt.isnull()) | (child.purchase_receipt == ""),
+		],
+	)
+
+	received = matched_qty_map(
+		"Purchase Receipt Item", "Purchase Receipt", "purchase_invoice_item", as_on
+	)
+	debited = matched_qty_map(
+		"Purchase Invoice Item", "Purchase Invoice", "purchase_invoice_item", as_on, is_return=1
+	)
+
+	return build_open_rows(rows, [received, debited], ["received_qty", "returned_qty"], filters)
+
+
+# ---------------------------------------------------------------------------
+# columns shared by the four reports
+# ---------------------------------------------------------------------------
+
+
+def report_columns(document_doctype, party_doctype, matched_fieldname, matched_label):
+	return [
+		{
+			"label": _(party_doctype),
+			"fieldname": "party",
+			"fieldtype": "Link",
+			"options": party_doctype,
+			"width": 140,
+		},
+		{
+			"label": _(party_doctype + " Name"),
+			"fieldname": "party_name",
+			"fieldtype": "Data",
+			"width": 160,
+		},
+		{
+			"label": _(document_doctype),
+			"fieldname": "document",
+			"fieldtype": "Link",
+			"options": document_doctype,
+			"width": 170,
+		},
+		{"label": _("Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 95},
+		{"label": _("Age (Days)"), "fieldname": "age", "fieldtype": "Int", "width": 85},
+		{"label": _("Ageing Bucket"), "fieldname": "bucket", "fieldtype": "Data", "width": 95},
+		{
+			"label": _("Item Code"),
+			"fieldname": "item_code",
+			"fieldtype": "Link",
+			"options": "Item",
+			"width": 130,
+		},
+		{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 160},
+		{
+			"label": _("Item Group"),
+			"fieldname": "item_group",
+			"fieldtype": "Link",
+			"options": "Item Group",
+			"width": 110,
+		},
+		{
+			"label": _("Warehouse"),
+			"fieldname": "warehouse",
+			"fieldtype": "Link",
+			"options": "Warehouse",
+			"width": 120,
+		},
+		{
+			"label": _("Branch"),
+			"fieldname": "cost_center",
+			"fieldtype": "Link",
+			"options": "Cost Center",
+			"width": 110,
+		},
+		{"label": _("UOM"), "fieldname": "uom", "fieldtype": "Link", "options": "UOM", "width": 70},
+		{"label": _("Qty"), "fieldname": "qty", "fieldtype": "Float", "width": 90},
+		{
+			"label": matched_label,
+			"fieldname": matched_fieldname,
+			"fieldtype": "Float",
+			"width": 100,
+		},
+		{"label": _("Returned Qty"), "fieldname": "returned_qty", "fieldtype": "Float", "width": 100},
+		{"label": _("Pending Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 100},
+		{
+			"label": _("Rate"),
+			"fieldname": "base_net_rate",
+			"fieldtype": "Currency",
+			"options": "Company:company:default_currency",
+			"width": 100,
+		},
+		{
+			"label": _("Pending Amount"),
+			"fieldname": "pending_amount",
+			"fieldtype": "Currency",
+			"options": "Company:company:default_currency",
+			"width": 120,
+		},
+	]
