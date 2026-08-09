@@ -125,3 +125,80 @@ def first_image(html):
 
     src = match.group(1)
     return frappe.utils.get_url(src) if src.startswith("/") else src
+
+
+# ---------------------------------------------------------------------------
+# ePromise voucher numbers
+# ---------------------------------------------------------------------------
+
+# Every doctype the migration stamped with the number the voucher carried in
+# ePromise. The field holds "<source>|<number>", e.g. R01|501000375, and staff
+# know these documents by the number after the pipe rather than by the name
+# ERPNext generated for them on import.
+EPROMISE_VR_DOCTYPES = (
+    "Sales Invoice",
+    "Purchase Invoice",
+    "Purchase Receipt",
+    "Payment Entry",
+    "Journal Entry",
+    "Stock Entry",
+)
+
+EPROMISE_VR_FIELD = "epromise_vr"
+
+
+def epromise_number(value) -> str:
+    """The number a user recognises out of an ePromise VR.
+
+    "R01|501000375" -> "501000375". The last segment is taken rather than the
+    second, so an unexpected extra separator still yields the number and not a
+    fragment of the prefix. A value with no separator is returned as it stands.
+    """
+    text = cstr(value).strip()
+    if not text:
+        return ""
+
+    return text.rsplit("|", 1)[-1].strip()
+
+
+@frappe.whitelist()
+def get_epromise_references(vouchers):
+    """Map printed vouchers to their ePromise number, in one round trip.
+
+    `vouchers` is a JSON list of {"voucher_type", "voucher_no"}. The reply is
+    keyed "<voucher_type>::<voucher_no>" so two doctypes sharing a name cannot
+    collide, and only carries entries that actually have a number — anything
+    missing keeps the name the caller already has.
+
+    Reads are grouped per doctype and skip any doctype the caller may not read,
+    so this exposes nothing the report itself would not already show.
+    """
+    if isinstance(vouchers, str):
+        vouchers = frappe.parse_json(vouchers)
+
+    wanted = {}
+    for row in vouchers or []:
+        voucher_type = cstr((row or {}).get("voucher_type"))
+        voucher_no = cstr((row or {}).get("voucher_no"))
+        if voucher_type in EPROMISE_VR_DOCTYPES and voucher_no:
+            wanted.setdefault(voucher_type, set()).add(voucher_no)
+
+    references = {}
+    for voucher_type, names in wanted.items():
+        if not frappe.has_permission(voucher_type, "read"):
+            continue
+
+        meta = frappe.get_meta(voucher_type)
+        if not meta.has_field(EPROMISE_VR_FIELD):
+            continue
+
+        for record in frappe.get_all(
+            voucher_type,
+            filters={"name": ("in", list(names))},
+            fields=["name", EPROMISE_VR_FIELD],
+        ):
+            number = epromise_number(record.get(EPROMISE_VR_FIELD))
+            if number:
+                references[f"{voucher_type}::{record.name}"] = number
+
+    return references

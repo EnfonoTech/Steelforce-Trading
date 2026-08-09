@@ -312,6 +312,36 @@
     }
     bucket_labels = [__("Not Due")].concat(bucket_labels);
 
+    /* ---- ePromise voucher numbers ----
+           Documents brought over from ePromise were renamed by the import, so the
+           name on the row is not the number anybody here recognises. The migration
+           kept the original on the document as "<source>|<number>" and staff go by
+           the number after the pipe, so swap it in wherever one exists and leave
+           the document name alone where none does. One call for the whole
+           statement rather than a lookup per line. ---- */
+    var epromise = {};
+    try {
+        var wanted = [];
+        for (var e = 0; e < rows.length; e++) {
+            if (rows[e].voucher_type && rows[e].voucher_no) {
+                wanted.push({ voucher_type: rows[e].voucher_type, voucher_no: rows[e].voucher_no });
+            }
+        }
+        if (wanted.length) {
+            frappe.call({
+                method: "sf_trading.api.statement_of_account.get_epromise_references",
+                args: { vouchers: JSON.stringify(wanted) },
+                async: false,
+                callback: function (r) { epromise = (r && r.message) || {}; }
+            });
+        }
+    } catch (epromise_error) { epromise = {}; }
+
+    var voucher_label = function (row) {
+        var key = cstr(row.voucher_type) + "::" + cstr(row.voucher_no);
+        return epromise[key] || row.voucher_no || "";
+    };
+
     /* ---- supplier block: not in the report output, so read it off the Supplier ---- */
     var supplier = {};
     try {
@@ -512,7 +542,7 @@
                 <td class="nowrap">{%= on_date(row.posting_date) %}</td>
                 <td class="nowrap">{%= on_date(row.due_date) %}</td>
                 <td class="mid">{{ branch_of(row.cost_center) }}</td>
-                <td>{{ row.voucher_no || "" }}</td>
+                <td>{{ voucher_label(row) }}</td>
                 <td class="mid">{%= type_code(row) %}</td>
                 <td class="mid overdue">{%= flt(row.age) > 0 ? cint(row.age) : "" %}</td>
                 <td class="muted">{{ row.bill_no || "" }}</td>
