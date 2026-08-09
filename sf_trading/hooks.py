@@ -139,6 +139,9 @@ after_migrate = [
 	"sf_trading.inter_branch.ensure_branch_accounting_dimension",
 	# Company/Sales Invoice Item fields + the two stock-timing Account Types
 	"sf_trading.stock_billing_setup.setup",
+	# per-company switch arming the Period Closing open item gate; runs after the
+	# stock billing setup because it anchors below the field that one creates
+	"sf_trading.period_closing.ensure_custom_fields",
 ]
 
 # Uninstallation

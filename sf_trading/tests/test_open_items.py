@@ -435,16 +435,40 @@ class TestOpenItems(FrappeTestCase):
 	# period closing gate
 	# ------------------------------------------------------------------
 
-	def test_period_closing_gate(self):
-		from sf_trading.period_closing import pending_open_items, validate_open_items
+	def arm_gate(self, on=1):
+		from sf_trading.period_closing import ENFORCE_FIELD
 
+		frappe.db.set_value("Company", COMPANY, ENFORCE_FIELD, on)
+		frappe.clear_cache(doctype="Company")
+
+	def test_period_closing_gate_is_off_by_default(self):
+		from sf_trading.period_closing import ensure_custom_fields, validate_open_items
+
+		ensure_custom_fields()
+		self.arm_gate(0)
+		self.make_si(qty=2)
+
+		# open items exist, but this company never asked for them to block
+		validate_open_items(frappe._dict(company=COMPANY, period_end_date=nowdate()))
+
+	def test_period_closing_gate(self):
+		from sf_trading.period_closing import (
+			ensure_custom_fields,
+			pending_open_items,
+			validate_open_items,
+		)
+
+		ensure_custom_fields()
+		self.arm_gate(1)
 		si = self.make_si(qty=2)
 
 		voucher = frappe._dict(company=COMPANY, period_end_date=nowdate())
 		with self.assertRaises(frappe.ValidationError):
 			validate_open_items(voucher)
 
-		census = {row["report"]: row for row in pending_open_items(COMPANY, nowdate())}
+		result = pending_open_items(COMPANY, nowdate())
+		self.assertTrue(result["enforced"])
+		census = {row["report"]: row for row in result["rows"]}
 		self.assertGreaterEqual(census["Invoiced Items To Be Delivered"]["items"], 1)
 
 		# clearing today unblocks the period even though the delivery is
@@ -452,20 +476,24 @@ class TestOpenItems(FrappeTestCase):
 		self.make_dn_from_si(si)
 		remaining = [
 			row
-			for row in pending_open_items(COMPANY, nowdate())
+			for row in pending_open_items(COMPANY, nowdate())["rows"]
 			if row["items"] and row["report"] == "Invoiced Items To Be Delivered"
 		]
 		before = census["Invoiced Items To Be Delivered"]["items"]
 		after = remaining[0]["items"] if remaining else 0
 		self.assertEqual(after, before - 1)
 
+		self.arm_gate(0)
+
 	def test_period_closing_ignores_items_after_period_end(self):
 		from sf_trading.period_closing import pending_open_items
 
 		yesterday = add_days(nowdate(), -1)
 		baseline = {
-			row["report"]: row["items"] for row in pending_open_items(COMPANY, yesterday)
+			row["report"]: row["items"] for row in pending_open_items(COMPANY, yesterday)["rows"]
 		}
 		self.make_si(qty=1)  # dated today — outside a period ending yesterday
-		census = {row["report"]: row["items"] for row in pending_open_items(COMPANY, yesterday)}
+		census = {
+			row["report"]: row["items"] for row in pending_open_items(COMPANY, yesterday)["rows"]
+		}
 		self.assertEqual(census, baseline)

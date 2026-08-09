@@ -41,7 +41,8 @@ function render_open_items(frm) {
 				frm._sf_open_items_section = null;
 			}
 
-			const rows = r.message;
+			const rows = r.message.rows || [];
+			const enforced = !!r.message.enforced;
 			const total_items = rows.reduce((sum, row) => sum + row.items, 0);
 			const currency = frappe.get_doc(":Company", frm.doc.company)?.default_currency;
 
@@ -67,10 +68,17 @@ function render_open_items(frm) {
 						</tr>`
 					)
 					.join("");
+				// the same list either blocks or informs, depending on the company switch
+				const intro = enforced
+					? `<p class="text-danger">${__(
+							"These must be cleared before this voucher can be submitted:"
+						)}</p>`
+					: `<p class="text-muted">${__(
+							"Open items in this period. Submission is not blocked — turn on {0} on the Company to enforce it.",
+							[__("Block Period Closing on Open Items")]
+						)}</p>`;
 				html = `<div>
-					<p class="text-danger">${__(
-						"These must be cleared before this voucher can be submitted:"
-					)}</p>
+					${intro}
 					<table class="table table-bordered table-sm">
 						<thead><tr>
 							<th>${__("Pending")}</th>
