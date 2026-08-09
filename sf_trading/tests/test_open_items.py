@@ -577,3 +577,67 @@ class TestOpenItems(FrappeTestCase):
 		rows = self.run_register(include_unbilled_receipts=0)
 		self.assertIsNone(self.register_row(rows, pr.name))
 		self.assertFalse([r for r in rows if r["voucher_type"] == "Purchase Receipt"])
+
+	def test_register_scope_select_switches_the_sides(self):
+		pr = self.make_pr(qty=3, rate=40)
+		self.make_pi(qty=1, rate=40)
+
+		invoices_only = self.run_register(scope="Invoices Only")
+		self.assertFalse([r for r in invoices_only if r["voucher_type"] == "Purchase Receipt"])
+
+		receipts_only = self.run_register(scope="Unbilled Receipts Only")
+		self.assertFalse([r for r in receipts_only if r["voucher_type"] == "Purchase Invoice"])
+		self.assertIsNotNone(self.register_row(receipts_only, pr.name))
+
+		both = self.run_register(scope="Invoices and Unbilled Receipts")
+		self.assertTrue([r for r in both if r["voucher_type"] == "Purchase Invoice"])
+		self.assertTrue([r for r in both if r["voucher_type"] == "Purchase Receipt"])
+
+	def test_register_shows_an_unbilled_return_as_a_reduction(self):
+		from erpnext.controllers.sales_and_purchase_return import make_return_doc
+
+		pr = self.make_pr(qty=5, rate=60)          # 300 received
+		return_pr = make_return_doc("Purchase Receipt", pr.name)
+		return_pr.items[0].qty = -2                # 120 sent back
+		return_pr.insert()
+		return_pr.submit()
+
+		rows = self.run_register()
+		back = self.register_row(rows, return_pr.name)
+		self.assertIsNotNone(back, "a return with no debit note must show as its own line")
+		self.assertEqual(back["status"], "Unbilled Purchase Return")
+		self.assertLess(back["net_amount"], 0)
+		self.assertAlmostEqual(back["net_amount"], -120, places=2)
+
+		# the receipt keeps its full unbilled value; the return does the reducing,
+		# so the two together are the 180 actually purchased
+		receipt = self.register_row(rows, pr.name)
+		self.assertAlmostEqual(receipt["net_amount"], 300, places=2)
+		self.assertAlmostEqual(receipt["net_amount"] + back["net_amount"], 180, places=2)
+
+	def test_register_reports_a_foreign_currency_receipt_in_company_currency(self):
+		pr = frappe.get_doc(
+			{
+				"doctype": "Purchase Receipt",
+				"company": COMPANY,
+				"supplier": SUPPLIER,
+				"currency": "USD",
+				"conversion_rate": 80,
+				"cost_center": self.cost_center,
+				"items": [
+					{
+						"item_code": self.item_code,
+						"qty": 2,
+						"rate": 10,          # 20 USD -> 1600 company currency
+						"warehouse": self.warehouse,
+						"cost_center": self.cost_center,
+					}
+				],
+			}
+		)
+		pr.insert()
+		pr.submit()
+
+		row = self.register_row(self.run_register(), pr.name)
+		self.assertIsNotNone(row)
+		self.assertAlmostEqual(row["net_amount"], 1600, places=2)
