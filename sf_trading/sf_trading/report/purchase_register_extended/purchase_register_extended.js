@@ -47,10 +47,40 @@ frappe.query_reports["Purchase Register Extended"] = {
 			},
 		},
 		{
-			fieldname: "include_unbilled_receipts",
-			label: __("Include Unbilled Receipts"),
-			fieldtype: "Check",
-			default: 1,
+			fieldname: "mode_of_payment",
+			label: __("Mode of Payment"),
+			fieldtype: "Link",
+			options: "Mode of Payment",
+		},
+		{
+			fieldname: "warehouse",
+			label: __("Warehouse"),
+			fieldtype: "Link",
+			options: "Warehouse",
+			get_query: () => {
+				return { filters: { company: frappe.query_report.get_filter_value("company") } };
+			},
+		},
+		{
+			fieldname: "item_group",
+			label: __("Item Group"),
+			fieldtype: "Link",
+			options: "Item Group",
+		},
+		{
+			// a Select, not a checkbox: query_report.js drops filters whose value is
+			// falsy, so an unticked Check never reaches the server and the receipts
+			// could not be switched off
+			fieldname: "scope",
+			label: __("Show"),
+			fieldtype: "Select",
+			options: [
+				"Invoices and Unbilled Receipts",
+				"Invoices Only",
+				"Unbilled Receipts Only",
+			].join("\n"),
+			default: "Invoices and Unbilled Receipts",
+			reqd: 1,
 		},
 	],
 
@@ -59,8 +89,10 @@ frappe.query_reports["Purchase Register Extended"] = {
 		// the receipt lines are the ones core never showed - mark them so the
 		// reader can see at a glance what this report adds
 		if (data && data.voucher_type === "Purchase Receipt") {
+			// returns read as reductions, so colour them apart from receipts
 			if (["voucher_type", "voucher_no", "status", "net_amount", "total_amount"].includes(column.fieldname)) {
-				value = `<span style="color: var(--orange-600)">${value}</span>`;
+				const tone = flt(data.net_amount) < 0 ? "var(--red-600)" : "var(--orange-600)";
+				value = `<span style="color: ${tone}">${value}</span>`;
 			}
 		}
 		return value;

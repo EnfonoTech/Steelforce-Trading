@@ -48,6 +48,16 @@ period is re-run later. The two reports therefore agree for the current period
 and can differ for a closed one — by exactly the receipts invoiced after it
 ended, which is the intended behaviour.
 
+RETURNS
+-------
+A purchase return reduces purchases and reaches the report one of two ways. A
+supplier debit note is a Purchase Invoice with is_return and appears on the
+invoice side as a negative. Goods sent back on a return Purchase Receipt with
+no debit note behind it yet appear as their own negative line, for the part no
+debit note covers. Receipt lines therefore do NOT net returns away, because a
+return against an already fully billed receipt would be netted against nothing
+and vanish — and on this data some returns name no receipt at all.
+
 Landed Cost Voucher charges are shown per document wherever any were applied.
 They are the charges recorded on the document as a whole, not a share of the
 unbilled remainder, and they sit in their own column rather than inside the
@@ -68,20 +78,53 @@ INVOICED = "Invoiced"
 INVOICED_WITH_STOCK = "Invoiced (Updates Stock)"
 DEBIT_NOTE = "Debit Note"
 UNBILLED_RECEIPT = "Unbilled Receipt"
+UNBILLED_RETURN = "Unbilled Purchase Return"
+
+SCOPE_BOTH = "Invoices and Unbilled Receipts"
+SCOPE_INVOICES = "Invoices Only"
+SCOPE_RECEIPTS = "Unbilled Receipts Only"
 
 
 def execute(filters=None):
 	filters = frappe._dict(filters or {})
 	validate_filters(filters)
 
-	rows = get_invoice_rows(filters)
-	if cint(filters.get("include_unbilled_receipts", 1)):
+	scope = resolve_scope(filters)
+
+	rows = []
+	if scope in (SCOPE_BOTH, SCOPE_INVOICES):
+		rows += get_invoice_rows(filters)
+	if scope in (SCOPE_BOTH, SCOPE_RECEIPTS):
 		rows += get_receipt_rows(filters)
+		rows += get_return_rows(filters)
 
 	attach_landed_cost(rows)
 	rows.sort(key=lambda row: (getdate(row["posting_date"]), row["voucher_no"]))
 
 	return get_columns(), rows
+
+
+def resolve_scope(filters):
+	"""What to list, as a Select rather than a checkbox, and here is why.
+
+	`query_report.js` collects filter values with `.filter((f) => f.get_value())`,
+	so a Check the user has just UNTICKED is falsy and never reaches the server
+	at all. Server-side it is indistinguishable from "not supplied", so a
+	checkbox that defaults to on can never be turned off — unticking Include
+	Unbilled Receipts left the receipts on the report. A Select always sends a
+	non-empty value, so the choice always arrives.
+
+	`include_unbilled_receipts` is still honoured for anything calling this
+	report in code, where a real 0 does come through.
+	"""
+	scope = filters.get("scope")
+	if scope in (SCOPE_BOTH, SCOPE_INVOICES, SCOPE_RECEIPTS):
+		return scope
+
+	if "include_unbilled_receipts" in filters and not cint(filters.get("include_unbilled_receipts")):
+		return SCOPE_INVOICES
+
+	return SCOPE_BOTH
 
 
 def validate_filters(filters):
@@ -131,10 +174,13 @@ def get_invoice_rows(filters):
 		query = query.where(invoice.supplier == filters.supplier)
 	if filters.get("supplier_group"):
 		query = query.where(invoice.supplier_group == filters.supplier_group)
-	if filters.get("cost_center"):
-		query = query.where(
-			cost_center_exists("Purchase Invoice Item", invoice.name, filters.cost_center)
-		)
+	if filters.get("mode_of_payment"):
+		query = query.where(invoice.mode_of_payment == filters.mode_of_payment)
+	for fieldname in ("cost_center", "warehouse", "item_group"):
+		if filters.get(fieldname):
+			query = query.where(
+				item_field_exists("Purchase Invoice Item", invoice.name, fieldname, filters.get(fieldname))
+			)
 
 	records = query.run(as_dict=True)
 	item_totals = get_invoice_item_totals([record.voucher_no for record in records])
@@ -193,12 +239,17 @@ def get_invoice_item_totals(names):
 	return {record.parent: flt(record.net) for record in records if flt(record.net)}
 
 
-def cost_center_exists(child_doctype, parent_field, cost_center):
+def item_field_exists(child_doctype, parent_field, fieldname, value):
+	"""Match the parent when any of its item rows carries this value.
+
+	Branch, warehouse and item group all live on the item rows here, the same
+	place core's Purchase Register looks for them.
+	"""
 	child = frappe.qb.DocType(child_doctype)
 	return Criterion.exists(
 		frappe.qb.from_(child)
 		.select(child.name)
-		.where((child.parent == parent_field) & (child.cost_center == cost_center))
+		.where((child.parent == parent_field) & (child[fieldname] == value))
 	)
 
 
@@ -224,8 +275,17 @@ def get_receipt_rows(filters):
 			# would drop that receipt out of a period it genuinely belonged to.
 			# Billed-ness comes from the row links, dated, which is the honest test.
 			"ignore_document_status": 1,
+			# returns are reported on their own lines below; netting them into
+			# the receipt as well would subtract the same goods twice
+			"ignore_return_netting": 1,
+			"warehouse": filters.get("warehouse"),
+			"item_group": filters.get("item_group"),
 		}
 	)
+
+	if filters.get("mode_of_payment"):
+		# a receipt carries no mode of payment, so nothing here can match it
+		return []
 
 	from_date = getdate(filters.from_date)
 	to_date = getdate(filters.to_date)
@@ -273,6 +333,140 @@ def get_receipt_rows(filters):
 		row["total_amount"] = flt(row["total_amount"], 2)
 
 	return rows
+
+
+def get_return_rows(filters):
+	"""Goods sent back, as negative lines, net of any debit note already raised.
+
+	A purchase return reduces purchases. It reaches this report one of two ways:
+	the supplier issues a debit note, which is a Purchase Invoice with is_return
+	and lands on the invoice side as a negative; or the goods go back on a return
+	Purchase Receipt and no debit note exists yet, which is what this handles.
+
+	Only the part NOT yet covered by a debit note is printed, so once the debit
+	note arrives the return line shrinks to nothing and the debit note carries
+	the reduction instead — the same no-double-counting rule the receipt side
+	follows. Receipt lines deliberately do not net returns away (see
+	`ignore_return_netting`), because a return against a receipt that is already
+	fully billed would otherwise be netted against nothing and disappear, and on
+	this data some returns name no receipt at all.
+	"""
+	if filters.get("mode_of_payment"):
+		return []
+
+	receipt = frappe.qb.DocType("Purchase Receipt")
+	line = frappe.qb.DocType("Purchase Receipt Item")
+	item = frappe.qb.DocType("Item")
+
+	query = (
+		frappe.qb.from_(receipt)
+		.join(line)
+		.on(receipt.name == line.parent)
+		.join(item)
+		.on(item.name == line.item_code)
+		.select(
+			receipt.name.as_("voucher_no"),
+			receipt.posting_date,
+			receipt.company,
+			receipt.supplier,
+			receipt.supplier_name,
+			line.name.as_("row_name"),
+			line.qty,
+			line.base_net_amount,
+		)
+		.where(
+			(receipt.docstatus == 1)
+			& (receipt.is_return == 1)
+			& (receipt.company == filters.company)
+			& (receipt.posting_date >= getdate(filters.from_date))
+			& (receipt.posting_date <= getdate(filters.to_date))
+			& (line.qty < 0)
+			& (item.is_stock_item == 1)
+		)
+	)
+
+	if filters.get("supplier"):
+		query = query.where(receipt.supplier == filters.supplier)
+	for fieldname in ("cost_center", "warehouse", "item_group"):
+		if filters.get(fieldname):
+			query = query.where(line[fieldname] == filters.get(fieldname))
+
+	records = query.run(as_dict=True)
+	if not records:
+		return []
+
+	credited = debit_noted_qty([record.row_name for record in records], getdate(filters.to_date))
+
+	per_return = {}
+	for record in records:
+		returned = abs(flt(record.qty))
+		covered = abs(flt(credited.get(record.row_name, 0)))
+		outstanding = flt(returned - covered, 3)
+		if outstanding <= 0:
+			continue
+
+		row = per_return.get(record.voucher_no)
+		if row is None:
+			row = {
+				"voucher_type": "Purchase Receipt",
+				"voucher_no": record.voucher_no,
+				"posting_date": getdate(record.posting_date),
+				"company": record.company,
+				"status": UNBILLED_RETURN,
+				"supplier": record.supplier,
+				"supplier_name": record.supplier_name,
+				"supplier_group": None,
+				"bill_no": None,
+				"bill_date": None,
+				"pending_qty": 0.0,
+				"net_amount": 0.0,
+				"tax_amount": 0.0,
+				"total_amount": 0.0,
+			}
+			per_return[record.voucher_no] = row
+
+		# base_net_amount is already negative on a return row; take the share of
+		# it that no debit note has picked up
+		share = flt(record.base_net_amount) * outstanding / returned if returned else 0.0
+		row["pending_qty"] -= outstanding
+		row["net_amount"] += share
+		row["total_amount"] += share
+
+	rows = list(per_return.values())
+	set_supplier_groups(rows)
+
+	if filters.get("supplier_group"):
+		rows = [row for row in rows if row["supplier_group"] == filters.supplier_group]
+
+	for row in rows:
+		row["pending_qty"] = flt(row["pending_qty"], 3)
+		row["net_amount"] = flt(row["net_amount"], 2)
+		row["total_amount"] = flt(row["total_amount"], 2)
+
+	return rows
+
+
+def debit_noted_qty(row_names, as_on):
+	"""Quantity of each return row a submitted debit note has already covered."""
+	if not row_names:
+		return {}
+
+	line = frappe.qb.DocType("Purchase Invoice Item")
+	invoice = frappe.qb.DocType("Purchase Invoice")
+	records = (
+		frappe.qb.from_(line)
+		.join(invoice)
+		.on(invoice.name == line.parent)
+		.select(line.pr_detail.as_("link"), Sum(line.qty).as_("qty"))
+		.where(
+			(invoice.docstatus == 1)
+			& (invoice.posting_date <= as_on)
+			& (line.pr_detail.isin(row_names))
+		)
+		.groupby(line.pr_detail)
+	).run(as_dict=True)
+
+	return {record.link: flt(record.qty) for record in records}
 
 
 def set_supplier_groups(rows):

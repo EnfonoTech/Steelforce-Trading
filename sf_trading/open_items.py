@@ -246,6 +246,20 @@ def ignores_document_status(filters) -> bool:
 	return bool(cint(filters.get("ignore_document_status")))
 
 
+def ignores_return_netting(filters) -> bool:
+	"""Whether the caller reports returns as their own lines rather than as a
+	deduction from the receipt they came off.
+
+	Netting a return into its receipt is right for a to-do list: what is left to
+	bill is what came in less what went back. A register that also prints the
+	return as a line of its own would then subtract it twice, and a return whose
+	receipt is already fully billed — or that names no receipt at all, which
+	happens on this data — would be netted against nothing and vanish. Such a
+	caller asks for the raw received quantity here and handles returns itself.
+	"""
+	return bool(cint(filters.get("ignore_return_netting")))
+
+
 def delivered_items_pending_billing(filters):
 	"""Delivery Note rows still waiting for a Sales Invoice."""
 	as_on = as_on_date(filters)
@@ -283,6 +297,12 @@ def received_items_pending_billing(filters):
 	rows = base_rows("Purchase Receipt", "supplier", filters, extra_conditions=conditions)
 
 	billed = matched_qty_map("Purchase Invoice Item", "Purchase Invoice", "pr_detail", as_on)
+
+	if ignores_return_netting(filters):
+		# the caller accounts for returns on their own lines instead — see
+		# ignores_return_netting for why netting them in here would double count
+		return build_open_rows(rows, [billed], ["billed_qty"], filters)
+
 	returned = matched_qty_map(
 		"Purchase Receipt Item", "Purchase Receipt", "purchase_receipt_item", as_on, is_return=1
 	)
