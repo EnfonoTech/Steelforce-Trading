@@ -362,7 +362,13 @@ def report_columns(document_doctype, party_doctype, matched_fieldname, matched_l
 			"options": "Cost Center",
 			"width": 110,
 		},
-		{"label": _("UOM"), "fieldname": "uom", "fieldtype": "Link", "options": "UOM", "width": 70},
+		# Data, not a Link to UOM: a query report refuses to render a Link column
+		# whose doctype the reader cannot read, and plenty of accounts users have
+		# no UOM permission — the whole report died with "No permission to read
+		# UOM" for them. The other Link columns stay: Cost Center and Warehouse
+		# links are what let User Permissions narrow the rows to a user branch,
+		# and the party and document links are how people navigate out of here.
+		{"label": _("UOM"), "fieldname": "uom", "fieldtype": "Data", "width": 70},
 		{"label": _("Qty"), "fieldname": "qty", "fieldtype": "Float", "width": 90},
 		{
 			"label": matched_label,
