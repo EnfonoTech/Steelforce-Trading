@@ -189,22 +189,16 @@ def freeze_valuation_rate(doc, method=None):
 
 
 def validate_zero_valuation_rows(doc):
-	"""Refuse an update-stock invoice whose stock carries no valuation.
+	"""Refuse a sales row whose stock carries no valuation, however the row posts.
 
-	Core only asks about valuation when it can find no rate at all. Stock received at
-	zero leaves a rate of zero on record, which satisfies that lookup, so the sale
-	posts revenue against no cost without a word. This asks the question core would
-	have asked, and takes the same answer: the per-row `Allow Zero Valuation Rate`
-	checkbox.
+	Core only asks about valuation when it can find no rate at all. Stock that was
+	received at zero leaves a rate of zero on record, which satisfies that lookup, so
+	the sale goes through booking revenue and no cost — silently, whether the invoice
+	updates stock itself or waits for a Delivery Note.
 
-	Only for invoices that update stock. Without it the invoice writes no stock ledger
-	entry, nothing in core reads that checkbox, and the cost genuinely cannot be known
-	yet — so there is nothing to acknowledge and demanding a tick buys nothing. That
-	case is the Delivery Note's to answer, where the stock actually moves.
+	This asks the question core would have asked, and takes the same answer: the
+	per-row `Allow Zero Valuation Rate` checkbox.
 	"""
-	if not cint(doc.get("update_stock")):
-		return
-
 	config = get_company_config(doc.company)
 
 	if not (cint(config.get(ENABLE_FIELD)) and config.get(ACCOUNT_FIELD)):
