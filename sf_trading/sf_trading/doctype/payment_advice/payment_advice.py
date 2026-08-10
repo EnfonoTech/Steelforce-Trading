@@ -331,6 +331,13 @@ class PaymentAdvice(Document):
             if before
             else {}
         )
+        # what WE last wrote into the allocation column; anything different now was typed by
+        # the accountant and must not be redistributed underneath them
+        self._allocation_before = (
+            {r.name: flt(r.allocated_amount) for r in before.payment_advice_reference}
+            if before
+            else {}
+        )
         self._payable_changes = []
 
         today = getdate(nowdate())
@@ -530,62 +537,74 @@ class PaymentAdvice(Document):
         """Honour what the accountant allocated, spread the rest, never exceed the payable.
 
         This follows Payment Entry: the row allocation is the accountant's to set, and no row
-        may take more than it is owed. Typing into a row makes that figure stick; whatever is
-        left of `payment_amount` spreads over the remaining rows in order, so clearing the
-        column still gives the old automatic behaviour.
+        may take more than it is owed.
 
-        Nothing here throws. A row whose voucher has since been part-paid simply has its
-        allocation trimmed to what is now owed and the trim is reported, because refusing the
-        save would leave the accountant looking at stale figures with no way to refresh them —
-        which is exactly the trap this replaces.
+        A row counts as the accountant's when its allocation differs from the figure this
+        document wrote last time. Those are left exactly as typed; every other row is ours to
+        fill, so `payment_amount` still spreads down the advice on its own. Without that
+        distinction the leftover simply flowed back into the row somebody had just reduced.
+
+        Nothing here throws. A row whose voucher has since been part-paid has its allocation
+        trimmed to what is now owed, and `payment_amount` is reconciled to whatever ended up
+        allocated, because refusing the save would leave the accountant looking at stale
+        figures with no way to refresh them.
         """
         self._allocation_trims = []
+        stored = getattr(self, "_allocation_before", {}) or {}
 
-        # never let a row carry more than the voucher is owed
+        deliberate = []
+        automatic = []
         for row in self.payment_advice_reference:
             payable = flt(row.net_payable_amount)
             allocated = flt(row.allocated_amount)
-            if payable <= 0 and allocated:
-                self._allocation_trims.append(
-                    {"idx": row.idx, "reference": row.reference_record,
-                     "was": flt(allocated, 3), "now": 0.0}
-                )
-                row.allocated_amount = 0.0
-            elif allocated > payable:
+
+            if allocated < 0:
+                allocated = 0.0
+            if allocated > payable:
                 self._allocation_trims.append(
                     {"idx": row.idx, "reference": row.reference_record,
                      "was": flt(allocated, 3), "now": flt(payable, 3)}
                 )
-                row.allocated_amount = flt(payable, 3)
-            elif allocated < 0:
-                row.allocated_amount = 0.0
+                allocated = flt(payable, 3)
+            row.allocated_amount = flt(allocated, 3)
+
+            was_ours = row.name in stored and abs(stored[row.name] - flt(row.allocated_amount)) < 0.0005
+            untouched_new = row.name not in stored
+            (automatic if (was_ours or untouched_new) else deliberate).append(row)
 
         budget = flt(self.payment_amount)
-        claimed = flt(sum(flt(r.allocated_amount) for r in self.payment_advice_reference), 3)
+        held = flt(sum(flt(r.allocated_amount) for r in deliberate), 3)
 
-        if claimed > budget:
-            # trim from the bottom so the earliest rows keep what they were given
-            excess = flt(claimed - budget, 3)
-            for row in reversed(self.payment_advice_reference):
+        if held > budget:
+            # the accountant asked for more than the advice authorises: trim their rows from
+            # the bottom, leaving the earliest choices intact
+            excess = flt(held - budget, 3)
+            for row in reversed(deliberate):
                 if excess <= 0:
                     break
                 take = min(flt(row.allocated_amount), excess)
-                if take:
-                    row.allocated_amount = flt(flt(row.allocated_amount) - take, 3)
-                    excess = flt(excess - take, 3)
-            return
+                row.allocated_amount = flt(flt(row.allocated_amount) - take, 3)
+                excess = flt(excess - take, 3)
+            held = flt(sum(flt(r.allocated_amount) for r in deliberate), 3)
 
-        # money left over spreads across the rows that still have room
-        balance = flt(budget - claimed, 3)
-        for row in self.payment_advice_reference:
-            if balance <= 0:
-                break
-            room = flt(flt(row.net_payable_amount) - flt(row.allocated_amount), 3)
-            if room <= 0:
+        balance = flt(budget - held, 3)
+        for row in automatic:
+            payable = flt(row.net_payable_amount)
+            if balance <= 0 or payable <= 0:
+                row.allocated_amount = 0.0
                 continue
-            take = room if room <= balance else balance
-            row.allocated_amount = flt(flt(row.allocated_amount) + take, 3)
+            take = payable if payable <= balance else balance
+            row.allocated_amount = flt(take, 3)
             balance = flt(balance - take, 3)
+
+        # the advice pays what it allocated, no more
+        allocated_total = flt(sum(flt(r.allocated_amount) for r in self.payment_advice_reference), 3)
+        if allocated_total < flt(self.payment_amount) - 0.0005:
+            self._payment_amount_trim = {
+                "was": flt(self.payment_amount, 3),
+                "now": allocated_total,
+            }
+            self.payment_amount = allocated_total
 
     def set_words(self):
         company_currency = get_company_currency(self.company)
