@@ -95,10 +95,10 @@ class PaymentAdvice(Document):
         self.set_party_name()
         self.set_reference_details()
         self.compute_totals()
-        self.report_payable_changes()
         self.validate_transaction_reference()
         self.validate_payment_amount()
         self.allocate_payment()
+        self.report_payable_changes()
         self.set_words()
         self.set_approval_route()
         self.set_status()
@@ -443,60 +443,23 @@ class PaymentAdvice(Document):
             )
 
     def report_payable_changes(self):
-        """Tell the user which reference moved since the advice was last saved.
+        """One notice covering everything that moved, named row by row.
 
-        The rows are refreshed from the live vouchers on every save, so an advice raised days
-        ago can quietly change the moment somebody part-pays one of its invoices. Without this
-        the only symptom is an over-allocation error quoting two totals, and on an advice with
-        a dozen references there is nothing to say which one shifted.
+        Three things can shift under an advice between saves: a reference gets part-paid, a
+        row allocation no longer fits what is owed, and the payment amount no longer fits the
+        total. Reporting them separately made the accountant hunt; they are one list here.
         """
-        if self.docstatus != 0 or not getattr(self, "_payable_changes", None):
+        if self.docstatus != 0:
             return
 
-        lines = "".join(
-            _("<li>Row #%(idx)s %(ref)s: payable was %(was)s, now %(now)s</li>")
-            % {
-                "idx": change["idx"],
-                "ref": frappe.bold(change["reference"]),
-                "was": frappe.utils.fmt_money(change["was"]),
-                "now": frappe.utils.fmt_money(change["now"]),
-            }
-            for change in self._payable_changes
-        )
-        frappe.msgprint(
-            _("These references have been settled further since this advice was last saved:")
-            + "<ul>" + lines + "</ul>",
-            title=_("References Updated"),
-            indicator="orange",
-        )
+        sections = []
 
-    def payable_breakdown(self):
-        """Row-by-row payable, for an error that has to point somewhere."""
-        return "".join(
-            _("<li>Row #%(idx)s %(ref)s: %(payable)s</li>")
-            % {
-                "idx": row.idx,
-                "ref": frappe.bold(row.reference_record),
-                "payable": frappe.utils.fmt_money(flt(row.net_payable_amount)),
-            }
-            for row in self.payment_advice_reference
-            if row.reference_record
-        )
-
-    def validate_payment_amount(self):
-        if flt(self.payment_amount) <= 0:
-            frappe.throw(_("Payment Amount must be greater than zero."))
-
-        if flt(self.payment_amount) > flt(self.amount_to_be_settled):
-            message = _(
-                "Payment Amount %(paid)s exceeds the total payable of %(payable)s across the references."
-            ) % {
-                "paid": frappe.bold(frappe.utils.fmt_money(flt(self.payment_amount))),
-                "payable": frappe.bold(frappe.utils.fmt_money(flt(self.amount_to_be_settled))),
-            }
-            if getattr(self, "_payable_changes", None):
-                changed = "".join(
-                    _("<li>Row #%(idx)s %(ref)s: was %(was)s, now %(now)s</li>")
+        if getattr(self, "_payable_changes", None):
+            sections.append(
+                _("Settled further since this advice was last saved:")
+                + "<ul>"
+                + "".join(
+                    _("<li>Row #%(idx)s %(ref)s: payable was %(was)s, now %(now)s</li>")
                     % {
                         "idx": c["idx"],
                         "ref": frappe.bold(c["reference"]),
@@ -505,26 +468,124 @@ class PaymentAdvice(Document):
                     }
                     for c in self._payable_changes
                 )
-                message += "<br>" + _("Settled further since this advice was last saved:")
-                message += "<ul>" + changed + "</ul>"
-            message += _("Payable now stands at:") + "<ul>" + self.payable_breakdown() + "</ul>"
-            frappe.throw(message, title=_("Payment Amount Too High"))
+                + "</ul>"
+            )
+
+        if getattr(self, "_allocation_trims", None):
+            sections.append(
+                _("Allocations trimmed to what the voucher still owes:")
+                + "<ul>"
+                + "".join(
+                    _("<li>Row #%(idx)s %(ref)s: allocated %(was)s, now %(now)s</li>")
+                    % {
+                        "idx": t["idx"],
+                        "ref": frappe.bold(t["reference"]),
+                        "was": frappe.utils.fmt_money(t["was"]),
+                        "now": frappe.utils.fmt_money(t["now"]),
+                    }
+                    for t in self._allocation_trims
+                )
+                + "</ul>"
+            )
+
+        trim = getattr(self, "_payment_amount_trim", None)
+        if trim:
+            sections.append(
+                _("Payment Amount reduced from %(was)s to %(now)s, the total now payable.")
+                % {
+                    "was": frappe.bold(frappe.utils.fmt_money(trim["was"])),
+                    "now": frappe.bold(frappe.utils.fmt_money(trim["now"])),
+                }
+            )
+
+        if not sections:
+            return
+
+        frappe.msgprint(
+            "".join(sections)
+            + _("Change the Payment Amount or any row allocation and save again if this is not what you want."),
+            title=_("References Updated"),
+            indicator="orange",
+        )
+
+    def validate_payment_amount(self):
+        """Only a nonsensical amount is refused; anything too high is trimmed to what is owed.
+
+        Refusing an over-payable amount used to block the save, and because the references are
+        refreshed during that same save the accountant never got to see the corrected figures —
+        they were told a number was wrong without being shown the right one. Trimming only ever
+        reduces a payment, so it cannot cause an overpayment, and every trim is reported.
+        """
+        self._payment_amount_trim = None
+
+        if flt(self.payment_amount) <= 0:
+            frappe.throw(_("Payment Amount must be greater than zero."))
+
+        payable = flt(self.amount_to_be_settled)
+        if flt(self.payment_amount) > payable:
+            self._payment_amount_trim = {"was": flt(self.payment_amount, 3), "now": flt(payable, 3)}
+            self.payment_amount = flt(payable, 3)
 
     def allocate_payment(self):
-        """Spread `payment_amount` across the references in row order.
+        """Honour what the accountant allocated, spread the rest, never exceed the payable.
 
-        Rows beyond the authorised amount get 0 and simply are not paid this time — they stay
-        on the advice so it still shows the full picture. The Payment Entry builder skips them.
+        This follows Payment Entry: the row allocation is the accountant's to set, and no row
+        may take more than it is owed. Typing into a row makes that figure stick; whatever is
+        left of `payment_amount` spreads over the remaining rows in order, so clearing the
+        column still gives the old automatic behaviour.
+
+        Nothing here throws. A row whose voucher has since been part-paid simply has its
+        allocation trimmed to what is now owed and the trim is reported, because refusing the
+        save would leave the accountant looking at stale figures with no way to refresh them —
+        which is exactly the trap this replaces.
         """
-        balance = flt(self.payment_amount)
+        self._allocation_trims = []
+
+        # never let a row carry more than the voucher is owed
         for row in self.payment_advice_reference:
             payable = flt(row.net_payable_amount)
-            if balance <= 0 or payable <= 0:
+            allocated = flt(row.allocated_amount)
+            if payable <= 0 and allocated:
+                self._allocation_trims.append(
+                    {"idx": row.idx, "reference": row.reference_record,
+                     "was": flt(allocated, 3), "now": 0.0}
+                )
                 row.allocated_amount = 0.0
+            elif allocated > payable:
+                self._allocation_trims.append(
+                    {"idx": row.idx, "reference": row.reference_record,
+                     "was": flt(allocated, 3), "now": flt(payable, 3)}
+                )
+                row.allocated_amount = flt(payable, 3)
+            elif allocated < 0:
+                row.allocated_amount = 0.0
+
+        budget = flt(self.payment_amount)
+        claimed = flt(sum(flt(r.allocated_amount) for r in self.payment_advice_reference), 3)
+
+        if claimed > budget:
+            # trim from the bottom so the earliest rows keep what they were given
+            excess = flt(claimed - budget, 3)
+            for row in reversed(self.payment_advice_reference):
+                if excess <= 0:
+                    break
+                take = min(flt(row.allocated_amount), excess)
+                if take:
+                    row.allocated_amount = flt(flt(row.allocated_amount) - take, 3)
+                    excess = flt(excess - take, 3)
+            return
+
+        # money left over spreads across the rows that still have room
+        balance = flt(budget - claimed, 3)
+        for row in self.payment_advice_reference:
+            if balance <= 0:
+                break
+            room = flt(flt(row.net_payable_amount) - flt(row.allocated_amount), 3)
+            if room <= 0:
                 continue
-            allocated = payable if payable <= balance else balance
-            row.allocated_amount = flt(allocated, 3)
-            balance = flt(balance - allocated, 3)
+            take = room if room <= balance else balance
+            row.allocated_amount = flt(flt(row.allocated_amount) + take, 3)
+            balance = flt(balance - take, 3)
 
     def set_words(self):
         company_currency = get_company_currency(self.company)

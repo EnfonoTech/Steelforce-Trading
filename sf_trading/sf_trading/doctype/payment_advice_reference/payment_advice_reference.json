@@ -119,13 +119,13 @@
   },
   {
    "columns": 1,
-   "description": "Portion of this advice's payment amount allocated to this reference.",
+   "description": "What this voucher gets from the payment. Leave the column alone and the Payment Amount spreads down the rows; type a figure and it sticks, with the remainder spreading over the rest. A row can never take more than it is owed.",
    "fieldname": "allocated_amount",
    "fieldtype": "Currency",
    "in_list_view": 1,
-   "label": "Allocated Amount",
+   "label": "Allocated",
    "options": "currency",
-   "read_only": 1
+   "read_only": 0
   },
   {
    "fieldname": "cost_center",
