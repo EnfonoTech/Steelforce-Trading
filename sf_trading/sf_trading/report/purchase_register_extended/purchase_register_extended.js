@@ -97,6 +97,27 @@ frappe.query_reports["Purchase Register Extended"] = {
 
 	formatter: function (value, row, column, data, default_formatter) {
 		value = default_formatter(value, row, column, data);
+
+		// Rendered as links by hand rather than declared as a Link column. A query
+		// report refuses to render a Link whose doctype the reader cannot read, and
+		// on this site only Stock Manager holds read on Landed Cost Voucher — every
+		// accounts and purchase role that runs this report would have lost the whole
+		// report the day a voucher was raised, the same way the UOM column broke it.
+		// An anchor navigates for those who may open it and simply 404s for those who
+		// may not, instead of taking the report down for everyone.
+		if (column.fieldname === "landed_cost_voucher" && data && data.landed_cost_voucher) {
+			const escape = frappe.utils.escape_html || ((text) => text);
+			value = String(data.landed_cost_voucher)
+				.split(",")
+				.map((name) => name.trim())
+				.filter(Boolean)
+				.map(
+					(name) =>
+						`<a href="/app/landed-cost-voucher/${encodeURIComponent(name)}">${escape(name)}</a>`
+				)
+				.join(", ");
+			return value;
+		}
 		// the receipt lines are the ones core never showed - mark them so the
 		// reader can see at a glance what this report adds
 		if (data && data.voucher_type === "Purchase Receipt") {

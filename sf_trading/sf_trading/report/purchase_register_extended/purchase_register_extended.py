@@ -732,6 +732,10 @@ def get_columns():
 		currency_column(_("Tax Amount"), "tax_amount", 110),
 		currency_column(_("Total"), "total_amount"),
 		{
+			# Data, not Link, on purpose — the report .js turns it into a clickable
+			# anchor. A Link column would refuse to render for any reader without read
+			# permission on Landed Cost Voucher, which on this site is everyone except
+			# Stock Manager, and would take the whole report down with it.
 			"label": _("Landed Cost Voucher"),
 			"fieldname": "landed_cost_voucher",
 			"fieldtype": "Data",
