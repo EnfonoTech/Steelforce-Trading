@@ -58,11 +58,14 @@ debit note covers. Receipt lines therefore do NOT net returns away, because a
 return against an already fully billed receipt would be netted against nothing
 and vanish — and on this data some returns name no receipt at all.
 
-Landed Cost Voucher charges are shown per document wherever any were applied.
-They are the charges recorded on the document as a whole, not a share of the
-unbilled remainder, and they sit in their own column rather than inside the
-purchase value, because a Landed Cost Voucher posts to stock valuation and not
-to the supplier bill.
+Landed Cost Voucher charges follow the goods. A voucher is raised against a
+Purchase Receipt, but that receipt leaves this report once it is billed, so the
+charge is carried onto the invoice that billed it and split proportionally when
+a receipt is only part billed — the invoice takes the share it billed, the
+receipt keeps the share it still holds, and the two add back to the voucher.
+The charges sit in their own column rather than inside the purchase value,
+because a Landed Cost Voucher posts to stock valuation and not to the supplier
+bill.
 
 HOW THE INVOICE HALF RELATES TO CORE'S PURCHASE REGISTER
 ---------------------------------------------------------
@@ -119,7 +122,7 @@ def execute(filters=None):
 		rows += get_receipt_rows(filters)
 		rows += get_return_rows(filters)
 
-	attach_landed_cost(rows)
+	attach_landed_cost(rows, filters)
 	rows.sort(key=lambda row: (getdate(row["posting_date"]), row["voucher_no"]))
 
 	return get_columns(), rows
@@ -557,15 +560,27 @@ def set_supplier_groups(rows):
 # ---------------------------------------------------------------------------
 
 
-def attach_landed_cost(rows):
-	"""Charges a Landed Cost Voucher applied to each document on the report."""
+def attach_landed_cost(rows, filters):
+	"""Landed cost against each line, following the charge to whoever carries the goods.
+
+	A Landed Cost Voucher is raised against a Purchase Receipt, but the receipt
+	drops off this report the moment it is billed — so matching the charge to
+	the document it names would show it only while the goods were unbilled, and
+	never afterwards. The charge belongs with the goods, so it follows them onto
+	the invoice that billed them.
+
+	Split proportionally, which is what stops a partly billed receipt paying
+	twice: the invoice takes the share it billed, the receipt line keeps the
+	share still unbilled, and the two add up to the voucher. A claimant outside
+	the report period simply takes its share away with it, so each period shows
+	the part of the charge that sits on its own rows.
+	"""
 	for row in rows:
 		row["landed_cost_voucher"] = ""
 		row["landed_cost_amount"] = 0.0
 		row["total_with_landed_cost"] = flt(row["total_amount"])
 
-	names = [row["voucher_no"] for row in rows]
-	if not names:
+	if not rows:
 		return
 
 	charge = frappe.qb.DocType("Landed Cost Item")
@@ -580,8 +595,10 @@ def attach_landed_cost(rows):
 			charge.receipt_document.as_("voucher_no"),
 			charge.applicable_charges,
 		)
-		.where((voucher.docstatus == 1) & (charge.receipt_document.isin(names)))
+		.where(voucher.docstatus == 1)
 	).run(as_dict=True)
+	if not records:
+		return
 
 	applied = {}
 	for record in records:
@@ -591,13 +608,79 @@ def attach_landed_cost(rows):
 		if record.voucher not in entry["vouchers"]:
 			entry["vouchers"].append(record.voucher)
 
+	index = {(row["voucher_type"], row["voucher_no"]): row for row in rows}
+	as_on = getdate(filters.to_date)
+
+	for (target_type, target_no), entry in applied.items():
+		if target_type == "Purchase Receipt":
+			shares = receipt_claim_shares(target_no, as_on)
+		else:
+			# raised straight against an invoice that updates stock
+			shares = {(target_type, target_no): 1.0}
+
+		for key, share in shares.items():
+			row = index.get(key)
+			if not row or share <= 0:
+				continue
+			amount = flt(entry["charges"] * share, 2)
+			if not amount:
+				continue
+			row["landed_cost_amount"] = flt(row["landed_cost_amount"] + amount, 2)
+			names = [n for n in entry["vouchers"] if n not in (row["landed_cost_voucher"] or "")]
+			row["landed_cost_voucher"] = ", ".join(
+				sorted(filter(None, [row["landed_cost_voucher"]] + names))
+			)
+
 	for row in rows:
-		entry = applied.get((row["voucher_type"], row["voucher_no"]))
-		if not entry:
+		row["total_with_landed_cost"] = flt(row["total_amount"] + row["landed_cost_amount"], 2)
+
+
+def receipt_claim_shares(receipt, as_on):
+	"""How a receipt's landed cost divides between its invoices and its remainder.
+
+	Shares are by value, the same basis a Landed Cost Voucher distributes on,
+	and they sum to one across every claimant.
+	"""
+	lines = frappe.get_all(
+		"Purchase Receipt Item",
+		filters={"parent": receipt},
+		fields=["name", "qty", "base_net_amount"],
+	)
+	total = sum(flt(line.base_net_amount) for line in lines)
+	if not total:
+		return {}
+
+	billed_value = {}
+	for line in lines:
+		if not flt(line.qty):
 			continue
-		row["landed_cost_voucher"] = ", ".join(sorted(entry["vouchers"]))
-		row["landed_cost_amount"] = flt(entry["charges"], 2)
-		row["total_with_landed_cost"] = flt(row["total_amount"] + entry["charges"], 2)
+		invoice = frappe.qb.DocType("Purchase Invoice")
+		item = frappe.qb.DocType("Purchase Invoice Item")
+		for record in (
+			frappe.qb.from_(item)
+			.join(invoice)
+			.on(invoice.name == item.parent)
+			.select(item.parent.as_("invoice"), item.qty)
+			.where(
+				(invoice.docstatus == 1)
+				& (invoice.posting_date <= as_on)
+				& (item.pr_detail == line.name)
+			)
+		).run(as_dict=True):
+			portion = flt(line.base_net_amount) * flt(record.qty) / flt(line.qty)
+			billed_value[record.invoice] = billed_value.get(record.invoice, 0.0) + portion
+
+	shares = {
+		("Purchase Invoice", invoice): value / total
+		for invoice, value in billed_value.items()
+		if value
+	}
+
+	unbilled = total - sum(billed_value.values())
+	if unbilled > 0.005:
+		shares[("Purchase Receipt", receipt)] = unbilled / total
+
+	return shares
 
 
 # ---------------------------------------------------------------------------
