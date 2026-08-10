@@ -95,6 +95,7 @@ class PaymentAdvice(Document):
         self.set_party_name()
         self.set_reference_details()
         self.compute_totals()
+        self.report_payable_changes()
         self.validate_transaction_reference()
         self.validate_payment_amount()
         self.allocate_payment()
@@ -323,6 +324,15 @@ class PaymentAdvice(Document):
 
     def set_reference_details(self):
         """Fill each row from its source document. Ageing is measured from the due date."""
+        # what the rows said when this advice was last saved, so a shift can be reported
+        before = self.get_doc_before_save()
+        self._payable_before = (
+            {r.name: flt(r.net_payable_amount) for r in before.payment_advice_reference}
+            if before
+            else {}
+        )
+        self._payable_changes = []
+
         today = getdate(nowdate())
         company_currency = get_company_currency(self.company)
 
@@ -357,6 +367,18 @@ class PaymentAdvice(Document):
                 row.cost_center = source("cost_center")
 
             # payable figure comes from the same helper, so orders net off advance_paid
+            previous = self._payable_before.get(row.name)
+            if previous is not None and abs(flt(previous) - flt(payable)) > 0.0005:
+                # the voucher moved since this advice was last saved — say so by row, because
+                # an advice with a dozen references gives no clue which one shifted
+                self._payable_changes.append(
+                    {
+                        "idx": row.idx,
+                        "reference": row.reference_record,
+                        "was": flt(previous, 3),
+                        "now": flt(payable, 3),
+                    }
+                )
             row.net_payable_amount = payable
             row.settled_amount = flt(flt(row.amount) - payable, 3)
 
@@ -420,18 +442,73 @@ class PaymentAdvice(Document):
                 % frappe.bold(company_account)
             )
 
+    def report_payable_changes(self):
+        """Tell the user which reference moved since the advice was last saved.
+
+        The rows are refreshed from the live vouchers on every save, so an advice raised days
+        ago can quietly change the moment somebody part-pays one of its invoices. Without this
+        the only symptom is an over-allocation error quoting two totals, and on an advice with
+        a dozen references there is nothing to say which one shifted.
+        """
+        if self.docstatus != 0 or not getattr(self, "_payable_changes", None):
+            return
+
+        lines = "".join(
+            _("<li>Row #%(idx)s %(ref)s: payable was %(was)s, now %(now)s</li>")
+            % {
+                "idx": change["idx"],
+                "ref": frappe.bold(change["reference"]),
+                "was": frappe.utils.fmt_money(change["was"]),
+                "now": frappe.utils.fmt_money(change["now"]),
+            }
+            for change in self._payable_changes
+        )
+        frappe.msgprint(
+            _("These references have been settled further since this advice was last saved:")
+            + "<ul>" + lines + "</ul>",
+            title=_("References Updated"),
+            indicator="orange",
+        )
+
+    def payable_breakdown(self):
+        """Row-by-row payable, for an error that has to point somewhere."""
+        return "".join(
+            _("<li>Row #%(idx)s %(ref)s: %(payable)s</li>")
+            % {
+                "idx": row.idx,
+                "ref": frappe.bold(row.reference_record),
+                "payable": frappe.utils.fmt_money(flt(row.net_payable_amount)),
+            }
+            for row in self.payment_advice_reference
+            if row.reference_record
+        )
+
     def validate_payment_amount(self):
         if flt(self.payment_amount) <= 0:
             frappe.throw(_("Payment Amount must be greater than zero."))
 
         if flt(self.payment_amount) > flt(self.amount_to_be_settled):
-            frappe.throw(
-                _("Payment Amount %(paid)s exceeds the total payable of %(payable)s across the references.")
-                % {
-                    "paid": frappe.bold(frappe.utils.fmt_money(flt(self.payment_amount))),
-                    "payable": frappe.bold(frappe.utils.fmt_money(flt(self.amount_to_be_settled))),
-                }
-            )
+            message = _(
+                "Payment Amount %(paid)s exceeds the total payable of %(payable)s across the references."
+            ) % {
+                "paid": frappe.bold(frappe.utils.fmt_money(flt(self.payment_amount))),
+                "payable": frappe.bold(frappe.utils.fmt_money(flt(self.amount_to_be_settled))),
+            }
+            if getattr(self, "_payable_changes", None):
+                changed = "".join(
+                    _("<li>Row #%(idx)s %(ref)s: was %(was)s, now %(now)s</li>")
+                    % {
+                        "idx": c["idx"],
+                        "ref": frappe.bold(c["reference"]),
+                        "was": frappe.utils.fmt_money(c["was"]),
+                        "now": frappe.utils.fmt_money(c["now"]),
+                    }
+                    for c in self._payable_changes
+                )
+                message += "<br>" + _("Settled further since this advice was last saved:")
+                message += "<ul>" + changed + "</ul>"
+            message += _("Payable now stands at:") + "<ul>" + self.payable_breakdown() + "</ul>"
+            frappe.throw(message, title=_("Payment Amount Too High"))
 
     def allocate_payment(self):
         """Spread `payment_amount` across the references in row order.

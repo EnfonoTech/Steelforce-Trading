@@ -538,3 +538,48 @@ class TestCreateAdvicesFromDocuments(FrappeTestCase):
             {"reference_doctype": "Purchase Order", "reference_record": "PO-2"},
         ]
         self.assertEqual(self._route(rows, 10), "Purchase Manager")
+
+
+class TestPaymentAdviceStaleReferences(FrappeTestCase):
+	"""A reference settled after the advice was raised must be caught, and named."""
+
+	def test_refresh_names_the_row_that_moved(self):
+		from sf_trading.sf_trading.doctype.payment_advice.payment_advice import PaymentAdvice
+
+		advice = frappe.get_doc({"doctype": "Payment Advice"})
+		advice.docstatus = 0
+		advice._payable_changes = [
+			{"idx": 3, "reference": "PINV-0009", "was": 656.691, "now": 653.890}
+		]
+		messages = []
+		original = frappe.msgprint
+		frappe.msgprint = lambda msg, **kwargs: messages.append(msg)
+		try:
+			PaymentAdvice.report_payable_changes(advice)
+		finally:
+			frappe.msgprint = original
+
+		self.assertTrue(messages, "a moved reference must be announced")
+		body = messages[0]
+		self.assertIn("Row #3", body)
+		self.assertIn("PINV-0009", body)
+
+	def test_over_allocation_error_points_at_the_row(self):
+		from sf_trading.sf_trading.doctype.payment_advice.payment_advice import PaymentAdvice
+
+		advice = frappe.get_doc({"doctype": "Payment Advice"})
+		advice.payment_amount = 656.691
+		advice.amount_to_be_settled = 653.890
+		advice._payable_changes = [
+			{"idx": 2, "reference": "PINV-0042", "was": 656.691, "now": 653.890}
+		]
+		advice.append("payment_advice_reference",
+			{"reference_doctype": "Purchase Invoice", "reference_record": "PINV-0042",
+			 "net_payable_amount": 653.890})
+
+		with self.assertRaises(frappe.ValidationError) as caught:
+			PaymentAdvice.validate_payment_amount(advice)
+		text = frappe.utils.strip_html(str(caught.exception))
+		# the reader must be able to see WHICH reference moved, not just two totals
+		self.assertIn("Row #2", text)
+		self.assertIn("PINV-0042", text)
