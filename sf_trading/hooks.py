@@ -142,6 +142,8 @@ after_migrate = [
 	# per-company switch arming the Period Closing open item gate; runs after the
 	# stock billing setup because it anchors below the field that one creates
 	"sf_trading.period_closing.ensure_custom_fields",
+	# header expense account for a Material Issue
+	"sf_trading.stock_entry_expense.ensure_custom_fields",
 ]
 
 # Uninstallation
@@ -219,6 +221,11 @@ _SDBNB_DN_HOOK = "sf_trading.sdbnb.set_delivery_note_expense_account"
 _SBND_DN_HOOK = "sf_trading.sbnd.set_delivery_note_expense_account"
 
 doc_events = {
+	"Stock Entry": {
+		# before_validate, so the header account faces ERPNext's own account checks
+		# rather than being written past them
+		"before_validate": "sf_trading.stock_entry_expense.apply_expense_account",
+	},
 	"Period Closing Voucher": {
 		# a period must not close while it still carries unbilled / undelivered items
 		"before_submit": "sf_trading.period_closing.validate_open_items",
