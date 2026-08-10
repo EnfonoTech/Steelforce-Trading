@@ -696,3 +696,70 @@ class TestOpenItems(FrappeTestCase):
 		finally:
 			frappe.db.set_value("Item", self.item_code, "disabled", 0)
 			frappe.clear_cache(doctype="Item")
+
+	def make_landed_cost(self, receipt, amount):
+		lcv = frappe.get_doc(
+			{
+				"doctype": "Landed Cost Voucher",
+				"company": COMPANY,
+				"distribute_charges_based_on": "Amount",
+				"purchase_receipts": [
+					{
+						"receipt_document_type": "Purchase Receipt",
+						"receipt_document": receipt.name,
+						"supplier": receipt.supplier,
+						"grand_total": receipt.grand_total,
+					}
+				],
+				"taxes": [
+					{
+						"expense_account": frappe.db.get_value(
+							"Company", COMPANY, "default_expense_account"
+						),
+						"description": "Freight",
+						"amount": amount,
+					}
+				],
+			}
+		)
+		lcv.get_items_from_purchase_receipts()
+		lcv.insert()
+		lcv.submit()
+		return lcv
+
+	def test_landed_cost_follows_the_goods_onto_the_invoice(self):
+		pr = self.make_pr(qty=5, rate=100)
+		lcv = self.make_landed_cost(pr, 250)
+
+		# unbilled: the receipt carries the whole charge
+		receipt_row = self.register_row(self.run_register(), pr.name)
+		self.assertAlmostEqual(receipt_row["landed_cost_amount"], 250, places=2)
+		self.assertIn(lcv.name, receipt_row["landed_cost_voucher"])
+
+		# billed in full: the receipt is gone and the invoice carries it instead
+		pi = self.make_pi_from_pr(pr)
+		rows = self.run_register()
+		self.assertIsNone(self.register_row(rows, pr.name))
+		invoice_row = self.register_row(rows, pi.name)
+		self.assertIsNotNone(invoice_row)
+		self.assertAlmostEqual(invoice_row["landed_cost_amount"], 250, places=2)
+		self.assertAlmostEqual(
+			invoice_row["total_with_landed_cost"],
+			invoice_row["total_amount"] + 250,
+			places=2,
+		)
+
+	def test_landed_cost_splits_across_a_part_billed_receipt(self):
+		pr = self.make_pr(qty=10, rate=10)
+		lcv = self.make_landed_cost(pr, 200)
+		self.make_pi_from_pr(pr, qty=4)              # 40 per cent billed
+
+		rows = self.run_register()
+		allocated = sum(
+			row["landed_cost_amount"]
+			for row in rows
+			if lcv.name in (row["landed_cost_voucher"] or "")
+		)
+		# the halves add back to the voucher: neither side is charged twice
+		self.assertAlmostEqual(allocated, 200, places=1)
+		self.assertAlmostEqual(self.register_row(rows, pr.name)["landed_cost_amount"], 120, places=1)
