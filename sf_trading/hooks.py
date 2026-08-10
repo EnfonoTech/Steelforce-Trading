@@ -359,8 +359,19 @@ override_whitelisted_methods = {
 # each overriding function accepts a `data` argument;
 # generated from the base implementation of the doctype dashboard,
 # along with any modifications made in other Frappe apps
+# Every doctype a Payment Advice may be raised against gets the advice in its Connections,
+# so "has this been sent for payment?" is answerable from the voucher itself. The list
+# mirrors VALID_REFERENCE_DOCTYPES in the Payment Advice controller.
+_ADVICE_DASHBOARD = "sf_trading.api.payment_advice_dashboard.get_dashboard_data"
+
 override_doctype_dashboards = {
-	"Quotation": ["sf_trading.api.quotation.get_dashboard_data"]
+	"Quotation": ["sf_trading.api.quotation.get_dashboard_data"],
+	"Sales Order": [_ADVICE_DASHBOARD],
+	"Sales Invoice": [_ADVICE_DASHBOARD],
+	"Purchase Order": [_ADVICE_DASHBOARD],
+	"Purchase Invoice": [_ADVICE_DASHBOARD],
+	"Journal Entry": [_ADVICE_DASHBOARD],
+	"Dunning": [_ADVICE_DASHBOARD],
 }
 
 # exempt linked doctypes from being automatically cancelled
