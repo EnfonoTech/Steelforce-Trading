@@ -23,6 +23,10 @@
 				price_list: row.custom_price_list || frm.doc.selling_price_list || "",
 				conversion_rate: frm.doc.conversion_rate || 1,
 				uom_cf: row.conversion_factor || 1,
+				// Item Price is held in the price list's own currency; without this the
+				// warning would compare a foreign number against the row rate and label
+				// it with the transaction currency.
+				plc_conversion_rate: frm.doc.plc_conversion_rate || 1,
 			},
 			callback: function (r) {
 				if (!r.message) return;

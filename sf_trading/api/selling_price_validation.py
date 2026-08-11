@@ -18,19 +18,31 @@ def _get_margin_pct(item_code):
 
 @frappe.whitelist()
 def get_min_selling_price(item_code, warehouse=None, price_list=None,
-                           conversion_rate=1.0, uom_cf=1.0):
+                           conversion_rate=1.0, uom_cf=1.0, plc_conversion_rate=1.0):
 	"""
 	Return the minimum allowed selling rate for an item in *transaction* currency.
 	Used for real-time client-side validation (rate field onchange).
 
 	minimum = max(
-	    price_list_rate                               [if price list set]
+	    price_list_rate × plc_conversion_rate         [if the price list enforces]
 	    last_purchase_rate × uom_cf × (1 + margin%)  [always]
 	    bin.valuation_rate × uom_cf × (1 + margin%)  [stock items with warehouse]
 	) all converted to transaction currency via conversion_rate.
+
+	Currencies, because three different ones meet here:
+	  * `last_purchase_rate` (Item) and `valuation_rate` (Bin) are COMPANY currency
+	    per stock UOM — see erpnext/buying/utils.py, which stores base_net_rate.
+	  * `price_list_rate` (Item Price) is the PRICE LIST's currency, which need not
+	    be the company's or the transaction's.
+	  * `rate` on the row, which this figure is compared against, is TRANSACTION
+	    currency.
+	So company-currency inputs are divided by `conversion_rate`, and the price list
+	is first taken to company currency by `plc_conversion_rate` — the same rate the
+	save-time validator uses — before the same division.
 	"""
 	conversion_rate = flt(conversion_rate) or 1.0
 	uom_cf = flt(uom_cf) or 1.0
+	plc_conversion_rate = flt(plc_conversion_rate) or 1.0
 
 	# When the price list has "Enforce Minimum Selling Price" ticked, it REPLACES the
 	# cost checks — only validate that the rate is >= the price list rate.
@@ -40,7 +52,9 @@ def get_min_selling_price(item_code, warehouse=None, price_list=None,
 			{"item_code": item_code, "price_list": price_list, "selling": 1},
 			"price_list_rate",
 		))
-		return {"min_price": pl_rate or 0.0}
+		if not pl_rate:
+			return {"min_price": 0.0}
+		return {"min_price": pl_rate * plc_conversion_rate / conversion_rate}
 
 	# Normal cost + margin checks
 	margin_pct = _get_margin_pct(item_code)
