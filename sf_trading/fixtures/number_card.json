@@ -129,6 +129,7 @@
   "stats_time_interval": "Daily",
   "type": "Custom",
   "modified_by": "Administrator",
-  "owner": "Administrator"
+  "owner": "Administrator",
+  "currency": null
  }
 ]
