@@ -135,6 +135,54 @@ def matched_qty_map(child_doctype, parent_doctype, link_field, as_on, is_return=
 	return {row.link: flt(row.qty) for row in query.run(as_dict=True)}
 
 
+# Which User Permission narrows which column. Branch lives on the parent; cost
+# center and warehouse are read off the row, which is what these reports display.
+PERMISSION_COLUMNS = (
+	("Branch", "branch", "parent"),
+	("Cost Center", "cost_center", "child"),
+	("Warehouse", "warehouse", "child"),
+)
+
+
+def apply_user_permissions(query, parent, child, parent_doctype):
+	"""Narrow a query to the branches and warehouses the session user may see.
+
+	`frappe.qb` applies no permission filtering whatsoever — unlike
+	`frappe.get_list` — so without this a user restricted by User Permission to one
+	branch still sees every branch in these reports. The desk list views on the same
+	data are restricted, so the reports have to match or they leak.
+
+	A blank value passes, the way frappe treats an empty link field under a User
+	Permission, so a row naming no cost center is not silently dropped.
+
+	A user with no User Permissions at all — Administrator, and most head-office
+	logins — is unaffected: `get_user_permissions` returns nothing and the query is
+	handed back untouched.
+	"""
+	from frappe.permissions import get_user_permissions
+
+	permissions = get_user_permissions(frappe.session.user)
+	if not permissions:
+		return query
+
+	metas = {
+		"parent": frappe.get_meta(parent_doctype),
+		"child": frappe.get_meta(parent_doctype + " Item"),
+	}
+	tables = {"parent": parent, "child": child}
+
+	for doctype, fieldname, level in PERMISSION_COLUMNS:
+		allowed = [row.get("doc") for row in (permissions.get(doctype) or []) if row.get("doc")]
+		if not allowed:
+			continue
+		if not metas[level].get_field(fieldname):
+			continue
+		column = tables[level][fieldname]
+		query = query.where(column.isnull() | (column == "") | column.isin(allowed))
+
+	return query
+
+
 def base_rows(parent_doctype, party_field, filters, extra_conditions=None):
 	"""Submitted stock-item rows of the source document, with row-level filters.
 
@@ -179,6 +227,8 @@ def base_rows(parent_doctype, party_field, filters, extra_conditions=None):
 		.orderby(parent.posting_date)
 		.orderby(parent.name)
 	)
+
+	query = apply_user_permissions(query, parent, child, parent_doctype)
 
 	from_date, to_date = posting_range(filters)
 	if from_date:

@@ -430,6 +430,71 @@ class TestOpenItems(FrappeTestCase):
 		docs = [r.document for r in invoices_pending_delivery(self.filters())]
 		self.assertNotIn(si.name, docs)
 
+	# ------------------------------------------------------------------
+	# user permissions
+	# ------------------------------------------------------------------
+
+	def make_restricted_user(self, email, cost_center):
+		if not frappe.db.exists("User", email):
+			frappe.get_doc(
+				{
+					"doctype": "User",
+					"email": email,
+					"first_name": "Branch",
+					"send_welcome_email": 0,
+					"roles": [{"role": "Accounts User"}, {"role": "Sales User"}],
+				}
+			).insert(ignore_permissions=True)
+		if not frappe.db.exists(
+			"User Permission", {"user": email, "allow": "Cost Center", "for_value": cost_center}
+		):
+			frappe.get_doc(
+				{
+					"doctype": "User Permission",
+					"user": email,
+					"allow": "Cost Center",
+					"for_value": cost_center,
+					"apply_to_all_doctypes": 1,
+				}
+			).insert(ignore_permissions=True)
+		return email
+
+	def test_user_permission_narrows_rows_to_the_permitted_branch(self):
+		"""frappe.qb applies no permissions, so base_rows has to apply them itself."""
+		other_cc = frappe.get_doc(
+			{
+				"doctype": "Cost Center",
+				"cost_center_name": "_Test Open Items Other Branch",
+				"parent_cost_center": "All Cost Centers - " + ABBR,
+				"company": COMPANY,
+				"is_group": 0,
+			}
+		).insert(ignore_if_duplicate=True)
+
+		mine = self.make_si(qty=2)
+		theirs = self.make_si(qty=3)
+		# move the second invoice's row to a branch the user may not see
+		frappe.db.set_value("Sales Invoice Item", theirs.items[0].name, "cost_center", other_cc.name)
+
+		user = self.make_restricted_user("_test_branch_user@example.com", self.cost_center)
+		frappe.set_user(user)
+		try:
+			docs = [row.document for row in invoiced_items_to_be_delivered(self.filters())]
+			self.assertIn(mine.name, docs)
+			self.assertNotIn(theirs.name, docs)
+		finally:
+			frappe.set_user("Administrator")
+
+		# unrestricted users keep seeing everything
+		docs = [row.document for row in invoiced_items_to_be_delivered(self.filters())]
+		self.assertIn(mine.name, docs)
+		self.assertIn(theirs.name, docs)
+
+	def test_no_user_permissions_means_no_restriction(self):
+		si = self.make_si(qty=1)
+		docs = [row.document for row in invoiced_items_to_be_delivered(self.filters())]
+		self.assertIn(si.name, docs)
+
 	def test_posting_range_bounds_the_source_document(self):
 		old = self.make_pr(qty=1, posting_date=add_days(nowdate(), -40))
 		recent = self.make_pr(qty=1, posting_date=add_days(nowdate(), -5))

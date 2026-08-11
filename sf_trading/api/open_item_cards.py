@@ -17,6 +17,8 @@ from frappe import _
 
 from sf_trading.open_items import invoices_pending_delivery
 
+REPORT = "Invoices Pending Delivery"
+
 
 def _card_filters(filters):
 	"""Normalise whatever the dashboard hands us into the engine's filter dict.
@@ -53,8 +55,18 @@ def pending_delivery_invoice_count(filters=None):
 	"""
 	frappe.has_permission("Sales Invoice", "read", throw=True)
 
-	rows = invoices_pending_delivery(_card_filters(filters))
+	card_filters = _card_filters(filters)
+	rows = invoices_pending_delivery(card_filters)
 
-	# fieldtype travels with the value: the widget passes this object to
-	# frappe.format as the df, so without it the count renders as a float
-	return {"value": len(rows), "fieldtype": "Int", "label": _("Invoices Pending Delivery")}
+	return {
+		# fieldtype travels with the value: the widget passes this whole object to
+		# frappe.format as the df, so without it the count renders as a float
+		"value": len(rows),
+		"fieldtype": "Int",
+		"label": _("Invoices Pending Delivery"),
+		# a Custom card routes to whatever `route` its method returns — see
+		# set_route_for_custom_card in number_card_widget.js — so clicking the count
+		# lands on the report the count was taken from rather than doing nothing
+		"route": ["query-report", REPORT],
+		"route_options": {"company": card_filters.get("company")},
+	}
