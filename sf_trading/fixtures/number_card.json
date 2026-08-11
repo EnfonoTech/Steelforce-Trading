@@ -108,7 +108,7 @@
   "color": "#FF5858",
   "docstatus": 0,
   "doctype": "Number Card",
-  "document_type": null,
+  "document_type": "Sales Invoice",
   "dynamic_filters_json": null,
   "filters_config": null,
   "filters_json": "{\"company\": \"Steel Force Trading WLL\"}",
