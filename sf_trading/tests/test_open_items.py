@@ -15,6 +15,7 @@ from sf_trading.open_items import (
 	billed_items_pending_receipt,
 	delivered_items_pending_billing,
 	invoiced_items_to_be_delivered,
+	invoices_pending_delivery,
 	received_items_pending_billing,
 )
 from sf_trading.tests.test_sdbnb import ABBR, COMPANY, get_test_company
@@ -362,6 +363,72 @@ class TestOpenItems(FrappeTestCase):
 		self.assertEqual(
 			len(self.rows_for(report(self.filters(cost_center=self.cost_center)), si.name)), 1
 		)
+
+	# ------------------------------------------------------------------
+	# invoice-wise pending delivery
+	# ------------------------------------------------------------------
+
+	def test_pending_delivery_is_one_row_per_invoice(self):
+		si = self.make_si(qty=5)
+		rows = [r for r in invoices_pending_delivery(self.filters()) if r.document == si.name]
+		self.assertEqual(len(rows), 1)
+		self.assertEqual(rows[0].pending_qty, 5)
+		self.assertEqual(rows[0].items_pending, 1)
+
+	def test_pending_delivery_drops_a_fully_credited_invoice(self):
+		"""The bug the list view had: a fully returned invoice needs no delivery.
+
+		`is_return = 0` only excludes the credit note itself, never the invoice it
+		was raised against, so the list view kept showing these.
+		"""
+		from erpnext.controllers.sales_and_purchase_return import make_return_doc
+
+		si = self.make_si(qty=4)
+		credit = make_return_doc("Sales Invoice", si.name)
+		credit.items[0].qty = -4
+		credit.insert()
+		credit.submit()
+
+		docs = [r.document for r in invoices_pending_delivery(self.filters())]
+		self.assertNotIn(si.name, docs)
+		# and the credit note is never an open item of its own
+		self.assertNotIn(credit.name, docs)
+
+	def test_pending_delivery_keeps_the_balance_of_a_part_credited_invoice(self):
+		"""20 invoiced, 3 credited, so 17 still have to be delivered."""
+		from erpnext.controllers.sales_and_purchase_return import make_return_doc
+
+		si = self.make_si(qty=20)
+		credit = make_return_doc("Sales Invoice", si.name)
+		credit.items[0].qty = -3
+		credit.insert()
+		credit.submit()
+
+		rows = [r for r in invoices_pending_delivery(self.filters()) if r.document == si.name]
+		self.assertEqual(len(rows), 1)
+		self.assertEqual(rows[0].pending_qty, 17)
+		self.assertEqual(rows[0].returned_qty, 3)
+
+	def test_pending_delivery_totals_match_the_item_level_report(self):
+		"""The summary must never disagree with the detail it is built from."""
+		self.make_si(qty=7)
+		detail = invoiced_items_to_be_delivered(self.filters())
+		summary = invoices_pending_delivery(self.filters())
+		self.assertEqual(
+			round(sum(r.pending_qty for r in detail), 3),
+			round(sum(r.pending_qty for r in summary), 3),
+		)
+		self.assertEqual(
+			round(sum(r.pending_amount for r in detail), 2),
+			round(sum(r.pending_amount for r in summary), 2),
+		)
+		self.assertEqual(len({r.document for r in detail}), len(summary))
+
+	def test_pending_delivery_closes_once_delivered(self):
+		si = self.make_si(qty=6)
+		self.make_dn_from_si(si)
+		docs = [r.document for r in invoices_pending_delivery(self.filters())]
+		self.assertNotIn(si.name, docs)
 
 	def test_posting_range_bounds_the_source_document(self):
 		old = self.make_pr(qty=1, posting_date=add_days(nowdate(), -40))

@@ -270,6 +270,123 @@ def invoiced_items_to_be_delivered(filters):
 	return build_open_rows(rows, [delivered, credited], ["delivered_qty", "returned_qty"], filters)
 
 
+def invoices_pending_delivery(filters):
+	"""One row per Sales Invoice that still owes a delivery.
+
+	Aggregated from `invoiced_items_to_be_delivered`, deliberately, so it nets
+	returns the same way rather than re-deriving it: an invoice whose goods were
+	fully credited disappears, and a partly credited one keeps only the quantity
+	still genuinely owed. A list view cannot do this — the return links live on the
+	credit note (`return_against`), pointing back at the invoice, so nothing on the
+	invoice itself says a credit note exists, and `Sales Invoice.status` only reads
+	"Credit Note Issued" when the credit note is what took the outstanding to zero.
+	An invoice already paid before being credited still reads "Paid".
+	"""
+	rows = invoiced_items_to_be_delivered(filters)
+	if not rows:
+		return []
+
+	per_invoice = {}
+	for row in rows:
+		entry = per_invoice.get(row.document)
+		if entry is None:
+			entry = per_invoice[row.document] = frappe._dict(
+				{
+					"document": row.document,
+					"posting_date": row.posting_date,
+					"party": row.party,
+					"party_name": row.party_name,
+					"company": row.company,
+					"cost_center": row.cost_center,
+					"items_pending": 0,
+					"pending_qty": 0.0,
+					"delivered_qty": 0.0,
+					"returned_qty": 0.0,
+					"pending_amount": 0.0,
+					"age": row.age,
+					"bucket": row.bucket,
+				}
+			)
+		entry.items_pending += 1
+		entry.pending_qty += flt(row.pending_qty)
+		entry.delivered_qty += flt(row.delivered_qty)
+		entry.returned_qty += flt(row.returned_qty)
+		entry.pending_amount += flt(row.pending_amount)
+
+	# one read for every invoice on the page rather than one per row
+	heads = {
+		head.name: head
+		for head in frappe.get_all(
+			"Sales Invoice",
+			filters={"name": ["in", list(per_invoice)]},
+			fields=["name", "status", "base_grand_total"],
+		)
+	}
+
+	for name, entry in per_invoice.items():
+		head = heads.get(name) or frappe._dict()
+		entry.status = head.get("status")
+		entry.invoice_total = flt(head.get("base_grand_total"))
+		entry.pending_qty = flt(entry.pending_qty, QTY_PRECISION)
+		entry.delivered_qty = flt(entry.delivered_qty, QTY_PRECISION)
+		entry.returned_qty = flt(entry.returned_qty, QTY_PRECISION)
+		entry.pending_amount = flt(entry.pending_amount, 2)
+
+	return sorted(per_invoice.values(), key=lambda row: (getdate(row.posting_date), row.document))
+
+
+def pending_delivery_columns():
+	"""Columns for the invoice-wise pending delivery report."""
+	return [
+		{
+			"label": _("Sales Invoice"),
+			"fieldname": "document",
+			"fieldtype": "Link",
+			"options": "Sales Invoice",
+			"width": 170,
+		},
+		{"label": _("Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 95},
+		{
+			"label": _("Customer"),
+			"fieldname": "party",
+			"fieldtype": "Link",
+			"options": "Customer",
+			"width": 140,
+		},
+		{"label": _("Customer Name"), "fieldname": "party_name", "fieldtype": "Data", "width": 200},
+		{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 120},
+		{
+			# a Link, because that is what lets a User Permission on Cost Center
+			# narrow this report to a branch
+			"label": _("Branch (Cost Center)"),
+			"fieldname": "cost_center",
+			"fieldtype": "Link",
+			"options": "Cost Center",
+			"width": 130,
+		},
+		{"label": _("Items Pending"), "fieldname": "items_pending", "fieldtype": "Int", "width": 105},
+		{"label": _("Pending Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 105},
+		{"label": _("Delivered Qty"), "fieldname": "delivered_qty", "fieldtype": "Float", "width": 110},
+		{"label": _("Returned Qty"), "fieldname": "returned_qty", "fieldtype": "Float", "width": 110},
+		{
+			"label": _("Pending Amount"),
+			"fieldname": "pending_amount",
+			"fieldtype": "Currency",
+			"options": "Company:company:default_currency",
+			"width": 130,
+		},
+		{
+			"label": _("Invoice Total"),
+			"fieldname": "invoice_total",
+			"fieldtype": "Currency",
+			"options": "Company:company:default_currency",
+			"width": 120,
+		},
+		{"label": _("Age (Days)"), "fieldname": "age", "fieldtype": "Int", "width": 85},
+		{"label": _("Ageing Bucket"), "fieldname": "bucket", "fieldtype": "Data", "width": 95},
+	]
+
+
 def includes_non_stock(filters) -> bool:
 	"""Whether rows for items that are not stock items belong in the answer.
 
