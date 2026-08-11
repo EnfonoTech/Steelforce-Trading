@@ -43,6 +43,35 @@ def as_on_date(filters):
 	return getdate(filters.get("as_on") or nowdate())
 
 
+def posting_range(filters):
+	"""Optional posting-date window for the source documents, as (from, to).
+
+	`as_on` answers "was this still open on that date". This answers a different
+	question — *which* documents to ask about — so a single period can be checked
+	on its own: the July receipts that are still unbilled, rather than every
+	receipt ever raised. Both ends are inclusive, and both are optional; leaving
+	them empty reports every document, which is what the workspace number cards
+	do, so their totals are unaffected by this filter existing.
+
+	Only the source document is bounded. The matched quantities keep counting
+	every counterpart up to `as_on` no matter when the counterpart itself was
+	raised — a July receipt invoiced in August is billed, not open, and clipping
+	the invoice side to July as well would resurrect it as a false positive.
+
+	`as_on` still caps the window: a To Date after it cannot widen the answer,
+	because billing state is only known as far as `as_on`.
+	"""
+	from_date = filters.get("from_date")
+	to_date = filters.get("to_date")
+	from_date = getdate(from_date) if from_date else None
+	to_date = getdate(to_date) if to_date else None
+
+	if from_date and to_date and from_date > to_date:
+		frappe.throw(_("From Date cannot be after To Date."))
+
+	return from_date, to_date
+
+
 def ageing_ranges(filters):
 	"""Parse "30, 60, 90" into [30, 60, 90]; fall back to the default split."""
 	raw = str(filters.get("range") or "30, 60, 90")
@@ -150,6 +179,12 @@ def base_rows(parent_doctype, party_field, filters, extra_conditions=None):
 		.orderby(parent.posting_date)
 		.orderby(parent.name)
 	)
+
+	from_date, to_date = posting_range(filters)
+	if from_date:
+		query = query.where(parent.posting_date >= from_date)
+	if to_date:
+		query = query.where(parent.posting_date <= to_date)
 
 	if not includes_non_stock(filters):
 		query = query.where(item.is_stock_item == 1)

@@ -149,7 +149,7 @@ class TestOpenItems(FrappeTestCase):
 		si.submit()
 		return si
 
-	def make_pr(self, qty=6, rate=90, supplier=SUPPLIER):
+	def make_pr(self, qty=6, rate=90, supplier=SUPPLIER, posting_date=None):
 		pr = frappe.get_doc(
 			{
 				"doctype": "Purchase Receipt",
@@ -167,6 +167,9 @@ class TestOpenItems(FrappeTestCase):
 				],
 			}
 		)
+		if posting_date:
+			pr.set_posting_time = 1
+			pr.posting_date = posting_date
 		pr.insert()
 		pr.submit()
 		return pr
@@ -306,6 +309,23 @@ class TestOpenItems(FrappeTestCase):
 		rows = self.rows_for(received_items_pending_billing(self.filters()), pr.name)
 		self.assertEqual(rows, [])
 
+	def test_receipt_part_billed_shows_only_the_remainder(self):
+		"""A receipt billed in part is open for the part still unbilled."""
+		pr = self.make_pr(qty=6, rate=90)
+
+		# invoice 2 of the 6 received
+		self.make_pi_from_pr(pr, qty=2)
+		rows = self.rows_for(received_items_pending_billing(self.filters()), pr.name)
+		self.assertEqual(len(rows), 1)
+		self.assertEqual(rows[0].billed_qty, 2)
+		self.assertEqual(rows[0].pending_qty, 4)
+		# the value follows the quantity, not the whole line
+		self.assertEqual(rows[0].pending_amount, 360)
+
+		# invoice the remaining 4 and it closes
+		self.make_pi_from_pr(pr, qty=4)
+		self.assertEqual(self.rows_for(received_items_pending_billing(self.filters()), pr.name), [])
+
 	# ------------------------------------------------------------------
 	# purchase: bill first, receive later
 	# ------------------------------------------------------------------
@@ -342,6 +362,50 @@ class TestOpenItems(FrappeTestCase):
 		self.assertEqual(
 			len(self.rows_for(report(self.filters(cost_center=self.cost_center)), si.name)), 1
 		)
+
+	def test_posting_range_bounds_the_source_document(self):
+		old = self.make_pr(qty=1, posting_date=add_days(nowdate(), -40))
+		recent = self.make_pr(qty=1, posting_date=add_days(nowdate(), -5))
+
+		window = self.filters(from_date=add_days(nowdate(), -10), to_date=nowdate())
+		rows = received_items_pending_billing(window)
+		self.assertEqual(self.rows_for(rows, old.name), [])
+		self.assertEqual(len(self.rows_for(rows, recent.name)), 1)
+
+		# no window at all means every document, so the number cards keep their totals
+		everything = received_items_pending_billing(self.filters())
+		self.assertEqual(len(self.rows_for(everything, old.name)), 1)
+		self.assertEqual(len(self.rows_for(everything, recent.name)), 1)
+
+	def test_posting_range_applies_to_the_sales_side_too(self):
+		"""The window lives in base_rows, so every flow gets it."""
+		si = self.make_si(qty=1, posting_date=add_days(nowdate(), -40))
+		window = self.filters(from_date=add_days(nowdate(), -10), to_date=nowdate())
+		self.assertEqual(self.rows_for(invoiced_items_to_be_delivered(window), si.name), [])
+
+	def test_posting_range_includes_both_ends(self):
+		posting = add_days(nowdate(), -7)
+		pr = self.make_pr(qty=1, posting_date=posting)
+		rows = received_items_pending_billing(self.filters(from_date=posting, to_date=posting))
+		self.assertEqual(len(self.rows_for(rows, pr.name)), 1)
+
+	def test_posting_range_does_not_clip_the_invoice_side(self):
+		"""A receipt invoiced after the window closed is billed, not open.
+
+		Guards the false positive that bounding both sides would create.
+		"""
+		posting = add_days(nowdate(), -20)
+		pr = self.make_pr(qty=3, posting_date=posting)
+		self.make_pi_from_pr(pr)  # invoiced today, outside the window below
+
+		window = self.filters(from_date=add_days(posting, -1), to_date=add_days(posting, 1))
+		self.assertEqual(self.rows_for(received_items_pending_billing(window), pr.name), [])
+
+	def test_posting_range_rejects_a_backwards_window(self):
+		with self.assertRaises(frappe.ValidationError):
+			received_items_pending_billing(
+				self.filters(from_date=nowdate(), to_date=add_days(nowdate(), -1))
+			)
 
 	def test_ageing_buckets(self):
 		ranges = [30, 60, 90]

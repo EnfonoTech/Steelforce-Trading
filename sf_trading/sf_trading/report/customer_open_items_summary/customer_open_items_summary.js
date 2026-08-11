@@ -28,6 +28,20 @@ frappe.query_reports["Customer Open Items Summary"] = {
 			default: frappe.datetime.get_today(),
 			reqd: 1,
 		},
+		// Optional posting-date window for the source documents. Left empty it
+		// reports every document, which is what the workspace number cards do, so
+		// their totals do not move because these exist. As On Date still governs
+		// how much billing is counted against whatever falls inside the window.
+		{
+			fieldname: "from_date",
+			label: __("From Date"),
+			fieldtype: "Date",
+		},
+		{
+			fieldname: "to_date",
+			label: __("To Date"),
+			fieldtype: "Date",
+		},
 		{
 			fieldname: "party",
 			label: __("Customer"),
