@@ -288,7 +288,6 @@ class TestPendingAdvancePO(FrappeTestCase):
 			transaction_date=nowdate(),
 			status="To Bill",
 			currency="USD",
-			grand_total=1000.0,
 			base_grand_total=80000.0,
 			advance_paid=80000.0,
 			per_billed=0.0,
@@ -305,7 +304,6 @@ class TestPendingAdvancePO(FrappeTestCase):
 
 		self.assertEqual(row["advance_pct"], 100)
 		self.assertEqual(row["balance_amount"], 0)
-		self.assertEqual(row["grand_total"], 1000.0)
 		self.assertEqual(row["base_grand_total"], 80000.0)
 		self.assertEqual(row["remarks"], "")
 
@@ -318,7 +316,6 @@ class TestPendingAdvancePO(FrappeTestCase):
 			transaction_date=nowdate(),
 			status="To Bill",
 			currency="INR",
-			grand_total=0.0,
 			base_grand_total=0.0,
 			advance_paid=50.0,
 			per_billed=0.0,

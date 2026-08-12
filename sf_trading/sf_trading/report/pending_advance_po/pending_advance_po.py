@@ -23,10 +23,11 @@ Currency
 --------
 `advance_paid` is denominated in `party_account_currency` -- the supplier control
 account's currency -- while `grand_total` is in the order's own currency. The two are
-not comparable when they differ, so the order value is reported in the company's
-currency next to the advance, and in the order's own currency separately. Without
-that, an order raised in SAR and paid for in full up front reads as roughly a tenth
-of a BHD advance.
+not comparable when they differ, so every money column here is the company's currency
+and the order's own currency is only named, never totalled: SAR against BHD in one
+column produces a total that means nothing. Compare against `base_grand_total`, or an
+order raised in SAR and paid for in full up front reads as roughly a tenth of a BHD
+advance.
 
 Current state only
 ------------------
@@ -53,7 +54,8 @@ def execute(filters=None):
 	if not filters.get("company"):
 		frappe.throw(_("Select a Company."))
 
-	return columns(), pending_advance_orders(filters)
+	rows = pending_advance_orders(filters)
+	return columns(rows), rows
 
 
 def pending_advance_orders(filters):
@@ -148,7 +150,6 @@ def advance_orders(filters, ledger):
 			po.transaction_date,
 			po.status,
 			po.currency,
-			po.grand_total,
 			po.base_grand_total,
 			po.advance_paid,
 			po.per_billed,
@@ -186,7 +187,6 @@ def advance_orders(filters, ledger):
 				transaction_date=row.transaction_date,
 				status=row.status,
 				currency=row.currency,
-				grand_total=flt(row.grand_total),
 				base_grand_total=flt(row.base_grand_total),
 				advance_paid=flt(row.advance_paid),
 				per_billed=flt(row.per_billed),
@@ -275,7 +275,6 @@ def build_row(order, ledger, drafts, company_currency):
 		"balance_amount": order_value - advance,
 		"advance_pct": (advance / order_value * 100) if order_value else 0.0,
 		"currency": order.currency,
-		"grand_total": flt(order.grand_total),
 		"received": received_state(order),
 		"per_billed": flt(order.per_billed),
 		"draft_invoice": drafts[0] if len(drafts) == 1 else None,
@@ -329,8 +328,17 @@ def remarks(order, ledger, drafts, company_currency):
 	return "; ".join(notes)
 
 
-def columns():
-	return [
+def columns(rows=None):
+	"""Report columns. Remarks only appears when a row actually has something to say.
+
+	A remark means a figure on that row disagrees with something -- the stored advance
+	against the advance ledger, or an order marked fully billed that no invoice names.
+	On clean data every cell would be empty, so the column is left out entirely rather
+	than occupying the widest slot on the report saying nothing.
+	"""
+	remarked = any((row.get("remarks") or "") for row in (rows or ()))
+
+	definitions = [
 		{
 			"label": _("Supplier"),
 			"fieldname": "supplier",
@@ -392,24 +400,13 @@ def columns():
 			"width": 145,
 		},
 		{
-			"label": _("Currency"),
+			# named, not totalled -- it tells the reader the money columns beside it are
+			# a conversion, which matters on the SAR and AED orders
+			"label": _("Order Currency"),
 			"fieldname": "currency",
 			"fieldtype": "Link",
 			"options": "Currency",
-			"width": 80,
-		},
-		{
-			# the order's own value, which is not comparable with the advance whenever
-			# the supplier is billed in something other than the company's currency
-			"label": _("PO Amount (Order Currency)"),
-			"fieldname": "grand_total",
-			"fieldtype": "Currency",
-			"options": "currency",
-			"width": 175,
-			# and for the same reason it must not be totalled: the column holds SAR on
-			# some rows and BHD on others, so a sum of it is 188,284 SAR added to 473
-			# BHD and printed as one number
-			"disable_total": 1,
+			"width": 110,
 		},
 		{
 			"label": _("Age (Days)"),
@@ -418,5 +415,11 @@ def columns():
 			"width": 85,
 			"disable_total": 1,
 		},
-		{"label": _("Remarks"), "fieldname": "remarks", "fieldtype": "Data", "width": 280},
 	]
+
+	if remarked:
+		definitions.append(
+			{"label": _("Remarks"), "fieldname": "remarks", "fieldtype": "Data", "width": 280}
+		)
+
+	return definitions
