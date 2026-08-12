@@ -135,12 +135,12 @@ class TestAdvanceAllocation(FrappeTestCase):
 		total = flt(pi.base_rounded_total or pi.base_grand_total)
 		self.assertEqual(flt(sum(row.allocated_amount for row in pi.advances)), total)
 
-	def test_a_standalone_invoice_is_left_alone(self):
-		"""No order on the rows means the switches stay off.
+	def test_a_standalone_invoice_has_the_switches_turned_back_off(self):
+		"""The DocField default arrives as 1; an invoice naming no order must not keep it.
 
 		get_advance_journal_entries applies no reference filter at all when nothing is
 		unallocated and there is no order to match, so it would return every advance
-		journal entry for the supplier. Never turning the switches on avoids that path.
+		journal entry for the supplier. Turning the switches off avoids that path.
 		"""
 		po = self.make_po(qty=10, rate=100)
 		self.pay_advance(po, amount=400)
@@ -149,6 +149,72 @@ class TestAdvanceAllocation(FrappeTestCase):
 		self.assertEqual(flt(pi.allocate_advances_automatically), 0)
 		self.assertEqual(flt(pi.only_include_allocated_payments), 0)
 		self.assertFalse(pi.advances)
+
+	def test_the_switches_are_cleared_even_when_they_arrive_set(self):
+		"""Simulates the shipped default of 1 landing on a non-order invoice."""
+		pi = frappe.get_doc(
+			{
+				"doctype": "Purchase Invoice",
+				"company": COMPANY,
+				"supplier": SUPPLIER,
+				"posting_date": nowdate(),
+				"bill_no": "STANDALONE-DEFAULTED",
+				"currency": "INR",
+				"conversion_rate": 1,
+				"allocate_advances_automatically": 1,
+				"only_include_allocated_payments": 1,
+				"items": [
+					{
+						"item_code": self.item_code,
+						"qty": 1,
+						"rate": 50,
+						"warehouse": self.warehouse,
+						"cost_center": self.cost_center,
+					}
+				],
+			}
+		)
+		set_advance_allocation(pi)
+		self.assertEqual(flt(pi.allocate_advances_automatically), 0)
+		self.assertEqual(flt(pi.only_include_allocated_payments), 0)
+
+	def test_a_hand_picked_advance_on_a_standalone_invoice_is_respected(self):
+		"""Advance rows only exist because somebody asked, so do not undo their choice."""
+		po = self.make_po(qty=10, rate=100)
+		pe = self.pay_advance(po, amount=400)
+
+		pi = frappe.get_doc(
+			{
+				"doctype": "Purchase Invoice",
+				"company": COMPANY,
+				"supplier": SUPPLIER,
+				"posting_date": nowdate(),
+				"bill_no": "STANDALONE-MANUAL-ADVANCE",
+				"currency": "INR",
+				"conversion_rate": 1,
+				"allocate_advances_automatically": 1,
+				"only_include_allocated_payments": 1,
+				"items": [
+					{
+						"item_code": self.item_code,
+						"qty": 1,
+						"rate": 50,
+						"warehouse": self.warehouse,
+						"cost_center": self.cost_center,
+					}
+				],
+				"advances": [
+					{
+						"reference_type": "Payment Entry",
+						"reference_name": pe.name,
+						"advance_amount": 400,
+						"allocated_amount": 50,
+					}
+				],
+			}
+		)
+		set_advance_allocation(pi)
+		self.assertEqual(flt(pi.allocate_advances_automatically), 1)
 
 	def test_a_paid_invoice_is_left_alone(self):
 		po = self.make_po(qty=10, rate=100)

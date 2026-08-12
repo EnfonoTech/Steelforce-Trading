@@ -539,6 +539,11 @@ fixtures = [
 			"Purchase Invoice-update_billed_amount_in_purchase_receipt-hidden",
 			"Purchase Invoice-apply_tds-hidden",
 			"Purchase Invoice-amended_from-hidden",
+			# default the two advance switches on, so the PO -> PI mapper fills the
+			# advance table at creation; set_advance_allocation turns them back off on an
+			# invoice that names no order
+			"Purchase Invoice-allocate_advances_automatically-default",
+			"Purchase Invoice-only_include_allocated_payments-default",
 			"Purchase Invoice-set_posting_time-hidden",
 			"Purchase Invoice-sec_warehouse-collapsible",
 			"Purchase Invoice-total_net_weight-hidden",

@@ -15,25 +15,39 @@ def set_advance_allocation(doc, method=None):
 	`unallocated_amount > 0` and sweeps that on-account money into the invoice FIFO --
 	61,792 BHD of it on this site.
 
-	Scoped to invoices that actually name an order, for a reason that is not obvious:
-	`get_advance_journal_entries` applies its reference filter as
-	`if reference_or_condition:`, so when nothing is unallocated *and* there is no order
-	to match, the list is empty and NO filter is applied -- the query then returns every
-	submitted advance Journal Entry for that supplier. Leaving the switches off unless an
-	order is present means that path is never reached.
+	Both fields also carry a DocField default of 1, shipped as a Property Setter. That is
+	what lets the advance table fill the moment the invoice is created from an order:
+	`get_mapped_purchase_invoice` calls `set_advances()` in its postprocess, but only
+	`if target.get("allocate_advances_automatically")`, and a hook running at
+	before_validate is far too late for that -- it fires on save. So the default does the
+	creation-time work and this hook decides whether the switches were right.
 
-	Only on a new invoice, so anyone who deliberately unticks either box and saves again
-	keeps their choice.
+	Which matters, because on an invoice that names no order they are wrong. Note
+	`get_advance_journal_entries` applies its reference filter as
+	`if reference_or_condition:`: when nothing is unallocated *and* there is no order to
+	match, the list is empty and NO filter is applied at all -- the query then returns
+	every submitted advance Journal Entry for that supplier. Turning the switches back
+	off means that path is never reached.
+
+	The one exception is an invoice that already carries advance rows. Nothing populates
+	them on load -- ERPNext's `fetch_advances` fires on a change event, not on render --
+	so rows being present means somebody asked for them, and their choice stands.
+
+	Only on a new invoice, so anyone who unticks either box and saves again keeps that too.
 	"""
 	if not doc.is_new():
+		return
+
+	if not any(item.get("purchase_order") for item in doc.get("items") or []):
+		if not doc.get("advances"):
+			doc.allocate_advances_automatically = 0
+			doc.only_include_allocated_payments = 0
 		return
 
 	# a paid invoice settles itself; ERPNext skips set_advances when is_paid is set and
 	# the form clears the flag anyway, so do not claim to have set something up
 	if cint(doc.get("is_paid")):
-		return
-
-	if not any(item.get("purchase_order") for item in doc.get("items") or []):
+		doc.allocate_advances_automatically = 0
 		return
 
 	doc.allocate_advances_automatically = 1
