@@ -167,15 +167,16 @@ class TestPendingAdvancePO(FrappeTestCase):
 		self.assertIsNotNone(row)
 		self.assertEqual(row["draft_invoice"], pi.name)
 
-	def test_include_invoiced_brings_a_settled_order_back(self):
+	def test_a_cancelled_invoice_does_not_settle_the_order(self):
+		"""Only a submitted invoice counts, so cancelling one reopens the order."""
 		po = self.make_po()
 		self.pay_advance(po, amount=300)
 		pi = self.invoice(po)
+		self.assertIsNone(self.row_for(po))
 
-		row = self.row_for(po, include_invoiced=1)
-		self.assertIsNotNone(row)
-		self.assertEqual(row["submitted_invoice"], pi.name)
-		self.assertIn("Already invoiced", row["remarks"])
+		pi.reload()
+		pi.cancel()
+		self.assertIsNotNone(self.row_for(po))
 
 	def test_a_closed_order_is_still_listed_and_flagged(self):
 		"""Money paid on an abandoned order is the most urgent row, not one to hide."""
@@ -263,7 +264,6 @@ class TestPendingAdvancePO(FrappeTestCase):
 			order,
 			ledger={"PO-FX": 80000.0},
 			drafts=[],
-			invoiced=[],
 			company_currency="INR",
 		)
 
@@ -290,7 +290,7 @@ class TestPendingAdvancePO(FrappeTestCase):
 			received_qty=0.0,
 		)
 
-		row = build_row(order, ledger={"PO-ZERO": 50.0}, drafts=[], invoiced=[], company_currency="INR")
+		row = build_row(order, ledger={"PO-ZERO": 50.0}, drafts=[], company_currency="INR")
 		self.assertEqual(row["advance_pct"], 0)
 
 	# ------------------------------------------------------------------

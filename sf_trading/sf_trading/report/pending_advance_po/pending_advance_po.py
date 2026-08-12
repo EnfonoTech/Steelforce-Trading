@@ -38,7 +38,7 @@ therefore bounds the *order date*, and the advance is always its balance right n
 import frappe
 from frappe import _
 from frappe.query_builder.functions import Sum
-from frappe.utils import cint, date_diff, flt, fmt_money, getdate, nowdate
+from frappe.utils import date_diff, flt, fmt_money, getdate, nowdate
 
 from sf_trading.open_items import QTY_PRECISION, apply_user_permissions, posting_range
 
@@ -67,21 +67,18 @@ def pending_advance_orders(filters):
 		return []
 
 	submitted, drafts = invoice_links(orders)
-	include_invoiced = cint(filters.get("include_invoiced"))
 
 	rows = []
 	for order in orders.values():
-		invoiced = sorted(submitted.get(order.purchase_order) or ())
 		# a submitted invoice is what stops an order being pending; everything else
 		# about it -- receipt state, billed percentage -- is reported, not filtered on
-		if invoiced and not include_invoiced:
+		if submitted.get(order.purchase_order):
 			continue
 		rows.append(
 			build_row(
 				order,
 				ledger=ledger,
 				drafts=sorted(drafts.get(order.purchase_order) or ()),
-				invoiced=invoiced,
 				company_currency=company_currency,
 			)
 		)
@@ -246,7 +243,7 @@ def invoice_links(orders):
 	return submitted, drafts
 
 
-def build_row(order, ledger, drafts, invoiced, company_currency):
+def build_row(order, ledger, drafts, company_currency):
 	order_value = flt(order.base_grand_total)
 	advance = flt(order.advance_paid)
 
@@ -267,9 +264,8 @@ def build_row(order, ledger, drafts, invoiced, company_currency):
 		"received": received_state(order),
 		"per_billed": flt(order.per_billed),
 		"draft_invoice": drafts[0] if len(drafts) == 1 else None,
-		"submitted_invoice": invoiced[0] if len(invoiced) == 1 else None,
 		"age": date_diff(nowdate(), getdate(order.transaction_date)),
-		"remarks": remarks(order, ledger, drafts, invoiced, company_currency),
+		"remarks": remarks(order, ledger, drafts, company_currency),
 	}
 
 
@@ -285,7 +281,7 @@ def received_state(order):
 	return _("Partial")
 
 
-def remarks(order, ledger, drafts, invoiced, company_currency):
+def remarks(order, ledger, drafts, company_currency):
 	"""Anything about the row the figures alone would not tell the reader."""
 	notes = []
 
@@ -299,16 +295,14 @@ def remarks(order, ledger, drafts, invoiced, company_currency):
 			)
 		)
 
-	# an order billed to the hilt with nothing naming it means the invoice was raised
-	# without a link, so this report cannot see it and would keep the row open forever
-	if flt(order.per_billed) >= 100 and not invoiced:
+	# Every row here has no submitted invoice naming it, so a billed percentage means
+	# the invoice was raised without the link. This report cannot see such an invoice
+	# and would hold the row open forever, which is exactly why it says so.
+	if flt(order.per_billed) >= 100:
 		notes.append(_("Marked fully billed, but no purchase invoice names this order"))
 
 	if len(drafts) > 1:
 		notes.append(_("{0} draft invoices already raised").format(len(drafts)))
-
-	if invoiced:
-		notes.append(_("Already invoiced by {0}").format(", ".join(invoiced)))
 
 	if order.status == "Closed":
 		notes.append(_("Order is closed"))
@@ -374,13 +368,6 @@ def columns():
 		{
 			"label": _("Draft Invoice"),
 			"fieldname": "draft_invoice",
-			"fieldtype": "Link",
-			"options": "Purchase Invoice",
-			"width": 145,
-		},
-		{
-			"label": _("Submitted Invoice"),
-			"fieldname": "submitted_invoice",
 			"fieldtype": "Link",
 			"options": "Purchase Invoice",
 			"width": 145,

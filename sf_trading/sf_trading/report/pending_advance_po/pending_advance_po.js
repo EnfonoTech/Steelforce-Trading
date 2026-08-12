@@ -30,15 +30,6 @@ frappe.query_reports["Pending Advance PO"] = {
 			fieldtype: "Link",
 			options: "Supplier",
 		},
-		{
-			// Orders whose advance is still sitting against them after the invoice was
-			// booked. They are not pending, but they are why the advance total on the
-			// Purchase Order list is larger than this report's.
-			fieldname: "include_invoiced",
-			label: __("Include Already Invoiced"),
-			fieldtype: "Check",
-			default: 0,
-		},
 	],
 
 	formatter: function (value, row, column, data, default_formatter) {
