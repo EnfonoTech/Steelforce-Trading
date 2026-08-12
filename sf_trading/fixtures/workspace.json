@@ -240,7 +240,7 @@
     "hidden": 0,
     "is_query_report": 0,
     "label": "Purchase",
-    "link_count": 4,
+    "link_count": 5,
     "link_to": null,
     "link_type": null,
     "onboard": 0,
@@ -289,9 +289,20 @@
     "link_type": "Report",
     "onboard": 0,
     "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Pending Advance PO",
+    "link_count": 0,
+    "link_to": "Pending Advance PO",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
    }
   ],
-  "modified": "2026-08-09 13:00:00.000000",
+  "modified": "2026-08-13 02:30:00.000000",
   "modified_by": "Administrator",
   "module": "Sf Trading",
   "name": "Open Items",
