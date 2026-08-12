@@ -163,12 +163,11 @@ def advance_orders(filters, ledger):
 
 	query = apply_user_permissions(query, po, poi, "Purchase Order")
 
-	# a closed order has been abandoned rather than fulfilled, so it is out of the
-	# buyer's queue by default -- but its advance is still real money, so it stays
-	# reachable behind a filter
-	if not cint(filters.get("include_closed")):
-		query = query.where(po.status != "Closed")
-
+	# Closed orders are deliberately NOT excluded. A closed order has been abandoned
+	# rather than fulfilled, so an advance still sitting against one is money paid for
+	# goods nobody is going to receive -- the most urgent row on the report, not the
+	# least. Hiding it would quietly drop it out of the total; the Status column and a
+	# remark name it instead.
 	from_date, to_date = posting_range(filters)
 	if from_date:
 		query = query.where(po.transaction_date >= from_date)

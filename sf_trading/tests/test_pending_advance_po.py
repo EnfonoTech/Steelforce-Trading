@@ -177,15 +177,15 @@ class TestPendingAdvancePO(FrappeTestCase):
 		self.assertEqual(row["submitted_invoice"], pi.name)
 		self.assertIn("Already invoiced", row["remarks"])
 
-	def test_a_closed_order_is_hidden_unless_asked_for(self):
+	def test_a_closed_order_is_still_listed_and_flagged(self):
+		"""Money paid on an abandoned order is the most urgent row, not one to hide."""
 		po = self.make_po()
 		self.pay_advance(po, amount=200)
 		po.db_set("status", "Closed")
 
-		self.assertIsNone(self.row_for(po))
-
-		row = self.row_for(po, include_closed=1)
+		row = self.row_for(po)
 		self.assertIsNotNone(row)
+		self.assertEqual(row["advance_paid"], 200)
 		self.assertIn("closed", row["remarks"])
 
 	def test_the_date_window_bounds_the_order_date(self):
