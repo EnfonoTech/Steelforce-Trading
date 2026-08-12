@@ -303,6 +303,9 @@ doc_events = {
 			"sf_trading.inter_company.purchase_invoice_before_validate",
 			_CC_HOOK,
 			_PTT_HOOK,
+			# before_validate, because the controller's own validate is what reads these
+			# two switches and calls set_advances()
+			"sf_trading.overrides.purchase_invoice.set_advance_allocation",
 		],
 		"validate": [
 			"sf_trading.overrides.purchase_invoice.validate",

@@ -1,5 +1,43 @@
 import frappe
-from frappe.utils import flt
+from frappe.utils import cint, flt
+
+
+def set_advance_allocation(doc, method=None):
+	"""Allocate the order's advance on an invoice raised against a Purchase Order.
+
+	Turns on ERPNext's own two switches rather than allocating anything by hand:
+	`allocate_advances_automatically` makes `validate` call `set_advances()`, and
+	`only_include_allocated_payments` keeps that to advances actually allocated against
+	the orders on this invoice.
+
+	Both are needed, and the second is the important one. Without it
+	`get_advance_payment_entries` also returns every Payment Entry for the supplier with
+	`unallocated_amount > 0` and sweeps that on-account money into the invoice FIFO --
+	61,792 BHD of it on this site.
+
+	Scoped to invoices that actually name an order, for a reason that is not obvious:
+	`get_advance_journal_entries` applies its reference filter as
+	`if reference_or_condition:`, so when nothing is unallocated *and* there is no order
+	to match, the list is empty and NO filter is applied -- the query then returns every
+	submitted advance Journal Entry for that supplier. Leaving the switches off unless an
+	order is present means that path is never reached.
+
+	Only on a new invoice, so anyone who deliberately unticks either box and saves again
+	keeps their choice.
+	"""
+	if not doc.is_new():
+		return
+
+	# a paid invoice settles itself; ERPNext skips set_advances when is_paid is set and
+	# the form clears the flag anyway, so do not claim to have set something up
+	if cint(doc.get("is_paid")):
+		return
+
+	if not any(item.get("purchase_order") for item in doc.get("items") or []):
+		return
+
+	doc.allocate_advances_automatically = 1
+	doc.only_include_allocated_payments = 1
 
 
 def validate(doc, method=None):
