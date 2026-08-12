@@ -174,6 +174,10 @@ class TestAdvanceAllocation(FrappeTestCase):
 				],
 			}
 		)
+		# is_new() is bool(self.get("__islocal")) (base_document.py:464) and insert() is
+		# what sets it, so a document built in memory and never inserted looks OLD to the
+		# hook. Set it here or the hook returns early and the assertion below proves nothing.
+		pi.set("__islocal", True)
 		set_advance_allocation(pi)
 		self.assertEqual(flt(pi.allocate_advances_automatically), 0)
 		self.assertEqual(flt(pi.only_include_allocated_payments), 0)
@@ -213,6 +217,10 @@ class TestAdvanceAllocation(FrappeTestCase):
 				],
 			}
 		)
+		# is_new() is bool(self.get("__islocal")) (base_document.py:464) and insert() is
+		# what sets it, so a document built in memory and never inserted looks OLD to the
+		# hook. Set it here or the hook returns early and the assertion below proves nothing.
+		pi.set("__islocal", True)
 		set_advance_allocation(pi)
 		self.assertEqual(flt(pi.allocate_advances_automatically), 1)
 
@@ -227,6 +235,10 @@ class TestAdvanceAllocation(FrappeTestCase):
 		pi.allocate_advances_automatically = 0
 		pi.only_include_allocated_payments = 0
 		pi.advances = []
+		# is_new() is bool(self.get("__islocal")) (base_document.py:464) and insert() is
+		# what sets it, so a document built in memory and never inserted looks OLD to the
+		# hook. Set it here or the hook returns early and the assertion below proves nothing.
+		pi.set("__islocal", True)
 		set_advance_allocation(pi)
 		self.assertEqual(flt(pi.allocate_advances_automatically), 0)
 
