@@ -167,6 +167,42 @@ class TestPendingAdvancePO(FrappeTestCase):
 		self.assertIsNotNone(row)
 		self.assertEqual(row["draft_invoice"], pi.name)
 
+	def test_an_invoice_naming_only_the_receipt_still_settles_the_order(self):
+		"""The route that would otherwise hold a billed order open forever.
+
+		An invoice raised from a Purchase Receipt can end up naming only the receipt
+		row. The order has genuinely been billed, so it must leave the report even
+		though nothing on the invoice points at the order.
+		"""
+		from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_receipt
+		from erpnext.stock.doctype.purchase_receipt.purchase_receipt import (
+			make_purchase_invoice as invoice_from_receipt,
+		)
+
+		po = self.make_po()
+		self.pay_advance(po, amount=300)
+
+		pr = make_purchase_receipt(po.name)
+		pr.insert()
+		pr.submit()
+
+		pi = invoice_from_receipt(pr.name)
+		pi.bill_no = "BILL-PR-" + po.name
+		pi.allocate_advances_automatically = 0
+		pi.advances = []
+		pi.insert()
+		pi.submit()
+
+		# strip the order links the mapper carried over, leaving only pr_detail
+		for row in pi.items:
+			frappe.db.set_value(
+				"Purchase Invoice Item",
+				row.name,
+				{"purchase_order": None, "po_detail": None},
+				update_modified=False,
+			)
+		self.assertIsNone(self.row_for(po))
+
 	def test_a_cancelled_invoice_does_not_settle_the_order(self):
 		"""Only a submitted invoice counts, so cancelling one reopens the order."""
 		po = self.make_po()

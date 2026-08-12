@@ -207,12 +207,17 @@ def invoice_links(orders):
 	chasing an invoice needs to know one is already sitting in someone's drafts rather
 	than raising a second one.
 
-	Both link fields are read: an invoice row can name the order directly in
-	`purchase_order`, or only name the order's own row in `po_detail`.
+	Three routes are read, because an invoice reaches an order by any of them: naming
+	the order directly in `purchase_order`, naming the order's own row in `po_detail`,
+	or naming only the receipt row in `pr_detail` when the invoice was raised from a
+	Purchase Receipt and the mapper did not carry the order link across. Miss the third
+	and an order that has genuinely been invoiced would sit here open forever with no
+	way to clear it.
 	"""
 	pii = frappe.qb.DocType("Purchase Invoice Item")
 	pi = frappe.qb.DocType("Purchase Invoice")
 	poi = frappe.qb.DocType("Purchase Order Item")
+	pri = frappe.qb.DocType("Purchase Receipt Item")
 
 	wanted = list(orders)
 	rows = (
@@ -221,19 +226,29 @@ def invoice_links(orders):
 		.on(pi.name == pii.parent)
 		.left_join(poi)
 		.on(poi.name == pii.po_detail)
+		.left_join(pri)
+		.on(pri.name == pii.pr_detail)
 		.select(
 			pii.purchase_order,
 			poi.parent.as_("linked_order"),
+			pri.purchase_order.as_("receipt_order"),
 			pi.name.as_("invoice"),
 			pi.docstatus,
 		)
-		.where((pi.docstatus < 2) & (pii.purchase_order.isin(wanted) | poi.parent.isin(wanted)))
+		.where(
+			(pi.docstatus < 2)
+			& (
+				pii.purchase_order.isin(wanted)
+				| poi.parent.isin(wanted)
+				| pri.purchase_order.isin(wanted)
+			)
+		)
 		.run(as_dict=True)
 	)
 
 	submitted, drafts = {}, {}
 	for row in rows:
-		order = row.purchase_order or row.linked_order
+		order = row.purchase_order or row.linked_order or row.receipt_order
 		if order not in orders:
 			continue
 		bucket = submitted if row.docstatus == 1 else drafts
@@ -276,6 +291,10 @@ def received_state(order):
 
 	if received <= 0:
 		return _("No")
+	# nothing ordered cannot have been received in full, so do not let a zero-quantity
+	# order fall through the >= test and claim it is complete
+	if ordered <= 0:
+		return _("Partial")
 	if received >= ordered:
 		return _("Yes")
 	return _("Partial")
@@ -387,6 +406,10 @@ def columns():
 			"fieldtype": "Currency",
 			"options": "currency",
 			"width": 175,
+			# and for the same reason it must not be totalled: the column holds SAR on
+			# some rows and BHD on others, so a sum of it is 188,284 SAR added to 473
+			# BHD and printed as one number
+			"disable_total": 1,
 		},
 		{
 			"label": _("Age (Days)"),
