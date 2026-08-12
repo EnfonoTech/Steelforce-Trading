@@ -35,6 +35,18 @@
 			apply_template_by_currency(frm);
 			return;
 		}
+
+		// Documents populated by mapping from another doc (e.g. Purchase Order ->
+		// Purchase Invoice via "Get Items From") already carry the deliberately
+		// chosen currency of the source document. Re-running the no-default-
+		// currency correction here would stomp that back to the company currency.
+		// ERPNext core guards its own currency()/company() handlers in
+		// controllers/transaction.js the same way, for the same reason.
+		if (frm.doc.__onload && frm.doc.__onload.load_after_mapping) {
+			apply_template_by_currency(frm);
+			return;
+		}
+
 		Promise.all([
 			frappe.db.get_value("Supplier", frm.doc.supplier, ["default_currency", "tax_id"]),
 			frappe.db.get_value("Company", frm.doc.company, "default_currency"),
