@@ -906,6 +906,11 @@ def build_payment_entry(advice):
             "paid_amount": flt(advice.payment_amount),
             "received_amount": flt(advice.payment_amount),
             "cost_center": advice.cost_center,
+            # Branch too, not just the cost center. Every advice carries both, but only the
+            # cost center was copied, so every Payment Entry raised from an advice reached
+            # the ledger with no branch at all — and the branch is what the DCR and the
+            # branch-wise reports key on.
+            "branch": advice.branch,
             "project": advice.project,
             "bank_account": advice.bank_account,
             "custom_payment_advice": advice.name,
