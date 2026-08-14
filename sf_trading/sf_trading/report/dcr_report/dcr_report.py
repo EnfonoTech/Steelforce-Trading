@@ -803,10 +803,21 @@ def get_cash_received_credit_sales(from_date, to_date, company, cost_center):
 
 
 def get_petty_cash_payments(from_date, to_date, company, cost_center, docstatus=1):
-	"""Petty cash payments: Payment Entry (Pay, Cash mode, party type Supplier —
-	with or without invoice references), paid Purchase Invoices (is_paid, Cash
-	mode), and Journal Entries crediting the branch petty cash account.
-	docstatus 1 = approved (submitted), 0 = unapproved (draft/pending)."""
+	"""Petty cash payments: Payment Entry (Pay, Cash mode OR paid from a petty
+	cash account, party type Supplier — with or without invoice references),
+	paid Purchase Invoices (is_paid, Cash mode OR paid into a petty cash
+	account), and Journal Entries crediting the branch petty cash account.
+	docstatus 1 = approved (submitted), 0 = unapproved (draft/pending).
+
+	The account match is a fallback, not a replacement, for the Mode of Payment
+	check: it catches payments posted straight to a petty cash account even when
+	Mode of Payment was left blank or set to something not typed "Cash". When a
+	cost center is given and resolves to specific branch petty cash account(s),
+	the match is scoped to exactly those. Without that (no cost center, or a
+	cost center with no Branch Configuration), it falls back to any account of
+	type "Cash" — same fallback already used for the JE/Internal Transfer legs
+	and for the Cash Balance rows — so blank-Mode-of-Payment entries still show
+	up in a company-wide (no cost center) run instead of disappearing."""
 	conditions = "pe.docstatus = %(docstatus)s"
 	if from_date:
 		conditions += " AND pe.posting_date >= %(from_date)s"
@@ -814,7 +825,10 @@ def get_petty_cash_payments(from_date, to_date, company, cost_center, docstatus=
 		conditions += " AND pe.posting_date <= %(to_date)s"
 	if company:
 		conditions += " AND pe.company = %(company)s"
-	cost_center_condition = " AND pe.cost_center = %(cost_center)s" if cost_center else ""
+
+	# Branch petty cash accounts — same resolution used for the JE/Internal
+	# Transfer legs below, also used here as the PE/PI account-match fallback.
+	accounts = get_branch_petty_cash_accounts(company, cost_center)
 
 	params = {
 		"from_date": from_date,
@@ -822,18 +836,37 @@ def get_petty_cash_payments(from_date, to_date, company, cost_center, docstatus=
 		"company": company,
 		"cost_center": cost_center,
 		"docstatus": docstatus,
+		"accounts": tuple(accounts) or ("",),
 	}
 
+	# The cost center filter only makes sense for the Mode-of-Payment match: a
+	# "Cash" typed Mode of Payment doesn't identify a branch by itself, so we
+	# need the row's own cost center to know which branch it belongs to. An
+	# account match needs no such filter — the account itself is branch-specific
+	# (that's exactly how `accounts` was derived) — so it counts even when the
+	# row's own cost center field was left blank. Applying the cost center
+	# filter across the whole OR (as before) wrongly vetoed real account matches
+	# on rows with a blank cost center.
+	pe_mop_cost_center_condition = " AND pe.cost_center = %(cost_center)s" if cost_center else ""
+	if accounts:
+		pe_acc_join = ""
+		pe_account_condition = "pe.paid_from IN %(accounts)s"
+	else:
+		pe_acc_join = "LEFT JOIN `tabAccount` acc_pe ON acc_pe.name = pe.paid_from"
+		pe_account_condition = "acc_pe.account_type = 'Cash'"
+		if cost_center:
+			pe_account_condition += " AND pe.cost_center = %(cost_center)s"
 	payments_pe_result = frappe.db.sql("""
 		SELECT SUM(pe.paid_amount) as amount
 		FROM `tabPayment Entry` pe
-		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
+		LEFT JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
+		{pe_acc_join}
 		WHERE {conditions}
 			AND pe.payment_type = 'Pay'
 			AND pe.party_type = 'Supplier'
-			AND mop.type = 'Cash'
-			{cost_center_condition}
-	""".format(conditions=conditions, cost_center_condition=cost_center_condition), params, as_dict=True)
+			AND ((mop.type = 'Cash' {pe_mop_cost_center_condition}) OR {pe_account_condition})
+	""".format(conditions=conditions, pe_mop_cost_center_condition=pe_mop_cost_center_condition,
+		pe_acc_join=pe_acc_join, pe_account_condition=pe_account_condition), params, as_dict=True)
 
 	pi_conditions = "pi.docstatus = %(docstatus)s AND pi.is_paid = 1"
 	if from_date:
@@ -842,22 +875,29 @@ def get_petty_cash_payments(from_date, to_date, company, cost_center, docstatus=
 		pi_conditions += " AND pi.posting_date <= %(to_date)s"
 	if company:
 		pi_conditions += " AND pi.company = %(company)s"
-	pi_cost_center_condition = " AND pi.cost_center = %(cost_center)s" if cost_center else ""
 
+	pi_mop_cost_center_condition = " AND pi.cost_center = %(cost_center)s" if cost_center else ""
+	if accounts:
+		pi_acc_join = ""
+		pi_account_condition = "pi.cash_bank_account IN %(accounts)s"
+	else:
+		pi_acc_join = "LEFT JOIN `tabAccount` acc_pi ON acc_pi.name = pi.cash_bank_account"
+		pi_account_condition = "acc_pi.account_type = 'Cash'"
+		if cost_center:
+			pi_account_condition += " AND pi.cost_center = %(cost_center)s"
 	payments_pi_result = frappe.db.sql("""
 		SELECT SUM(pi.base_paid_amount) as amount
 		FROM `tabPurchase Invoice` pi
-		INNER JOIN `tabMode of Payment` mop ON mop.name = pi.mode_of_payment
+		LEFT JOIN `tabMode of Payment` mop ON mop.name = pi.mode_of_payment
+		{pi_acc_join}
 		WHERE {conditions}
-			AND mop.type = 'Cash'
-			{cost_center_condition}
-	""".format(conditions=pi_conditions, cost_center_condition=pi_cost_center_condition), params, as_dict=True)
+			AND ((mop.type = 'Cash' {pi_mop_cost_center_condition}) OR {pi_account_condition})
+	""".format(conditions=pi_conditions, pi_mop_cost_center_condition=pi_mop_cost_center_condition,
+		pi_acc_join=pi_acc_join, pi_account_condition=pi_account_condition), params, as_dict=True)
 
 	# Journal Entries paying out of the branch petty cash account (credit side).
 	# Same account resolution as the balances: the branch's derived petty cash
 	# accounts without a cost center condition, else Cash-type accounts.
-	accounts = get_branch_petty_cash_accounts(company, cost_center)
-	params["accounts"] = tuple(accounts) or ("",)
 	je_conditions = "je.docstatus = %(docstatus)s"
 	if from_date:
 		je_conditions += " AND je.posting_date >= %(from_date)s"

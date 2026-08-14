@@ -674,34 +674,66 @@ def _detail_cash_receipts_cash_sales(params, cost_center):
 
 def _detail_payments_petty_cash(params, cost_center, docstatus=1):
 	params = dict(params, docstatus=docstatus)
+	# Branch petty cash accounts — fallback match for PE/PI (same accounts used
+	# for the JE/Internal Transfer legs below) so a payment posted straight to
+	# the branch's petty cash account still counts even when Mode of Payment is
+	# blank or not typed "Cash".
+	accounts = get_branch_petty_cash_accounts(params["company"], cost_center)
+	params["accounts"] = tuple(accounts) or ("",)
 	cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "pe.posting_date", "pe")
-	cc = " AND pe.cost_center = %(cost_center)s" if cost_center else ""
-	# Payment Entry (Pay, Cash, party type Supplier — references not required)
+	# The cost center filter only makes sense for the Mode-of-Payment match: a
+	# "Cash" typed Mode of Payment doesn't identify a branch by itself, so we
+	# need the row's own cost center to know which branch it belongs to. An
+	# account match needs no such filter — the account itself is branch-specific
+	# — so it counts even when the row's own cost center field was left blank.
+	# When no branch account resolved at all (no cost center, or a cost center
+	# with no Branch Configuration), fall back to any account of type "Cash" —
+	# same fallback used for the JE/Internal Transfer legs and the Cash Balance
+	# rows — so this still surfaces in a company-wide (no cost center) run.
+	pe_cc = " AND pe.cost_center = %(cost_center)s" if cost_center else ""
+	if accounts:
+		pe_acc_join = ""
+		pe_account_condition = "pe.paid_from IN %(accounts)s"
+	else:
+		pe_acc_join = "LEFT JOIN `tabAccount` acc_pe ON acc_pe.name = pe.paid_from"
+		pe_account_condition = "acc_pe.account_type = 'Cash'"
+		if cost_center:
+			pe_account_condition += " AND pe.cost_center = %(cost_center)s"
+	# Payment Entry (Pay, Cash OR paid from a petty cash account, party type
+	# Supplier — references not required)
 	sql_pe = """
 		SELECT 'Payment Entry' as doctype, pe.name, pe.posting_date, pe.party, pe.paid_amount, pe.mode_of_payment
 		FROM `tabPayment Entry` pe
-		INNER JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
+		LEFT JOIN `tabMode of Payment` mop ON mop.name = pe.mode_of_payment
+		""" + pe_acc_join + """
 		WHERE pe.docstatus = %(docstatus)s AND """ + cond + """
-		AND pe.payment_type = 'Pay' AND pe.party_type = 'Supplier' AND mop.type = 'Cash'
-		""" + cc + """
+		AND pe.payment_type = 'Pay' AND pe.party_type = 'Supplier'
+		AND ((mop.type = 'Cash' """ + pe_cc + """) OR """ + pe_account_condition + """)
 		ORDER BY pe.posting_date, pe.name
 	"""
 	rows_pe = frappe.db.sql(sql_pe, params, as_dict=True)
-	# Purchase Invoice (is_paid, Cash)
+	# Purchase Invoice (is_paid, Cash OR paid into a petty cash account)
 	pi_cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "pi.posting_date", "pi")
 	pi_cc = " AND pi.cost_center = %(cost_center)s" if cost_center else ""
+	if accounts:
+		pi_acc_join = ""
+		pi_account_condition = "pi.cash_bank_account IN %(accounts)s"
+	else:
+		pi_acc_join = "LEFT JOIN `tabAccount` acc_pi ON acc_pi.name = pi.cash_bank_account"
+		pi_account_condition = "acc_pi.account_type = 'Cash'"
+		if cost_center:
+			pi_account_condition += " AND pi.cost_center = %(cost_center)s"
 	sql_pi = """
 		SELECT 'Purchase Invoice' as doctype, pi.name, pi.posting_date, pi.supplier as party, pi.base_paid_amount as paid_amount, pi.mode_of_payment
 		FROM `tabPurchase Invoice` pi
-		INNER JOIN `tabMode of Payment` mop ON mop.name = pi.mode_of_payment
+		LEFT JOIN `tabMode of Payment` mop ON mop.name = pi.mode_of_payment
+		""" + pi_acc_join + """
 		WHERE pi.docstatus = %(docstatus)s AND pi.is_paid = 1 AND """ + pi_cond + """
-		AND mop.type = 'Cash'
-		""" + pi_cc + """
+		AND ((mop.type = 'Cash' """ + pi_cc + """) OR """ + pi_account_condition + """)
 		ORDER BY pi.posting_date, pi.name
 	"""
 	rows_pi = frappe.db.sql(sql_pi, params, as_dict=True)
 	# Journal Entries paying out of the branch petty cash account (credit side)
-	accounts = get_branch_petty_cash_accounts(params["company"], cost_center)
 	je_params = dict(params, accounts=tuple(accounts) or ("",))
 	je_cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "je.posting_date", "je")
 	if accounts:
