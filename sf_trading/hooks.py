@@ -194,6 +194,7 @@ permission_query_conditions = {
 override_doctype_class = {
 	"Sales Invoice": "sf_trading.overrides.sales_invoice_class.CustomSalesInvoice",
 	"Delivery Note": "sf_trading.overrides.delivery_note_class.CustomDeliveryNote",
+	"Purchase Invoice": "sf_trading.overrides.purchase_invoice_class.CustomPurchaseInvoice",
 }
 
 # Document Events
