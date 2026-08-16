@@ -68,6 +68,8 @@ doctype_js = {
 		"public/js/purchase_tax_template.js",
 		"public/js/payment_advice_form_action.js",
 	],
+	# cancelling a payment must not demand the advice behind it be cancelled as well
+	"Payment Entry":      "public/js/payment_entry_cancel.js",
 	# open item census + submit gate companion view
 	"Period Closing Voucher": "public/js/period_closing_voucher.js",
 }
