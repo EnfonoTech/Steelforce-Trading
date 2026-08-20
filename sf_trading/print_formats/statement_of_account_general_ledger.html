@@ -435,10 +435,14 @@
        once at the top of the document, which since statements became one per
        customer meant only the first customer got it.
 
-       Drawing it here fixes both: every statement carries the artwork, in both
-       print paths, whether or not the box is ticked. When artwork is found the
-       wrapper copies are hidden so nothing doubles up; a letter head made of
-       markup rather than an image finds none, and the wrapper still prints. */
+       Where the markup comes from depends on the box. With it ticked,
+       query_report.js has already fetched the letter head and REPLACED
+       print_settings.letter_head with the rendered object {header, footer}
+       (see render_report_letterhead). Passing that object back as a name filter
+       is what produced "check the manual that corresponds to your MariaDB
+       server version ... near header: <style>" — a dict reached SQL as a name.
+       So the object is used as it stands, and only the unticked case looks the
+       letter head up, by name or by the company default. */
     var logo = "", logo_footer = "";
     var with_letter_head = print_settings && print_settings.with_letter_head;
     var absolute = function (src) {
@@ -446,24 +450,42 @@
            against, so a site-relative src would come out blank. */
         return src.indexOf("/") === 0 ? frappe.urllib.get_base_url() + src : src;
     };
+    var first_image = function (markup) {
+        var found = cstr(markup).match(/<img[^>]+src=["']([^"']+)["']/i);
+        return found ? absolute(found[1]) : "";
+    };
+
+    var chosen_head = print_settings && print_settings.letter_head;
     try {
-        var head_filters = (print_settings && print_settings.letter_head)
-            ? { name: print_settings.letter_head }
-            : { is_default: 1, disabled: 0 };
-        frappe.call({
-            method: "frappe.client.get_value",
-            args: { doctype: "Letter Head", filters: head_filters, fieldname: ["content", "footer"] },
-            async: false,
-            callback: function (r) {
-                var head = cstr(r && r.message && r.message.content);
-                var foot = cstr(r && r.message && r.message.footer);
-                var top_img = head.match(/<img[^>]+src=["']([^"']+)["']/i);
-                var bottom_img = foot.match(/<img[^>]+src=["']([^"']+)["']/i);
-                logo = top_img ? absolute(top_img[1]) : "";
-                logo_footer = bottom_img ? absolute(bottom_img[1]) : "";
-            }
-        });
-    } catch (letter_head_error) { logo = ""; logo_footer = ""; }
+        if (chosen_head && typeof chosen_head === "object") {
+            logo = first_image(chosen_head.header);
+            logo_footer = first_image(chosen_head.footer);
+        } else {
+            var head_name = (typeof chosen_head === "string" && chosen_head)
+                ? chosen_head
+                : cstr(print_settings && print_settings.letter_head_name);
+            frappe.call({
+                method: "frappe.client.get_value",
+                args: {
+                    doctype: "Letter Head",
+                    filters: head_name ? { name: head_name } : { is_default: 1, disabled: 0 },
+                    fieldname: ["content", "footer"]
+                },
+                async: false,
+                callback: function (r) {
+                    logo = first_image(r && r.message && r.message.content);
+                    logo_footer = first_image(r && r.message && r.message.footer);
+                }
+            });
+        }
+    } catch (letter_head_error) {
+        /* Never break the statement over artwork, but do not hide the reason:
+           a swallowed failure here printed statements with no letter head and
+           nothing to show for it. */
+        console.error("Statement of Account: letter head unavailable", letter_head_error);
+        logo = "";
+        logo_footer = "";
+    }
 
     var company = filters.company || "";
 %}
