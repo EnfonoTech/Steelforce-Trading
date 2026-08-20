@@ -215,6 +215,16 @@
 
     .soa > tbody > tr.soa-opening > td { background: #eef1f5; font-weight: 700; }
 
+    .soa-warn {
+        border: 0.6pt solid #b3121b;
+        background: #fdf3f3;
+        color: #b3121b;
+        padding: 1.6mm 2mm;
+        margin-bottom: 2.5mm;
+        font-size: 7.2pt;
+        font-weight: 700;
+    }
+
     .soa-empty { padding: 8mm 0; text-align: center; font-size: 8.5pt; color: #6b7280; }
 
     /* ---------- letter head placement ----------
@@ -250,7 +260,21 @@
     var closing = markers.length > 1 ? markers[markers.length - 1] : null;
     var totals_row = markers.length > 2 ? markers[markers.length - 2] : null;
 
-    var party = (filters.party && filters.party.length) ? filters.party[0] : (rows.length ? rows[0].party : "");
+    /* The party is taken from the ledger, not from filters.party[0]. A run can
+       carry several customers, or every customer when Party is left empty, and
+       reading the first one would print that name above another customer
+       figures. Unlike the receivables statement this one cannot simply be split
+       per customer: General Ledger orders by posting date and accumulates ONE
+       running balance across the whole run, so a per-customer slice of it would
+       be arithmetic nonsense. When the run is not a single customer the block
+       is left blank and the page says why. */
+    var parties = [];
+    for (var pi = 0; pi < rows.length; pi++) {
+        var pname = cstr(rows[pi].party);
+        if (pname && parties.indexOf(pname) < 0) { parties.push(pname); }
+    }
+    var single_party = parties.length === 1 ? parties[0] : "";
+    var party = single_party;
     var ccy = filters.presentation_currency || (rows.length ? cstr(rows[0].account_currency) : "");
     var nf = get_number_format(ccy);
     var amount = function (value) { return format_number(flt(value), nf); };
@@ -373,7 +397,11 @@
     var vat_no = customer.tax_id || customer.custom_vat_registration_number || "";
     var cr_no = customer.custom_commercial_registration_number || "";
     var name_ar = customer.customer_name_in_arabic || customer.custom_customer_name_arabic || "";
-    var customer_label = customer.customer_name || (rows.length ? cstr(rows[0].party_name) : "") || party;
+    /* Blank when the run is not one customer: falling back to the first row here
+       is what printed one customer name above another customer figures. */
+    var customer_label = single_party
+        ? (customer.customer_name || (rows.length ? cstr(rows[0].party_name) : "") || single_party)
+        : "";
 
     var address = cstr(customer.primary_address).replace(/<br>/g, ", ");
     try {
@@ -417,6 +445,14 @@
 
     var company = filters.company || "";
 %}
+
+{% if (!single_party) { %}
+<div class="soa-warn">
+    {%= parties.length
+        ? __("This ledger covers {0} customers, so no customer block is shown and the running balance below is the total for the whole run, not one customer balance. Select a single customer in the Party filter to print a statement.", [parties.length])
+        : __("No customer is selected. Set Party Type to Customer and pick one customer to print a statement.") %}
+</div>
+{% } %}
 
 <div class="soa-head">
         <table class="soa-mast">

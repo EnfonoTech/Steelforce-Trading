@@ -9,41 +9,51 @@
         Custom Format    : ticked
         PDF Generator    : wkhtmltopdf
 
-     Use from Accounts Receivable > Print or PDF, with ONE customer in the
-     Party filter — a statement is addressed to one customer.
+     Use from Accounts Receivable > PDF or Print. Leave "With Letter head"
+     UNTICKED: the artwork is drawn below, and ticking it makes the print
+     wrapper emit its own #header-html, which would displace this one.
 
-     Page furniture
-     --------------
-     Everything the statement repeats per page lives in the <thead> of the one
-     table below, so it repeats on the browser Print path and the wkhtmltopdf
-     PDF path alike. This template deliberately does NOT define #header-html or
-     #footer-html: frappe/public/html/print_template.html already emits those
-     around this content when Print Settings has "Repeat Header and Footer",
-     and a second pair collides with it — only the first survives extraction,
-     which strands the rest of the layout mid-page.
+     One statement per customer
+     --------------------------
+     The report can hold one customer, several, or every customer when Party is
+     left empty — 175 of them on this site. So the statement is not built from
+     "the customer": rows are grouped by their own party field and each customer
+     prints as a separate statement on its own sheet, with its own customer
+     block, totals and ageing band. Reading the customer off the first row, as
+     this format first did, put one customer name above another customer
+     figures whenever more than one was in the report.
 
-     So: page numbers and the letter head footer come from the wrapper (turn on
-     Repeat Header and Footer in Print Settings), while the letter head artwork
-     at the top is drawn here, from the letter head named in the print dialog or
-     the company default. Leave "With Letter head" UNTICKED — ticking it makes
-     the wrapper draw the artwork a second time.
+     That also makes Group By Customer work: with it ticked erpnext orders rows
+     by party and appends a bold subtotal row per party plus a final one
+     labelled Total, and those subtotals are printed here in preference to a
+     recomputation, so the paper agrees with the screen.
 
-     NO APOSTROPHES anywhere in this file. frappe.template.compile builds the
-     render function by quoting literal text with single quotes and escapes only
-     the FIRST apostrophe in each literal run, so a second one ends the string
-     early and the format dies with "missing ) after argument list".
+     The customer block is not in the report output. It is read with four
+     batched lookups — Customer, Customer Credit Limit, Sales Team, Address —
+     no matter how many customers print, never one call per row. Child tables
+     are queried with parent: "Customer", which frappe.client.get_list requires.
 
-     Row shape, confirmed against this bench (erpnext 15.116, party-filtered):
+     Row shape, confirmed against this bench (erpnext 15.116):
        posting_date, due_date, voucher_type, voucher_no, cost_center, po_no,
        invoiced, paid, credit_note, outstanding, age, range1..range5, currency,
        party, customer_name, remarks
-     Ageing headings come from report.columns, so they follow the Ageing Range
-     filters set on the report itself instead of being hardcoded.
+     Subtotal rows carry party + bold, and no voucher_no.
 
-     The customer block (VAT no, CR no, credit limit, terms, collector, Arabic
-     name, address) is not in the report output and is read from the Customer
-     with a synchronous frappe.call, each lookup wrapped so a failure prints an
-     empty box rather than breaking the statement.
+     Ageing headings come from report.columns, so they follow the Ageing Range
+     filters set on the report itself instead of being hardcoded. The band leads
+     with Not Due: set_ageing() zeroes every bucket on an item whose due date
+     has not arrived, so without that cell it reads short of the total.
+
+     Page furniture: this bench runs wkhtmltopdf 0.12.6 against unpatched Qt,
+     which ignores --header-html, so headers cannot repeat per page and page
+     numbers are unavailable. The header therefore prints inline, once per
+     statement. Do NOT move it into a #header-html div — frappe would lift it
+     out of the body and wkhtmltopdf would then discard it.
+
+     NO APOSTROPHES anywhere in this file. frappe.template.compile quotes
+     literal text with single quotes and escapes only the FIRST apostrophe in
+     each literal run, so a second one ends the string early and the format dies
+     with "missing ) after argument list".
 -->
 <style>
     /* wkhtmltopdf reads page setup from rules on .print-format (see
@@ -218,6 +228,19 @@
     }
     .soa-age .notdue { background: #fbfbfc; }
 
+    /* Each customer prints as its own statement, on its own sheet. */
+    .soa-statement + .soa-statement { page-break-before: always; }
+
+    .soa-warn {
+        border: 0.6pt solid #b3121b;
+        background: #fdf3f3;
+        color: #b3121b;
+        padding: 1.6mm 2mm;
+        margin-bottom: 2.5mm;
+        font-size: 7.2pt;
+        font-weight: 700;
+    }
+
     .soa-empty { padding: 8mm 0; text-align: center; font-size: 8.5pt; color: #6b7280; }
 
     /* The artwork this template draws itself, at full content width so it reads the
@@ -249,15 +272,11 @@
         .letter-head-footer { margin-top: 4mm; }
     }
 </style>
-
 {%
-    /* ---- rows the statement prints: open items, the report total row dropped ---- */
-    var rows = (data || []).filter(function (row) { return row && row.voucher_no; });
+    var all_rows = data || [];
+    var detail_rows = all_rows.filter(function (row) { return row && row.voucher_no; });
 
-    var party = (filters.party && filters.party.length) ? filters.party[0] : (rows.length ? rows[0].party : "");
-    var ccy = rows.length ? (rows[0].currency || "") : "";
-    var nf = get_number_format(ccy);
-    var amount = function (value) { return format_number(flt(value), nf); };
+    var nf_of = function (currency) { return get_number_format(currency); };
     var on_date = function (value) { return value ? frappe.datetime.str_to_user(value) : ""; };
     var branch_of = function (value) { return cstr(value).split(" - ")[0]; };
 
@@ -268,29 +287,129 @@
         return "IN";
     };
 
-    /* ---- totals and the ageing band, both from figures ERPNext produced ---- */
-    var total_invoiced = 0, total_credit = 0, total_outstanding = 0;
-    /* First cell is Not Due: ERPNext zeroes every ageing bucket on an item whose
-       due date has not arrived (accounts_receivable.py, set_ageing), so without
-       it the band reads short of the outstanding total. */
-    var buckets = [0, 0, 0, 0, 0, 0];
-    var earliest = "";
-    for (var t = 0; t < rows.length; t++) {
-        total_invoiced += flt(rows[t].invoiced);
-        total_credit += flt(rows[t].paid) + flt(rows[t].credit_note);
-        total_outstanding += flt(rows[t].outstanding);
-
-        var aged = 0;
-        for (var b = 0; b < 5; b++) {
-            var bucket = flt(rows[t]["range" + (b + 1)]);
-            aged += bucket;
-            buckets[b + 1] += bucket;
-        }
-        buckets[0] += flt(rows[t].outstanding) - aged;
-
-        if (!earliest || (rows[t].posting_date && rows[t].posting_date < earliest)) { earliest = rows[t].posting_date; }
+    /* Group By Customer makes erpnext append a bold subtotal row per party and
+       a final one labelled Total. Printing those keeps paper and screen equal. */
+    var subtotals = {};
+    for (var k = 0; k < all_rows.length; k++) {
+        var mark = all_rows[k];
+        if (!mark || mark.voucher_no || !mark.party || mark.party === "Total") { continue; }
+        subtotals[cstr(mark.party)] = mark;
     }
 
+    /* one statement per customer, in the order the report produced them */
+    var order = [];
+    var grouped = {};
+    for (var g = 0; g < detail_rows.length; g++) {
+        var key = cstr(detail_rows[g].party);
+        if (!grouped[key]) { grouped[key] = []; order.push(key); }
+        grouped[key].push(detail_rows[g]);
+    }
+
+    /* A run with Party left empty covers every customer on the site. Printing
+       hundreds of statements by accident helps nobody, so this stops at a
+       hundred and says so on the page rather than truncating quietly. */
+    var MAX_STATEMENTS = 100;
+    var customer_count = order.length;
+    var truncated = customer_count > MAX_STATEMENTS;
+    if (truncated) { order = order.slice(0, MAX_STATEMENTS); }
+
+    /* ---- customer block: four batched lookups, whatever the customer count ---- */
+    var customers = {}, credit_limits = {}, collectors = {}, addresses = {};
+    try {
+        if (order.length) {
+            frappe.call({
+                method: "frappe.client.get_list",
+                args: {
+                    doctype: "Customer",
+                    filters: [["name", "in", order]],
+                    fields: ["name", "customer_name", "tax_id", "custom_vat_registration_number",
+                             "customer_name_in_arabic", "custom_customer_name_arabic",
+                             "custom_commercial_registration_number", "payment_terms",
+                             "customer_primary_address", "primary_address"],
+                    limit_page_length: 0
+                },
+                async: false,
+                callback: function (r) {
+                    var list = (r && r.message) || [];
+                    for (var c1 = 0; c1 < list.length; c1++) { customers[list[c1].name] = list[c1]; }
+                }
+            });
+        }
+    } catch (customer_error) { customers = {}; }
+
+    try {
+        if (order.length) {
+            frappe.call({
+                method: "frappe.client.get_list",
+                args: {
+                    doctype: "Customer Credit Limit",
+                    filters: [["parent", "in", order]],
+                    fields: ["parent", "company", "credit_limit"],
+                    parent: "Customer",
+                    limit_page_length: 0
+                },
+                async: false,
+                callback: function (r) {
+                    var list = (r && r.message) || [];
+                    for (var c2 = 0; c2 < list.length; c2++) {
+                        if (!filters.company || list[c2].company === filters.company) {
+                            credit_limits[list[c2].parent] = list[c2].credit_limit;
+                        }
+                    }
+                }
+            });
+        }
+    } catch (limit_error) { credit_limits = {}; }
+
+    try {
+        if (order.length) {
+            frappe.call({
+                method: "frappe.client.get_list",
+                args: {
+                    doctype: "Sales Team",
+                    filters: [["parent", "in", order]],
+                    fields: ["parent", "sales_person"],
+                    parent: "Customer",
+                    limit_page_length: 0
+                },
+                async: false,
+                callback: function (r) {
+                    var list = (r && r.message) || [];
+                    for (var c3 = 0; c3 < list.length; c3++) {
+                        if (!collectors[list[c3].parent]) { collectors[list[c3].parent] = list[c3].sales_person; }
+                    }
+                }
+            });
+        }
+    } catch (team_error) { collectors = {}; }
+
+    try {
+        var address_names = [];
+        for (var a1 = 0; a1 < order.length; a1++) {
+            var cust1 = customers[order[a1]] || {};
+            if (!cust1.primary_address && cust1.customer_primary_address) { address_names.push(cust1.customer_primary_address); }
+        }
+        if (address_names.length) {
+            frappe.call({
+                method: "frappe.client.get_list",
+                args: {
+                    doctype: "Address",
+                    filters: [["name", "in", address_names]],
+                    fields: ["name", "address_line1", "address_line2", "city", "pincode"],
+                    limit_page_length: 0
+                },
+                async: false,
+                callback: function (r) {
+                    var list = (r && r.message) || [];
+                    for (var c4 = 0; c4 < list.length; c4++) {
+                        addresses[list[c4].name] = [list[c4].address_line1, list[c4].address_line2, list[c4].city, list[c4].pincode].filter(Boolean).join(", ");
+                    }
+                }
+            });
+        }
+    } catch (address_error) { addresses = {}; }
+
+    /* ---- ageing headings, from the report columns ---- */
     var bucket_labels = [];
     for (var c = 0; c < (columns || []).length; c++) {
         if (cstr(columns[c].fieldname).indexOf("range") === 0) { bucket_labels.push(columns[c].label + " " + __("Days")); }
@@ -300,123 +419,111 @@
     }
     bucket_labels = [__("Not Due")].concat(bucket_labels);
 
-    /* ---- ePromise voucher numbers ----
-           Documents brought over from ePromise were renamed by the import, so the
-           name on the row is not the number anybody here recognises. The migration
-           kept the original on the document as "<source>|<number>" and staff go by
-           the number after the pipe, so swap it in wherever one exists and leave
-           the document name alone where none does. One call for the whole
-           statement rather than a lookup per line. ---- */
-    var epromise = {};
-    try {
-        var wanted = [];
-        for (var e = 0; e < rows.length; e++) {
-            if (rows[e].voucher_type && rows[e].voucher_no) {
-                wanted.push({ voucher_type: rows[e].voucher_type, voucher_no: rows[e].voucher_no });
+    /* ---- one statement per customer ---- */
+    var statements = [];
+    for (var o = 0; o < order.length; o++) {
+        var party = order[o];
+        var party_rows = grouped[party] || [];
+        var cust = customers[party] || {};
+        var sub = subtotals[party];
+
+        var invoiced = 0, credited = 0, outstanding = 0, earliest = "";
+        var buckets = [0, 0, 0, 0, 0, 0];
+        for (var t = 0; t < party_rows.length; t++) {
+            invoiced += flt(party_rows[t].invoiced);
+            credited += flt(party_rows[t].paid) + flt(party_rows[t].credit_note);
+            outstanding += flt(party_rows[t].outstanding);
+
+            var aged = 0;
+            for (var b = 0; b < 5; b++) {
+                var bucket = flt(party_rows[t]["range" + (b + 1)]);
+                aged += bucket;
+                buckets[b + 1] += bucket;
+            }
+            buckets[0] += flt(party_rows[t].outstanding) - aged;
+
+            if (!earliest || (party_rows[t].posting_date && party_rows[t].posting_date < earliest)) {
+                earliest = party_rows[t].posting_date;
             }
         }
-        if (wanted.length) {
-            frappe.call({
-                method: "sf_trading.api.statement_of_account.get_epromise_references",
-                args: { vouchers: JSON.stringify(wanted) },
-                async: false,
-                callback: function (r) { epromise = (r && r.message) || {}; }
-            });
+
+        /* prefer the subtotal erpnext itself produced */
+        if (sub) {
+            invoiced = flt(sub.invoiced);
+            credited = flt(sub.paid) + flt(sub.credit_note);
+            outstanding = flt(sub.outstanding);
         }
-    } catch (epromise_error) { epromise = {}; }
 
-    var voucher_label = function (row) {
-        var key = cstr(row.voucher_type) + "::" + cstr(row.voucher_no);
-        return epromise[key] || row.voucher_no || "";
-    };
-
-    /* ---- customer block: not in the report output, so read it off the Customer ---- */
-    var customer = {};
-    try {
-        if (party) {
-            frappe.call({
-                method: "frappe.client.get",
-                args: { doctype: "Customer", name: party },
-                async: false,
-                callback: function (r) { customer = (r && r.message) || {}; }
-            });
-        }
-    } catch (customer_error) { customer = {}; }
-
-    var credit_limit = 0;
-    var limits = customer.credit_limits || [];
-    for (var l = 0; l < limits.length; l++) {
-        if (!filters.company || limits[l].company === filters.company) { credit_limit = limits[l].credit_limit; }
+        var ccy = party_rows.length ? cstr(party_rows[0].currency) : "";
+        statements.push({
+            party: party,
+            label: cust.customer_name || (party_rows.length ? cstr(party_rows[0].customer_name) : "") || party,
+            name_ar: cust.customer_name_in_arabic || cust.custom_customer_name_arabic || "",
+            vat_no: cust.tax_id || cust.custom_vat_registration_number || "",
+            cr_no: cust.custom_commercial_registration_number || "",
+            terms: cust.payment_terms || "",
+            address: cstr(cust.primary_address).replace(/<br>/g, ", ") || addresses[cust.customer_primary_address] || "",
+            collector: collectors[party] || "",
+            credit_limit: flt(credit_limits[party]),
+            rows: party_rows,
+            ccy: ccy,
+            nf: nf_of(ccy),
+            invoiced: invoiced,
+            credited: credited,
+            outstanding: outstanding,
+            buckets: buckets,
+            earliest: earliest
+        });
     }
 
-    var collector = (customer.sales_team && customer.sales_team.length) ? customer.sales_team[0].sales_person : "";
-    var vat_no = customer.tax_id || customer.custom_vat_registration_number || "";
-    var cr_no = customer.custom_commercial_registration_number || "";
-    var name_ar = customer.customer_name_in_arabic || customer.custom_customer_name_arabic || "";
-    var customer_label = customer.customer_name || (rows.length ? rows[0].customer_name : "") || party;
-
-    var address = cstr(customer.primary_address).replace(/<br>/g, ", ");
-    try {
-        if (!address && customer.customer_primary_address) {
-            frappe.call({
-                method: "frappe.client.get",
-                args: { doctype: "Address", name: customer.customer_primary_address },
-                async: false,
-                callback: function (r) {
-                    var a = (r && r.message) || {};
-                    address = [a.address_line1, a.address_line2, a.city, a.pincode].filter(Boolean).join(", ");
-                }
-            });
-        }
-    } catch (address_error) { address = address || ""; }
-
-    /* ---- letter head artwork, both ends, drawn by this template.
-
-           frappe/public/html/print_template.html wraps this content for the browser
-           Print path and the PDF path alike, but it draws the letter head only when
-           the print dialog has With Letter head ticked, and it draws the footer band
-           only when Repeat Header and Footer is ticked on top of that. Leave the
-           dialog alone - which is the normal way to export - and the statement came
-           out with no artwork at either end, while the Print button, where the
-           letter head was ticked, carried it. Fetching both ends here makes the two
-           match without anybody having to remember a checkbox.
-
-           Skipped when the dialog is already drawing the artwork, so ticking the box
-           never doubles it up. ---- */
-    var lh_header = "", lh_footer = "";
+    /* ---- letter head artwork, unless the print dialog is already drawing it ---- */
+    var logo = "";
     var with_letter_head = print_settings && print_settings.with_letter_head;
     try {
         if (!with_letter_head) {
+            var head_filters = (print_settings && print_settings.letter_head)
+                ? { name: print_settings.letter_head }
+                : { is_default: 1, disabled: 0 };
             frappe.call({
-                method: "sf_trading.api.statement_of_account.get_letter_head_artwork",
-                args: {
-                    letter_head: (print_settings && print_settings.letter_head_name) || null,
-                    company: filters.company || null,
-                },
+                method: "frappe.client.get_value",
+                args: { doctype: "Letter Head", filters: head_filters, fieldname: ["content"] },
                 async: false,
                 callback: function (r) {
-                    var art = (r && r.message) || {};
-                    /* Absolute already: wkhtmltopdf renders each band as a document of
-                       its own, with no site to resolve a site-relative src against. */
-                    lh_header = cstr(art.header_image);
-                    lh_footer = cstr(art.footer_image);
+                    var content = cstr(r && r.message && r.message.content);
+                    var found = content.match(/<img[^>]+src=["']([^"']+)["']/i);
+                    logo = found ? found[1] : "";
+                    /* The PDF is rendered server side with no page of its own to
+                       resolve against, so a site-relative src would come out blank. */
+                    if (logo.indexOf("/") === 0) { logo = frappe.urllib.get_base_url() + logo; }
                 }
             });
         }
-    } catch (letter_head_error) { lh_header = ""; lh_footer = ""; }
+    } catch (letter_head_error) { logo = ""; }
 
     var company = filters.company || "";
 %}
 
-{% if (lh_header) { %}
-<div class="letter-head"><div class="header"><img src="{{ lh_header }}"></div></div>
+{% if (truncated) { %}
+<div class="soa-warn">
+    {%= __("This report covers {0} customers. Only the first {1} statements are printed — narrow the Party filter to print the rest.", [customer_count, MAX_STATEMENTS]) %}
+</div>
 {% } %}
 
-<div class="soa-head">
+{% if (!statements.length) { %}
+<div class="soa-empty">{%= __("Nothing outstanding for the selected filters.") %}</div>
+{% } %}
+
+{% for (var s = 0; s < statements.length; s++) { %}
+{% var st = statements[s]; %}
+{% var amt = function (value) { return format_number(flt(value), st.nf); }; %}
+<div class="soa-statement">
+    <div class="soa-head">
         <table class="soa-mast">
             <tr>
-                <td style="width: 60mm" class="soa-logo"></td>
-                <td style="width: 66mm" class="soa-org">{% if (!with_letter_head && !lh_header) { %}{{ company }}{% } %}</td>
+                <td style="width: 60mm" class="soa-logo">
+                    {% if (logo) { %}<img src="{{ logo }}">{% } %}
+                </td>
+                <td style="width: 66mm" class="soa-org">{% if (!with_letter_head) { %}{{ company }}{% } %}</td>
                 <td style="width: 70mm" class="soa-doc-title">
                     {%= __("Statement of Account") %} <span class="ar">/ كشف حساب</span>
                 </td>
@@ -432,7 +539,7 @@
                             <td class="lbl" style="width: 30mm">
                                 <span class="ar">من الفترة</span><span class="en">{%= __("Period From") %}</span>
                             </td>
-                            <td class="val">{%= on_date(earliest) %}</td>
+                            <td class="val">{%= on_date(st.earliest) %}</td>
                         </tr>
                         <tr>
                             <td class="lbl">
@@ -444,13 +551,13 @@
                             <td class="lbl">
                                 <span class="ar">الحد الائتماني</span><span class="en">{%= __("Credit Limit") %}</span>
                             </td>
-                            <td class="val">{%= credit_limit ? amount(credit_limit) + " " + ccy : "" %}</td>
+                            <td class="val">{%= st.credit_limit ? amt(st.credit_limit) + " " + st.ccy : "" %}</td>
                         </tr>
                         <tr>
                             <td class="lbl">
                                 <span class="ar">السجل التجاري</span><span class="en">{%= __("Customer CR No.") %}</span>
                             </td>
-                            <td class="val">{{ cr_no }}</td>
+                            <td class="val">{{ st.cr_no }}</td>
                         </tr>
                     </table>
                 </td>
@@ -462,35 +569,35 @@
                                 <span class="ar">السادة</span><span class="en">{%= __("M/s") %}</span>
                             </td>
                             <td class="val" style="width: 43mm">
-                                {% if (name_ar) { %}<span class="val-ar">{{ name_ar }}</span>{% } %}
-                                {{ customer_label }}
+                                {% if (st.name_ar) { %}<span class="val-ar">{{ st.name_ar }}</span>{% } %}
+                                {{ st.label }}
                             </td>
                             <td class="lbl" style="width: 27mm">
                                 <span class="ar">فترة السداد</span><span class="en">{%= __("Payment Term") %}</span>
                             </td>
-                            <td class="val" style="width: 28mm">{{ customer.payment_terms || "" }}</td>
+                            <td class="val" style="width: 28mm">{{ st.terms }}</td>
                         </tr>
                         <tr>
                             <td class="lbl">
                                 <span class="ar">رقم العميل</span><span class="en">{%= __("Customer ID") %}</span>
                             </td>
-                            <td class="val">{{ party }}</td>
+                            <td class="val">{{ st.party }}</td>
                             <td class="lbl">
                                 <span class="ar">المحصل</span><span class="en">{%= __("Collector") %}</span>
                             </td>
-                            <td class="val">{{ collector }}</td>
+                            <td class="val">{{ st.collector }}</td>
                         </tr>
                         <tr>
                             <td class="lbl">
                                 <span class="ar">العنوان</span><span class="en">{%= __("Address") %}</span>
                             </td>
-                            <td class="val" colspan="3">{{ address }}</td>
+                            <td class="val" colspan="3">{{ st.address }}</td>
                         </tr>
                         <tr>
                             <td class="lbl">
                                 <span class="ar">الرقم الضريبي</span><span class="en">{%= __("Customer VAT No.") %}</span>
                             </td>
-                            <td class="val" colspan="3">{{ vat_no }}</td>
+                            <td class="val" colspan="3">{{ st.vat_no }}</td>
                         </tr>
                     </table>
                 </td>
@@ -522,86 +629,78 @@
                 <col style="width: 14.5%">
             </colgroup>
             <tr>
-        <th>{%= __("Date") %}<span class="ar">التاريخ</span></th>
-        <th>{%= __("Due Date") %}<span class="ar">تاريخ الاستحقاق</span></th>
-        <th>{%= __("Branch") %}<span class="ar">الفرع</span></th>
-        <th>{%= __("Document No") %}<span class="ar">رقم المستند</span></th>
-        <th>{%= __("Type") %}<span class="ar">النوع</span></th>
-        <th>{%= __("Age") %}<span class="ar">العمر</span></th>
-        <th>{%= __("LPO") %}<span class="ar">أمر الشراء</span></th>
-        <th>{%= __("Invoiced") %}<span class="ar">مدين</span></th>
-        <th>{%= __("Paid / Credit") %}<span class="ar">دائن</span></th>
-        <th>{%= __("Outstanding") %}<span class="ar">الرصيد</span></th>
+                <th>{%= __("Date") %}<span class="ar">التاريخ</span></th>
+                <th>{%= __("Due Date") %}<span class="ar">تاريخ الاستحقاق</span></th>
+                <th>{%= __("Branch") %}<span class="ar">الفرع</span></th>
+                <th>{%= __("Document No") %}<span class="ar">رقم المستند</span></th>
+                <th>{%= __("Type") %}<span class="ar">النوع</span></th>
+                <th>{%= __("Age") %}<span class="ar">العمر</span></th>
+                <th>{%= __("LPO") %}<span class="ar">أمر الشراء</span></th>
+                <th>{%= __("Invoiced") %}<span class="ar">مدين</span></th>
+                <th>{%= __("Paid / Credit") %}<span class="ar">دائن</span></th>
+                <th>{%= __("Outstanding") %}<span class="ar">الرصيد</span></th>
             </tr>
         </table>
-</div>
+    </div>
 
-<table class="soa">
-    <colgroup>
-        <col style="width: 9.5%"><col style="width: 9.5%"><col style="width: 5.5%">
-        <col style="width: 19%"><col style="width: 5.5%"><col style="width: 4.5%">
-        <col style="width: 8%"><col style="width: 12%"><col style="width: 12%">
-        <col style="width: 14.5%">
-    </colgroup>
+    <table class="soa">
+        <colgroup>
+            <col style="width: 9.5%"><col style="width: 9.5%"><col style="width: 5.5%">
+            <col style="width: 19%"><col style="width: 5.5%"><col style="width: 4.5%">
+            <col style="width: 8%"><col style="width: 12%"><col style="width: 12%">
+            <col style="width: 14.5%">
+        </colgroup>
+        <tbody>
+            {% for (var i = 0; i < st.rows.length; i++) { %}
+                {% var row = st.rows[i]; %}
+                <tr>
+                    <td class="nowrap">{%= on_date(row.posting_date) %}</td>
+                    <td class="nowrap">{%= on_date(row.due_date) %}</td>
+                    <td class="mid">{{ branch_of(row.cost_center) }}</td>
+                    <td>{{ row.voucher_no || "" }}</td>
+                    <td class="mid">{%= type_code(row) %}</td>
+                    <td class="mid overdue">{%= flt(row.age) > 0 ? cint(row.age) : "" %}</td>
+                    <td class="muted">{{ row.po_no || "" }}</td>
+                    <td class="num nowrap">{%= amt(row.invoiced) %}</td>
+                    <td class="num nowrap">{%= amt(flt(row.paid) + flt(row.credit_note)) %}</td>
+                    <td class="num nowrap">{%= amt(row.outstanding) %}</td>
+                </tr>
+            {% } %}
+        </tbody>
+    </table>
 
+    <table class="soa-close">
+        <colgroup>
+            <col style="width: 61.5%"><col style="width: 12%"><col style="width: 12%"><col style="width: 14.5%">
+        </colgroup>
+        <tr>
+            <td class="legend" colspan="4">
+                {%= __("PY - Payment, IN - Invoice, CR - Credit, DB - Debit Note, TR - Return, AD - Financial Adjustment") %}
+            </td>
+        </tr>
+        <tr>
+            <td class="tot-lbl">{%= __("Total") %} <span dir="rtl">الاجمالي</span></td>
+            <td class="tot-val">{%= amt(st.invoiced) %}</td>
+            <td class="tot-val">{%= amt(st.credited) %}</td>
+            <td class="tot-val">{%= amt(st.outstanding) %}</td>
+        </tr>
+    </table>
 
-    <tbody>
-        {% for (var i = 0; i < rows.length; i++) { %}
-            {% var row = rows[i]; %}
+    <table class="soa-age">
+        <thead>
             <tr>
-                <td class="nowrap">{%= on_date(row.posting_date) %}</td>
-                <td class="nowrap">{%= on_date(row.due_date) %}</td>
-                <td class="mid">{{ branch_of(row.cost_center) }}</td>
-                <td>{{ voucher_label(row) }}</td>
-                <td class="mid">{%= type_code(row) %}</td>
-                <td class="mid overdue">{%= flt(row.age) > 0 ? cint(row.age) : "" %}</td>
-                <td class="muted">{{ row.po_no || "" }}</td>
-                <td class="num nowrap">{%= amount(row.invoiced) %}</td>
-                <td class="num nowrap">{%= amount(flt(row.paid) + flt(row.credit_note)) %}</td>
-                <td class="num nowrap">{%= amount(row.outstanding) %}</td>
+                {% for (var h = 0; h < bucket_labels.length; h++) { %}
+                    <th>{{ bucket_labels[h] }}</th>
+                {% } %}
             </tr>
-        {% } %}
-
-        {% if (!rows.length) { %}
-            <tr><td colspan="10" class="soa-empty">{%= __("No outstanding items for this customer.") %}</td></tr>
-        {% } %}
-    </tbody>
-</table>
-
-<table class="soa-close">
-    <colgroup>
-        <col style="width: 61.5%"><col style="width: 12.5%"><col style="width: 12.5%"><col style="width: 13.5%">
-    </colgroup>
-    <tr>
-        <td class="legend" colspan="4">
-            {%= __("PY - Payment, IN - Invoice, CR - Credit, DB - Debit Note, TR - Return, AD - Financial Adjustment") %}
-        </td>
-    </tr>
-    <tr>
-        <td class="tot-lbl">{%= __("Total") %} <span dir="rtl">الاجمالي</span></td>
-        <td class="tot-val">{%= amount(total_invoiced) %}</td>
-        <td class="tot-val">{%= amount(total_credit) %}</td>
-        <td class="tot-val">{%= amount(total_outstanding) %}</td>
-    </tr>
-</table>
-
-<table class="soa-age">
-    <thead>
-        <tr>
-            {% for (var h = 0; h < bucket_labels.length; h++) { %}
-                <th>{{ bucket_labels[h] }}</th>
-            {% } %}
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-            {% for (var v = 0; v < buckets.length; v++) { %}
-                <td class="{%= v === 0 ? "notdue" : "" %}">{%= amount(buckets[v]) %}</td>
-            {% } %}
-        </tr>
-    </tbody>
-</table>
-
-{% if (lh_footer) { %}
-<div class="letter-head-footer"><div class="footer"><img src="{{ lh_footer }}"></div></div>
+        </thead>
+        <tbody>
+            <tr>
+                {% for (var v = 0; v < st.buckets.length; v++) { %}
+                    <td class="{%= v === 0 ? "notdue" : "" %}">{%= amt(st.buckets[v]) %}</td>
+                {% } %}
+            </tr>
+        </tbody>
+    </table>
+</div>
 {% } %}
