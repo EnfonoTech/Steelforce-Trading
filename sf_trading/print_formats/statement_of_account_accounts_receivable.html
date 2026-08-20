@@ -241,6 +241,12 @@
         font-weight: 700;
     }
 
+    /* Letter head artwork drawn by this format, full width, per statement. */
+    .soa-lh { margin-bottom: 2.5mm; }
+    .soa-lh img { width: 100%; max-width: 100%; }
+    .soa-lh-foot { margin-top: 3.5mm; }
+    .soa-lh-foot img { width: 100%; max-width: 100%; }
+
     .soa-empty { padding: 8mm 0; text-align: center; font-size: 8.5pt; color: #6b7280; }
 
     /* The artwork this template draws itself, at full content width so it reads the
@@ -476,32 +482,57 @@
         });
     }
 
-    /* ---- letter head artwork, unless the print dialog is already drawing it ---- */
-    var logo = "";
+    /* ---- letter head artwork ----
+       Drawn here in every case, ticked or not, and once per statement.
+
+       Leaving it to the print wrapper does not work on this bench. With the box
+       ticked the wrapper emits the artwork inside #header-html, and this
+       wkhtmltopdf is built against unpatched Qt, which answers --header-html
+       with "not support using unpatched qt, and will be ignored" — so the PDF
+       came out with no letter head at all. In the browser the wrapper prints it
+       once at the top of the document, which since statements became one per
+       customer meant only the first customer got it.
+
+       Drawing it here fixes both: every statement carries the artwork, in both
+       print paths, whether or not the box is ticked. When artwork is found the
+       wrapper copies are hidden so nothing doubles up; a letter head made of
+       markup rather than an image finds none, and the wrapper still prints. */
+    var logo = "", logo_footer = "";
     var with_letter_head = print_settings && print_settings.with_letter_head;
+    var absolute = function (src) {
+        /* The PDF renders server side with no page of its own to resolve
+           against, so a site-relative src would come out blank. */
+        return src.indexOf("/") === 0 ? frappe.urllib.get_base_url() + src : src;
+    };
     try {
-        if (!with_letter_head) {
-            var head_filters = (print_settings && print_settings.letter_head)
-                ? { name: print_settings.letter_head }
-                : { is_default: 1, disabled: 0 };
-            frappe.call({
-                method: "frappe.client.get_value",
-                args: { doctype: "Letter Head", filters: head_filters, fieldname: ["content"] },
-                async: false,
-                callback: function (r) {
-                    var content = cstr(r && r.message && r.message.content);
-                    var found = content.match(/<img[^>]+src=["']([^"']+)["']/i);
-                    logo = found ? found[1] : "";
-                    /* The PDF is rendered server side with no page of its own to
-                       resolve against, so a site-relative src would come out blank. */
-                    if (logo.indexOf("/") === 0) { logo = frappe.urllib.get_base_url() + logo; }
-                }
-            });
-        }
-    } catch (letter_head_error) { logo = ""; }
+        var head_filters = (print_settings && print_settings.letter_head)
+            ? { name: print_settings.letter_head }
+            : { is_default: 1, disabled: 0 };
+        frappe.call({
+            method: "frappe.client.get_value",
+            args: { doctype: "Letter Head", filters: head_filters, fieldname: ["content", "footer"] },
+            async: false,
+            callback: function (r) {
+                var head = cstr(r && r.message && r.message.content);
+                var foot = cstr(r && r.message && r.message.footer);
+                var top_img = head.match(/<img[^>]+src=["']([^"']+)["']/i);
+                var bottom_img = foot.match(/<img[^>]+src=["']([^"']+)["']/i);
+                logo = top_img ? absolute(top_img[1]) : "";
+                logo_footer = bottom_img ? absolute(bottom_img[1]) : "";
+            }
+        });
+    } catch (letter_head_error) { logo = ""; logo_footer = ""; }
 
     var company = filters.company || "";
 %}
+
+{% if (logo || logo_footer) { %}
+<style>
+    /* This format draws the letter head itself, once per statement. Hide the
+       copies the print wrapper adds so the artwork never doubles up. */
+    .letter-head, .letter-head-footer { display: none !important; }
+</style>
+{% } %}
 
 {% if (truncated) { %}
 <div class="soa-warn">
@@ -517,13 +548,13 @@
 {% var st = statements[s]; %}
 {% var amt = function (value) { return format_number(flt(value), st.nf); }; %}
 <div class="soa-statement">
+    {% if (logo) { %}<div class="soa-lh"><img src="{{ logo }}"></div>{% } %}
+
     <div class="soa-head">
         <table class="soa-mast">
             <tr>
-                <td style="width: 60mm" class="soa-logo">
-                    {% if (logo) { %}<img src="{{ logo }}">{% } %}
-                </td>
-                <td style="width: 66mm" class="soa-org">{% if (!with_letter_head) { %}{{ company }}{% } %}</td>
+                <td style="width: 60mm"></td>
+                <td style="width: 66mm" class="soa-org">{% if (!logo) { %}{{ company }}{% } %}</td>
                 <td style="width: 70mm" class="soa-doc-title">
                     {%= __("Statement of Account") %} <span class="ar">/ كشف حساب</span>
                 </td>
@@ -702,5 +733,7 @@
             </tr>
         </tbody>
     </table>
+
+    {% if (logo_footer) { %}<div class="soa-lh-foot"><img src="{{ logo_footer }}"></div>{% } %}
 </div>
 {% } %}
