@@ -247,6 +247,26 @@
     .soa-lh-foot { margin-top: 3.5mm; }
     .soa-lh-foot img { width: 100%; max-width: 100%; }
 
+    /* ---------- never slice a block across a page ----------
+       The closing blocks were being cut at the page boundary: the ageing band
+       heading printed at the foot of one sheet and its figures on the next, and
+       once the band came away on its own with the Total left behind. A
+       statement that splits mid-band reads as damaged, so legend, totals,
+       ageing band and the footer artwork travel together as one unit, and the
+       customer block is likewise unbreakable. Only the ledger rows may flow
+       across pages, which is what they are for. */
+    .soa-tail { page-break-inside: avoid; break-inside: avoid; }
+    .soa-head { page-break-inside: avoid; break-inside: avoid; }
+    .soa-close, .soa-age { page-break-inside: avoid; break-inside: avoid; }
+    .soa-lh, .soa-lh-foot { page-break-inside: avoid; break-inside: avoid; }
+
+    /* The wrapper prints a "Page N of M" line. Nothing can fill those numbers
+       here: the browser never substitutes them, and this wkhtmltopdf ignores
+       --footer-html entirely, so it prints as a bare "Page of". Hidden only
+       where it renders inline, by an id the PDF footer document does not carry
+       — install the patched wkhtmltox and the real footer keeps its numbers. */
+    #footer-html .page-number { display: none !important; }
+
     .soa-empty { padding: 8mm 0; text-align: center; font-size: 8.5pt; color: #6b7280; }
 
     /* The artwork this template draws itself, at full content width so it reads the
@@ -722,6 +742,7 @@
         </tbody>
     </table>
 
+    <div class="soa-tail">
     <table class="soa-close">
         <colgroup>
             <col style="width: 61.5%"><col style="width: 12%"><col style="width: 12%"><col style="width: 14.5%">
@@ -757,5 +778,6 @@
     </table>
 
     {% if (logo_footer) { %}<div class="soa-lh-foot"><img src="{{ logo_footer }}"></div>{% } %}
+    </div>
 </div>
 {% } %}
