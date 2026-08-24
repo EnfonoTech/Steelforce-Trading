@@ -53,7 +53,11 @@ app_include_js = [
 
 # doctype_js: loaded only when that specific doctype form opens
 doctype_js = {
-	"Sales Invoice":    "public/js/sales_invoice.js",
+	"Sales Invoice":    [
+		"public/js/sales_invoice.js",
+		# declines to paint Return / Credit Note once the return window has closed, and says why
+		"public/js/sales_return_window.js",
+	],
 	"Stock Entry":      "public/js/stock_entry.js",
 	"Material Request": "public/js/material_request.js",
 	"Customer":         "public/js/customer_company.js",
@@ -306,6 +310,8 @@ doc_events = {
 		"validate": [
 			"sf_trading.api.sales_invoice_override.validate",
 			"sf_trading.api.sales_invoice_override.validate_driver_payment",
+			# a late return cannot be SAVED, so it cannot be parked in drafts either
+			"sf_trading.sales_return.validate_return_window",
 			_BRANCH_HOOK,
 			_LH_HOOK,
 			_SP_HOOK,
@@ -410,6 +416,9 @@ doc_events = {
 #
 override_whitelisted_methods = {
 	"erpnext.controllers.queries.item_query": "sf_trading.api.item_search.search_items_with_stock_and_rate",
+	# the return window refuses before the credit note is built — the one check no stale browser
+	# and no re-painted toolbar can get past. See sf_trading/sales_return.py.
+	"erpnext.accounts.doctype.sales_invoice.sales_invoice.make_sales_return": "sf_trading.sales_return.make_sales_return",
 }
 #
 # each overriding function accepts a `data` argument;
@@ -761,6 +770,14 @@ fixtures = [
 		)]],
 	},
 ]
+
+# ─── Approval applicability (permission_manager extension point) ─────────────
+# A PM Workflow is defined per doctype, and permission_manager is installed on every PM client, so
+# it asks rather than assumes: this resolver tells it that a Sales Invoice workflow here governs
+# returns above the configured threshold and nothing else. Without it, such a workflow would take
+# the Submit button off every ordinary sale. Policy lives here, the machinery stays there.
+pm_workflow_applicability = ["sf_trading.sales_return.workflow_applicability"]
+
 
 # ─── Scheduler ────────────────────────────────────────────────────────────────
 scheduler_events = {

@@ -8,3 +8,4 @@ sf_trading.patches.fix_branch_config_mop_child_table
 sf_trading.patches.v0_1.approver_employee_to_user
 sf_trading.patches.v0_1.loyalty_invoice_to_journal_rows
 sf_trading.patches.v0_1.backfill_payment_reference_date
+sf_trading.patches.v0_1.adopt_sales_return_settings
