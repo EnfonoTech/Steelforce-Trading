@@ -183,15 +183,36 @@ def apply_planned_payments(doc, method=None):
 
 	from sf_trading.api.sales_invoice_payment import create_pos_payments_for_invoice
 
-	cheque_row = next((row for row in rows if row.cheque_no or row.cheque_date), None)
-
-	try:
-		created = create_pos_payments_for_invoice(
-			sales_invoice=doc.name,
-			payments=[{"mode_of_payment": row.mode_of_payment, "amount": flt(row.amount)} for row in rows],
-			cheque_no=cheque_row.cheque_no if cheque_row else None,
-			cheque_date=str(cheque_row.cheque_date) if cheque_row and cheque_row.cheque_date else None,
+	# `create_pos_payments_for_invoice` applies a cheque number and date to EVERY row of the call
+	# it is given -- which is why the popup has always made two calls for a mixed payment. Sending
+	# a cheque row and a cash row together would stamp the cash entry with the cheque's reference
+	# and post it on the cheque's date. Grouped the same way here.
+	cheque_rows = [row for row in rows if row.cheque_no or row.cheque_date]
+	plain_rows = [row for row in rows if row not in cheque_rows]
+	batches = []
+	for group in (cheque_rows, plain_rows):
+		if not group:
+			continue
+		lead = group[0]
+		batches.append(
+			(
+				group,
+				{
+					"payments": [
+						{"mode_of_payment": row.mode_of_payment, "amount": flt(row.amount)} for row in group
+					],
+					"cheque_no": lead.cheque_no or None,
+					"cheque_date": str(lead.cheque_date) if lead.cheque_date else None,
+				},
+			)
 		)
+
+	created = []
+	ordered_rows = []
+	try:
+		for group, args in batches:
+			created.extend(create_pos_payments_for_invoice(sales_invoice=doc.name, **args))
+			ordered_rows.extend(group)
 	except Exception:
 		frappe.log_error(title=f"sf_trading: planned refund for {doc.name} could not be paid")
 		frappe.msgprint(
@@ -204,7 +225,7 @@ def apply_planned_payments(doc, method=None):
 
 	# stamp each row with the entry that paid it. The document is submitted by now, so the rows are
 	# written directly rather than through a save the parent would refuse.
-	for row, payment_entry in zip(rows, created, strict=False):
+	for row, payment_entry in zip(ordered_rows, created, strict=False):
 		frappe.db.set_value(CHILD, row.name, "payment_entry", payment_entry, update_modified=False)
 
 	frappe.msgprint(

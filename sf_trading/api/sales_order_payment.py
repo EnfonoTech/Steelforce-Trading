@@ -117,6 +117,16 @@ def create_payments_for_sales_order(
 	if so.docstatus != 1:
 		frappe.throw(_("Sales Order {0} must be submitted before collecting payment.").format(so.name))
 
+	# The form hides the button on a closed order; this is the same answer for anything reaching
+	# the endpoint directly. A closed order has been abandoned and one on hold is disputed --
+	# taking money against either is a decision somebody has to make deliberately, by reopening it.
+	if so.status in ("Closed", "On Hold"):
+		frappe.throw(
+			_("Sales Order {0} is {1}. Reopen it before collecting a payment against it.").format(
+				so.name, _(so.status)
+			)
+		)
+
 	if isinstance(payments, str):
 		try:
 			payments = json.loads(payments)

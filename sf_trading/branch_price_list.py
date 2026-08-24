@@ -25,6 +25,18 @@ the same way:
 Branch is never mandatory. A document with no branch, or a branch no list names, is priced
 exactly as before.
 
+A branch list holds differences, not a whole catalogue
+------------------------------------------------------
+ERPNext prices a row from ONE list. Swap the list and any item that list does not price returns
+nothing -- `get_price_list_rate_for` gives None and the row keeps whatever it had, which on a new
+row is zero. A branch that prices twenty items differently would therefore zero-rate the other
+sixteen thousand.
+
+So a row the branch's list is silent about falls back to the list the document would otherwise
+have used. That is what "this branch charges differently for these items" means to the people
+using it, and it is the difference between a price list that holds a handful of overrides and one
+that has to be maintained in full for every branch.
+
 What gets replaced, and what does not
 -------------------------------------
 Applied at `before_validate`, which is the last point before ERPNext prices the rows. It sets
@@ -38,6 +50,7 @@ save time.
 import frappe
 from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+from frappe.utils import flt
 
 BRANCH_TABLE = "custom_branches"
 CHILD_DOCTYPE = "Price List Branch"
@@ -195,6 +208,67 @@ def apply_branch_price_list(doc, method=None):
 	# the currency and conversion rate belong to the list, so let the controller re-read them
 	doc.set("price_list_currency", None)
 	doc.set("plc_conversion_rate", None)
+
+	_fill_gaps_from(doc, fallback=current, branch_list=wanted)
+
+
+def _fill_gaps_from(doc, fallback: str, branch_list: str):
+	"""Price the rows the branch's list says nothing about, from the list it replaced.
+
+	Runs at before_validate, so the controller prices the rest immediately afterwards and simply
+	finds these rows already carrying a rate -- `get_price_list_rate` leaves a row alone when it
+	finds no Item Price, rather than zeroing it.
+	"""
+	if not fallback or fallback == branch_list:
+		return
+
+	rows = [row for row in (doc.get("items") or []) if row.get("item_code")]
+	if not rows:
+		return
+
+	priced_on_branch = set(
+		frappe.get_all(
+			"Item Price",
+			filters={
+				"price_list": branch_list,
+				"item_code": ["in", list({row.item_code for row in rows})],
+			},
+			pluck="item_code",
+			ignore_permissions=True,
+		)
+	)
+
+	gaps = [row for row in rows if row.item_code not in priced_on_branch]
+	if not gaps:
+		return
+
+	fallback_rates = {
+		price.item_code: flt(price.price_list_rate)
+		for price in frappe.get_all(
+			"Item Price",
+			filters={
+				"price_list": fallback,
+				"item_code": ["in", list({row.item_code for row in gaps})],
+			},
+			fields=["item_code", "price_list_rate"],
+			order_by="valid_from desc",
+			ignore_permissions=True,
+		)
+	}
+	if not fallback_rates:
+		return
+
+	for row in gaps:
+		rate = fallback_rates.get(row.item_code)
+		if not rate:
+			continue
+		# only where the branch has nothing to say: a rate somebody typed is never overwritten,
+		# because a row already carrying one is left exactly as the controller would leave it
+		if flt(row.get("price_list_rate")) and flt(row.get("rate")):
+			continue
+		row.price_list_rate = rate
+		if not flt(row.get("rate")):
+			row.rate = rate
 
 
 # ─── Guarding the mapping itself ───────────────────────────────────────────────
