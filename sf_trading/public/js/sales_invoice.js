@@ -699,6 +699,7 @@ frappe.ui.form.on("Sales Invoice", {
 	},
 	refresh: function(frm) {
 		sf_load_return_approval_rule();
+		frm.__sf_plan_mode = false;
 		if (!frm._sf_savesubmit_wrapped) {
 			frm._sf_savesubmit_wrapped = true;
 			frm.savesubmit = function(btn, callback, on_error) {
@@ -815,10 +816,17 @@ frappe.ui.form.on("Sales Invoice", {
 		if (frappe.flags.sf_trading_skip_payment_popup || frappe.flags.sf_trading_popup_showing) return;
 		if (frm.doc.docstatus !== 0 || !frm.doc.name || frm.doc.name.startsWith("new-")) return;
 
-		// The refund can only be paid against a submitted return, and this one is waiting on an
-		// approval — so there is nothing to collect yet. Say so instead of opening the popup.
+		// A return waiting on approval still asks how the refund will be paid — what it cannot do
+		// is pay it, because a Payment Entry needs a submitted document to point at. So the popup
+		// opens in plan mode: the answer is kept on the return and paid the moment it is approved.
 		if (sf_return_needs_approval(frm)) {
-			sf_say_needs_approval(frm);
+			frm.__sf_plan_mode = true;
+			if (Math.abs(flt(frm.doc.grand_total)) > 0) {
+				if (frm.doc.custom_payment_mode === "Cheque") sf_trading_show_pdc_popup(frm);
+				else sf_trading_show_pos_total_popup(frm);
+			} else {
+				sf_say_needs_approval(frm);
+			}
 			return;
 		}
 
@@ -971,6 +979,86 @@ function sf_trading_amount_to_collect(frm, precision) {
 	return flt(Math.abs(gross) - Math.abs(advance), precision);
 }
 
+// ── Refund plans ──────────────────────────────────────────────────────────────
+// Kept on the return, not posted: sf_trading/planned_payment.py explains why a Payment Entry
+// cannot exist against a document that is not submitted yet.
+
+function sf_collect_plan(rows, vals, prefix, precision) {
+	const payload = [];
+	let total = 0;
+	rows.forEach(function(mode, idx) {
+		const amount = flt(vals[prefix + idx]) || 0;
+		if (amount > 0) {
+			payload.push({ mode_of_payment: mode.mode_of_payment || mode, amount });
+			total += amount;
+		}
+	});
+	return { payload, total: flt(total, precision) };
+}
+
+function sf_send_plan(frm, d, payload, total, invoice_total, currency, extra) {
+	if (!payload.length) {
+		frappe.msgprint({ title: __("Error"), message: __("Please enter at least one payment amount."), indicator: "red" });
+		return;
+	}
+	if (total - invoice_total > 0.0001) {
+		frappe.msgprint({
+			title: __("Error"),
+			message: __("The refund of {0} is more than the {1} this return owes.", [
+				format_currency(total, currency), format_currency(invoice_total, currency),
+			]),
+			indicator: "red",
+		});
+		return;
+	}
+
+	d.hide();
+	frappe.flags.sf_trading_popup_showing = false;
+	frappe.call({
+		method: "sf_trading.planned_payment.set_planned_payments",
+		args: Object.assign({ sales_invoice: frm.doc.name, payments: JSON.stringify(payload) }, extra || {}),
+		freeze: true,
+		freeze_message: __("Saving the refund plan..."),
+		callback: function() {
+			frm.reload_doc();
+			frappe.msgprint({
+				title: __("Refund Planned"),
+				message:
+					__("{0} will be paid out when this return is approved.", [format_currency(total, currency)]) +
+					"<br><br>" +
+					__("Use <b>Actions &rarr; Send for Approval</b> now. The Payment Entry is created and submitted with the return itself, so nothing is posted until then."),
+				indicator: "green",
+			});
+		},
+	});
+}
+
+function sf_save_refund_plan(frm, d, payments, vals, precision, invoice_total, currency) {
+	const { payload, total } = sf_collect_plan(payments, vals, "pay_", precision);
+	sf_send_plan(frm, d, payload, total, invoice_total, currency);
+}
+
+function sf_save_cheque_refund_plan(frm, d, cheque_modes, cash_modes, vals, precision, invoice_total, currency) {
+	const cheque = sf_collect_plan(cheque_modes, vals, "chq_", precision);
+	const cash = sf_collect_plan(cash_modes, vals, "csh_", precision);
+	const payload = cheque.payload.concat(cash.payload);
+	const total = flt(cheque.total + cash.total, precision);
+
+	if (cheque.payload.length && !((vals.cheque_no || "").trim() && vals.cheque_date)) {
+		frappe.msgprint({
+			title: __("Cheque Details Required"),
+			message: __("Enter the cheque number and date for the cheque amount."),
+			indicator: "red",
+		});
+		return;
+	}
+
+	sf_send_plan(frm, d, payload, total, invoice_total, currency, {
+		cheque_no: cheque.payload.length ? (vals.cheque_no || "").trim() : undefined,
+		cheque_date: cheque.payload.length ? vals.cheque_date : undefined,
+	});
+}
+
 function sf_trading_get_currency_precision(currency_code) {
 	var doc = frappe.model.get_doc(":Currency", currency_code);
 	if (doc && doc.number_format) return get_number_format_info(doc.number_format).precision;
@@ -1097,13 +1185,20 @@ function sf_trading_render_dialog(frm, payments_list) {
 		}
 	}
 
+	const plan_mode = !!frm.__sf_plan_mode;
 	const dialog_opts = {
-		title: __("Enter Payment Amounts"), fields,
-		primary_action_label: is_registering ? __("Receive Payment") : __("Save & Submit"),
-		primary_action: function(vals) { if (vals) apply_payments_and_close(vals, true); },
+		title: plan_mode ? __("How will this refund be paid?") : __("Enter Payment Amounts"), fields,
+		primary_action_label: plan_mode
+			? __("Save Refund Plan")
+			: (is_registering ? __("Receive Payment") : __("Save & Submit")),
+		primary_action: function(vals) {
+			if (!vals) return;
+			if (plan_mode) sf_save_refund_plan(frm, d, payments, vals, curr_precision, invoice_total, currency);
+			else apply_payments_and_close(vals, true);
+		},
 		onhide: function() { frappe.flags.sf_trading_popup_showing = false; }
 	};
-	if (!is_registering) {
+	if (!is_registering && !plan_mode) {
 		dialog_opts.secondary_action_label = __("Save");
 		dialog_opts.secondary_action = function() {
 			const vals = d.get_values();
@@ -1300,10 +1395,18 @@ function sf_trading_show_pdc_popup(frm) {
 			}
 		}
 
+		const plan_mode = !!frm.__sf_plan_mode;
 		const d = new frappe.ui.Dialog({
-			title: __("Cheque Payment"), fields,
-			primary_action_label: __("Save & Submit"),
-			primary_action: function(vals) { if (vals) apply_and_close(vals, true); },
+			title: plan_mode ? __("How will this refund be paid?") : __("Cheque Payment"), fields,
+			primary_action_label: plan_mode ? __("Save Refund Plan") : __("Save & Submit"),
+			primary_action: function(vals) {
+				if (!vals) return;
+				if (plan_mode) {
+					sf_save_cheque_refund_plan(frm, d, cheque_modes, cash_modes, vals, precision, invoice_total, currency);
+					return;
+				}
+				apply_and_close(vals, true);
+			},
 			secondary_action_label: __("Save"),
 			secondary_action: function() {
 				if (frm.doc.docstatus === 0) {

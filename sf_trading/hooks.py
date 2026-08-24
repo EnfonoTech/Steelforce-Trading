@@ -163,6 +163,8 @@ after_migrate = [
 	"sf_trading.payment_entry_reference_date.ensure_custom_fields",
 	# Payment Mode on the order, carried onto the invoice raised from it
 	"sf_trading.sales_order_payment_mode.ensure_custom_fields",
+	# the refund a return will pay once it is approved
+	"sf_trading.planned_payment.ensure_custom_fields",
 	# Applicable for Branches on Price List — branch-wise pricing, ERPNext's own way
 	"sf_trading.branch_price_list.ensure_custom_fields",
 ]
@@ -273,6 +275,9 @@ doc_events = {
 			"sf_trading.api.payment_advice_hooks.on_payment_entry_cancel",
 			"sf_trading.pdc_transfer.on_cancel",
 		],
+		# an invoice consuming an advance adds its reference row to a payment that is already
+		# submitted, which never passes validate
+		"on_update_after_submit": "sf_trading.payment_entry_reference_date.fill_missing_reference_dates",
 	},
 	"Journal Entry": {
 		# validate, not before_validate: the controller fills `debit` from
@@ -318,9 +323,13 @@ doc_events = {
 			# freezes the valuation rate on rows invoiced ahead of delivery
 			"sf_trading.sbnd.freeze_valuation_rate",
 		],
+		# the refund a return promised is checked while refusing is still safe, and paid the
+		# moment the return is submitted -- approval and refund land together
+		"before_submit": "sf_trading.planned_payment.validate_planned_payments",
 		"on_submit": [
 			"sf_trading.inter_company.sales_invoice_on_submit",
 			"sf_trading.api.quotation.update_quotation_status_from_invoice",
+			"sf_trading.planned_payment.apply_planned_payments",
 		],
 		"on_cancel": "sf_trading.api.quotation.update_quotation_status_from_invoice",
 	},
@@ -746,6 +755,7 @@ fixtures = [
 			"Payment Entry Reference-custom_reference_date",
 			"Sales Order-custom_payment_mode",
 			"Price List-custom_branches",
+			"Sales Invoice-custom_planned_payments",
 			"Journal Entry-custom_loyalty_sales_invoice",
 			"Journal Entry Account-custom_loyalty_sales_invoice",
 			"Payment Entry-custom_payment_advice",

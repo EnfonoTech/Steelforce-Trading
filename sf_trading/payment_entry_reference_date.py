@@ -12,6 +12,13 @@ The field is filled on `validate`, so it is written once with the row and never 
 in step afterwards: the posting date of a submitted voucher does not move. Historical rows are
 filled by the patch `v0_1/backfill_payment_reference_date`, which is why the field carries
 `allow_on_submit` -- without it a submitted Payment Entry could not accept the value at all.
+
+`validate` is not the only way a reference row appears, though. When an invoice consumes an
+advance, ERPNext reaches into the **already submitted** payment and adds a row to it
+(`erpnext.accounts.utils.update_reference_in_payment_entry`) -- an update-after-submit, which
+runs `validate_update_after_submit` and `on_update_after_submit` and never `validate`. Payment
+Reconciliation does the same. Those rows arrived blank until `fill_missing_reference_dates`
+caught them on the way past.
 """
 
 import frappe
@@ -90,3 +97,30 @@ def set_reference_dates(doc, method=None):
 	dates = reference_dates(rows)
 	for row in rows:
 		row.set(FIELD, dates.get((row.reference_doctype, row.reference_name)))
+
+
+def fill_missing_reference_dates(doc, method=None):
+	"""on_update_after_submit: catch the rows that never passed validate.
+
+	An invoice allocating an advance, and Payment Reconciliation, both add reference rows to a
+	payment that is already submitted. Written straight to the row: the parent is mid-save, and a
+	value set on the object here would be lost with it.
+	"""
+	rows = [
+		row
+		for row in (doc.get("references") or [])
+		if not row.get(FIELD) and row.get("reference_doctype") and row.get("reference_name")
+	]
+	if not rows:
+		return
+
+	dates = reference_dates(rows)
+	for row in rows:
+		value = dates.get((row.reference_doctype, row.reference_name))
+		if not value:
+			continue
+		row.set(FIELD, value)
+		if row.get("name"):
+			frappe.db.set_value(
+				"Payment Entry Reference", row.name, FIELD, value, update_modified=False
+			)
