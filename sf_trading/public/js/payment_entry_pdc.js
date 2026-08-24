@@ -10,6 +10,40 @@
 // sf_trading/pdc_transfer.py.
 
 frappe.ui.form.on("Payment Entry", {
+	setup(frm) {
+		// Building the transfer by hand: only a submitted cheque receipt that has not been
+		// banked yet is worth offering, and the server checks the same thing on save.
+		frm.set_query("custom_pdc_source_payment_entry", function () {
+			return {
+				query: "sf_trading.pdc_transfer.cheques_awaiting_transfer",
+				filters: { company: frm.doc.company },
+			};
+		});
+	},
+
+	custom_pdc_source_payment_entry(frm) {
+		const cheque = frm.doc.custom_pdc_source_payment_entry;
+		if (!cheque || frm.doc.payment_type !== "Internal Transfer") return;
+		frappe.call({
+			method: "sf_trading.pdc_transfer.get_transfer_context",
+			args: { payment_entry: cheque },
+			callback(r) {
+				const context = r && r.message;
+				if (!context || !context.is_cheque) return;
+				// fill the transfer from the cheque, the way the button would have
+				frm.set_value("paid_from", context.from_account);
+				frm.set_value("paid_amount", context.amount);
+				frm.set_value("received_amount", context.amount);
+				if (context.cheque_no) frm.set_value("reference_no", context.cheque_no);
+				if (context.cheque_date) frm.set_value("reference_date", context.cheque_date);
+				frappe.show_alert(
+					{ message: __("Filled from cheque {0}.", [cheque]), indicator: "blue" },
+					4
+				);
+			},
+		});
+	},
+
 	refresh(frm) {
 		if (frm.doc.docstatus !== 1) return;
 		if (frm.doc.payment_type !== "Receive") return;

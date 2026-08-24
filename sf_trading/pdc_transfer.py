@@ -17,9 +17,16 @@ This module ties the two together:
   PDC Report call it Cleared. Cancelling the transfer takes it back off. `clearance_date` is a
   read-only field with no `allow_on_submit`, so it is written with `frappe.db.set_value` --
   exactly what core's own Bank Clearance tool does.
-* The transfer deliberately carries **no** mode of payment. The PDC Report selects Payment
-  Entries by cheque-coded mode; giving the transfer the cheque's mode would list the transfer
-  as a second cheque and double the outstanding PDC figure.
+* The transfer carries the cheque's own **mode of payment**, so a bank statement can be matched
+  against it and the collection reports read it as cheque money rather than as an unclassified
+  transfer. That means the PDC Report — which selects Payment Entries by cheque-coded mode —
+  would otherwise list the transfer as a second cheque and double the outstanding figure, so the
+  report excludes Internal Transfers unless they are asked for by name. The cheque reminder
+  notification excludes them too, or every banked cheque would generate a fresh reminder about
+  its own transfer.
+* A transfer can also be built by hand: create a Payment Entry of type Internal Transfer and name
+  the cheque in **PDC Payment Entry**. It is validated the same way and closes the cheque on
+  submit exactly as the button-made one does.
 """
 
 import frappe
@@ -44,11 +51,11 @@ def ensure_custom_fields():
 					"fieldtype": "Link",
 					"options": "Payment Entry",
 					"insert_after": "reference_date",
-					"read_only": 1,
 					"depends_on": 'eval:doc.payment_type=="Internal Transfer"',
 					"description": (
-						"The post-dated cheque this transfer banks. Set by the Create Internal "
-						"Transfer action; submitting the transfer marks that cheque cleared."
+						"The post-dated cheque this transfer banks. Filled in by the Create Internal "
+						"Transfer action, or picked here on a transfer you build yourself. Submitting "
+						"the transfer marks that cheque cleared."
 					),
 				}
 			]
@@ -116,6 +123,47 @@ def _load_cheque_entry(payment_entry: str):
 		frappe.throw(_("{0} has no account the cheque was received into.").format(pe.name))
 
 	return pe
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def cheques_awaiting_transfer(doctype, txt, searchfield, start, page_len, filters):
+	"""Link query: submitted cheque receipts nobody has banked yet.
+
+	For the PDC Payment Entry field on a transfer somebody is building by hand. Offering the
+	whole Payment Entry list there would invite naming a cheque that is already banked, or a
+	payment that is not a cheque at all -- both of which the save then refuses.
+	"""
+	modes = cheque_modes()
+	if not modes:
+		return []
+
+	conditions = {
+		"docstatus": 1,
+		"payment_type": "Receive",
+		"mode_of_payment": ["in", modes],
+		"clearance_date": ["is", "not set"],
+	}
+	if (filters or {}).get("company"):
+		conditions["company"] = filters["company"]
+	if txt:
+		conditions["name"] = ["like", f"%{txt}%"]
+
+	rows = frappe.get_all(
+		"Payment Entry",
+		filters=conditions,
+		fields=["name", "reference_no", "party_name", "received_amount", "reference_date"],
+		order_by="reference_date asc",
+		limit_start=start,
+		limit_page_length=page_len,
+	)
+
+	banked = transfers_for([row.name for row in rows])
+	return [
+		[row.name, row.reference_no, row.party_name, str(row.received_amount)]
+		for row in rows
+		if row.name not in banked
+	]
 
 
 @frappe.whitelist()
@@ -197,6 +245,10 @@ def create_internal_transfer(
 	transfer.paid_amount = amount
 	transfer.received_amount = amount
 	transfer.cost_center = source.cost_center
+	# the cheque's own mode, so the bank statement and the collection reports can see what kind
+	# of money this is. The PDC Report and the cheque reminder both exclude Internal Transfers,
+	# which is what stops this counting as a second cheque.
+	transfer.mode_of_payment = source.mode_of_payment
 	# the cheque's own number and date, so the bank statement can be matched against it
 	transfer.reference_no = source.reference_no or source.name
 	transfer.reference_date = source.reference_date or source.posting_date
@@ -244,6 +296,52 @@ def create_internal_transfers(
 			frappe.clear_last_message()
 
 	return {"created": created, "failed": failed}
+
+
+def validate(doc, method=None):
+	"""Check a transfer that names a cheque, whoever built it.
+
+	The button fills every field itself, so this is really about the hand-built case: somebody
+	creates an Internal Transfer and picks the cheque in PDC Payment Entry. It has to be a
+	submitted cheque receipt, it must not already be banked, the money must come out of the
+	account the cheque went into, and it must not try to bank more than the cheque was worth.
+	Checked here rather than at submit, so the mistake is caught while the document is still a
+	draft in front of the person making it.
+	"""
+	source_name = doc.get(SOURCE_FIELD)
+	if not source_name:
+		return
+
+	if doc.payment_type != "Internal Transfer":
+		frappe.throw(
+			_("Only an Internal Transfer may name a PDC Payment Entry. This one is a {0} entry.").format(
+				_(doc.payment_type)
+			)
+		)
+
+	source = _load_cheque_entry(source_name)
+
+	existing = transfers_for([source.name]).get(source.name)
+	if existing and existing.name != doc.name:
+		frappe.throw(
+			_("Cheque {0} is already banked by {1}.").format(source.name, existing.name),
+			title=_("Already Transferred"),
+		)
+
+	if doc.paid_from != source.paid_to:
+		frappe.throw(
+			_("The cheque was received into {0}, so the transfer has to be paid from that account.").format(
+				frappe.bold(source.paid_to)
+			)
+		)
+
+	cheque_amount = flt(source.received_amount) or flt(source.paid_amount)
+	if flt(doc.paid_amount) - cheque_amount > 0.0001:
+		frappe.throw(
+			_("Cheque {0} is worth {1}. A transfer cannot bank more than that.").format(
+				source.name, cheque_amount
+			)
+		)
 
 
 def on_submit(doc, method=None):

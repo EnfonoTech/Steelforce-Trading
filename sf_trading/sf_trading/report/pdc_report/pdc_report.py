@@ -59,6 +59,13 @@ def get_data(filters):
         if filters.get(key):
             conds.append(["Payment Entry", key, "=", filters.get(key)])
 
+    # The transfer that banks a cheque carries the cheque's own mode of payment, so it matches
+    # the cheque-mode filter above and would be listed as a second cheque -- doubling the
+    # outstanding PDC figure. This report is about cheques received and paid; the transfers are
+    # shown against them in the Internal Transfer column. Asking for them by name still works.
+    if filters.get("payment_type") != "Internal Transfer":
+        conds.append(["Payment Entry", "payment_type", "!=", "Internal Transfer"])
+
     if filters.get("from_date"):
         conds.append(["Payment Entry", "reference_date", ">=", getdate(filters.from_date)])
     if filters.get("to_date"):

@@ -256,6 +256,8 @@ doc_events = {
 			"sf_trading.api.payment_advice_hooks.validate_payment_entry_advice",
 			# each reference row carries the date of the document it is paying
 			"sf_trading.payment_entry_reference_date.set_reference_dates",
+			# a transfer that names a post-dated cheque has to add up, however it was built
+			"sf_trading.pdc_transfer.validate",
 		],
 		# an Internal Transfer raised from a post-dated cheque closes that cheque when it is
 		# submitted, and re-opens it if it is cancelled
