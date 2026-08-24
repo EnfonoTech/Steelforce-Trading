@@ -70,8 +70,12 @@ doctype_js = {
 		"public/js/purchase_tax_template.js",
 		"public/js/payment_advice_form_action.js",
 	],
-	# cancelling a payment must not demand the advice behind it be cancelled as well
-	"Payment Entry":      "public/js/payment_entry_cancel.js",
+	# cancelling a payment must not demand the advice behind it be cancelled as well;
+	# and a cleared post-dated cheque is banked from the cheque's own entry
+	"Payment Entry":      [
+		"public/js/payment_entry_cancel.js",
+		"public/js/payment_entry_pdc.js",
+	],
 	# open item census + submit gate companion view
 	"Period Closing Voucher": "public/js/period_closing_voucher.js",
 }
@@ -148,6 +152,8 @@ after_migrate = [
 	"sf_trading.period_closing.ensure_custom_fields",
 	# header expense account for a Material Issue
 	"sf_trading.stock_entry_expense.ensure_custom_fields",
+	# the link from a cheque's Internal Transfer back to the cheque it banks
+	"sf_trading.pdc_transfer.ensure_custom_fields",
 ]
 
 # Uninstallation
@@ -237,8 +243,16 @@ doc_events = {
 	},
 	"Payment Entry": {
 		"validate": "sf_trading.api.payment_advice_hooks.validate_payment_entry_advice",
-		"on_submit": "sf_trading.api.payment_advice_hooks.on_payment_entry_submit",
-		"on_cancel": "sf_trading.api.payment_advice_hooks.on_payment_entry_cancel",
+		# an Internal Transfer raised from a post-dated cheque closes that cheque when it is
+		# submitted, and re-opens it if it is cancelled
+		"on_submit": [
+			"sf_trading.api.payment_advice_hooks.on_payment_entry_submit",
+			"sf_trading.pdc_transfer.on_submit",
+		],
+		"on_cancel": [
+			"sf_trading.api.payment_advice_hooks.on_payment_entry_cancel",
+			"sf_trading.pdc_transfer.on_cancel",
+		],
 	},
 	"Journal Entry": {
 		# validate, not before_validate: the controller fills `debit` from
@@ -690,6 +704,9 @@ fixtures = [
 		"doctype": "Custom Field",
 		"filters": [["name", "in", (
 			"Payment Entry-custom_zatca_payment_means_code",
+			# created by sf_trading.pdc_transfer on migrate; listed here so an export
+			# keeps it in step
+			"Payment Entry-custom_pdc_source_payment_entry",
 			"Journal Entry-custom_loyalty_sales_invoice",
 			"Journal Entry Account-custom_loyalty_sales_invoice",
 			"Payment Entry-custom_payment_advice",
