@@ -96,6 +96,29 @@ def _get_overdue_invoice(customer, company, as_of_date=None):
 	return rows[0] if rows else None
 
 
+CASH_MODE = "Cash"
+
+
+def clear_driver_for_non_cash(doc, method=None):
+	"""A Delivery Person belongs to a cash sale, so drop it when the mode is anything else.
+
+	The field is only *hidden* when the mode is not Cash -- it carries
+	`depends_on: eval:doc.custom_payment_mode=="Cash"` -- and a hidden field keeps whatever was
+	put in it. So picking a delivery person, then switching the mode to Credit or Cheque, saved
+	the invoice with a delivery person nobody could see: one submitted Credit invoice on this
+	site carries one, and every report and check that reads the field then quietly disagrees with
+	the form.
+
+	Cleared at before_validate rather than on the form alone, because the form is not the only
+	way in -- and so `validate_driver_payment`, which runs later at validate, is not still
+	checking a driver this invoice no longer has.
+	"""
+	if doc.get("custom_payment_mode") == CASH_MODE:
+		return
+	if doc.get("custom_driver"):
+		doc.custom_driver = None
+
+
 def validate_driver_payment(doc, _method=None):
 	"""Block new Cash+Driver invoice if the same driver has an overdue unsettled invoice."""
 	if doc.is_return:

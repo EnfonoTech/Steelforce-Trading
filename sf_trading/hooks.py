@@ -286,6 +286,8 @@ doc_events = {
 			"sf_trading.api.sales_invoice_override.before_validate",
 			_CC_HOOK,
 			"sf_trading.branch_defaults.override_payment_accounts_from_branch",
+			# a Delivery Person belongs to a cash sale; the field is merely hidden on the others
+			"sf_trading.api.sales_invoice_override.clear_driver_for_non_cash",
 			# before_validate, because the controller's own validate is what reads the two
 			# advance switches and calls set_advances()
 			"sf_trading.overrides.sales_invoice_advance.set_advance_allocation",

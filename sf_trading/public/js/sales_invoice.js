@@ -794,10 +794,23 @@ frappe.ui.form.on("Sales Invoice", {
 });
 
 frappe.ui.form.on("Sales Invoice", {
-	custom_payment_mode: function(frm) { sf_set_credit_limit(frm); },
+	custom_payment_mode: function(frm) { sf_set_credit_limit(frm); sf_clear_driver_for_non_cash(frm); },
 	customer: function(frm) { sf_set_credit_limit(frm); },
 	company: function(frm) { sf_set_credit_limit(frm); },
 });
+
+// The Delivery Person field is hidden when the mode is not Cash, and a hidden field keeps its
+// value — so it has to be taken out, not just hidden, or the invoice saves a delivery person
+// nobody can see. The server clears it too (api/sales_invoice_override.clear_driver_for_non_cash);
+// this is so the form agrees with what will be saved.
+function sf_clear_driver_for_non_cash(frm) {
+	if (frm.doc.custom_payment_mode === "Cash" || !frm.doc.custom_driver) return;
+	frm.set_value("custom_driver", null);
+	frappe.show_alert(
+		{ message: __("Delivery Person cleared — it applies to a cash sale only."), indicator: "orange" },
+		4
+	);
+}
 
 function sf_set_credit_limit(frm) {
 	if (frm.doc.custom_payment_mode !== "Credit" || !frm.doc.customer) {
