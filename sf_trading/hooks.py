@@ -57,6 +57,8 @@ doctype_js = {
 	"Material Request": "public/js/material_request.js",
 	"Customer":         "public/js/customer_company.js",
 	"Quotation":        "public/js/quotation.js",
+	# Receive Payment on a submitted order — the invoice popup's twin
+	"Sales Order":      "public/js/sales_order_payment.js",
 	"Supplier Quotation": "public/js/purchase_tax_template.js",
 	"Purchase Receipt":   "public/js/purchase_tax_template.js",
 	# Payment Advice sits in the Create menu beside Payment Request, under the same conditions
