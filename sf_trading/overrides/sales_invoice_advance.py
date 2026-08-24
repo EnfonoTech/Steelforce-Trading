@@ -32,6 +32,16 @@ Three cases keep them off:
     (accounts_controller.py:313), so claiming to have set something up would be a lie
   * a return -- a credit note reducing a receivable has no business consuming an advance
 
+A return also gets its advance table swept, which has nothing to do with the switches. A
+credit note is mapped from its invoice by `get_mapped_doc`, and for a same-doctype mapping
+that copies *every* child table whose fieldname and options match and which is not marked
+no_copy -- `advances` among them (frappe/model/mapper.py:92). The reference fields inside the
+row are no_copy, so what arrives is a row with no reference at all, and
+`accounts_controller.validate` refuses it outright: "Rows: 1 in Advance Payments section are
+Invalid. Reference Name should point to a valid Payment Entry or Journal Entry". The credit
+note cannot be saved at all. Rows carrying a real reference are left alone -- those were
+fetched on purpose.
+
 The one exception is an invoice that already carries advance rows. Nothing populates them on
 load -- ERPNext's `fetch_advances` fires on a change event, not on render -- so rows being
 present means somebody asked for them, and their choice stands. Only on a new invoice, so
@@ -46,6 +56,7 @@ def set_advance_allocation(doc, method=None):
 		return
 
 	if cint(doc.get("is_return")):
+		_drop_unreferenced_advances(doc)
 		if not doc.get("advances"):
 			doc.allocate_advances_automatically = 0
 			doc.only_include_allocated_payments = 0
@@ -63,3 +74,14 @@ def set_advance_allocation(doc, method=None):
 
 	doc.allocate_advances_automatically = 1
 	doc.only_include_allocated_payments = 1
+
+
+def _drop_unreferenced_advances(doc):
+	"""Take out the empty advance row the return mapper leaves behind."""
+	rows = doc.get("advances") or []
+	kept = [row for row in rows if row.get("reference_type") and row.get("reference_name")]
+	if len(kept) == len(rows):
+		return
+	doc.set("advances", kept)
+	for idx, row in enumerate(doc.get("advances") or [], start=1):
+		row.idx = idx

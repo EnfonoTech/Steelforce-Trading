@@ -35,6 +35,23 @@ class StubInvoice(dict):
 			self[key] = value
 
 
+class StubRow(dict):
+	"""A child row: .get() plus the idx the hook renumbers."""
+
+	def __getattr__(self, key):
+		try:
+			return self[key]
+		except KeyError as exc:
+			raise AttributeError(key) from exc
+
+	def __setattr__(self, key, value):
+		self[key] = value
+
+
+def _row(**fields):
+	return StubRow(**fields)
+
+
 def invoice(**fields):
 	fields.setdefault("items", [])
 	fields.setdefault("advances", [])
@@ -67,8 +84,27 @@ class TestSalesInvoiceAdvanceAllocation(FrappeTestCase):
 		self.assertEqual(doc.allocate_advances_automatically, 0)
 		self.assertEqual(doc.only_include_allocated_payments, 0)
 
+	def test_a_return_drops_the_empty_row_the_mapper_leaves(self):
+		"""get_mapped_doc copies the advances table with its no_copy references stripped, and
+		accounts_controller then refuses the whole credit note over it."""
+		doc = invoice(
+			items=[{"sales_order": "SO-0001"}],
+			is_return=1,
+			advances=[_row(reference_type=None, reference_name=None)],
+		)
+		set_advance_allocation(doc)
+		self.assertEqual(doc["advances"], [])
+		self.assertEqual(doc.allocate_advances_automatically, 0)
+
+	def test_a_return_keeps_an_advance_somebody_fetched(self):
+		kept = _row(reference_type="Payment Entry", reference_name="ACC-PAY-0001")
+		doc = invoice(items=[{"sales_order": "SO-0001"}], is_return=1, advances=[kept])
+		set_advance_allocation(doc)
+		self.assertEqual(doc["advances"], [kept])
+		self.assertNotIn("allocate_advances_automatically", doc)
+
 	def test_rows_somebody_already_fetched_are_left_alone(self):
-		doc = invoice(items=[{"item_code": "X"}], advances=[{"reference_name": "PE-0001"}])
+		doc = invoice(items=[{"item_code": "X"}], advances=[_row(reference_name="PE-0001")])
 		set_advance_allocation(doc)
 		self.assertNotIn("allocate_advances_automatically", doc)
 
