@@ -29,33 +29,56 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.utils import cint, flt
 
 FIELD = "custom_planned_payments"
+SECTION = "custom_planned_refund_section"
 CHILD = "SF Planned Payment"
+
+# The plan belongs on the Payments tab, in a section of its own. Squeezed into a column of the
+# Details tab it rendered about a third of the width it needs -- a grid with a mode of payment, an
+# amount and a Payment Entry link, in the space meant for a single field.
+SHOWN_WHEN_PLANNED = "eval:doc.custom_planned_payments && doc.custom_planned_payments.length"
 
 
 def ensure_custom_fields():
-	"""after_migrate: the plan table on Sales Invoice, shown only when it holds something."""
+	"""after_migrate: the plan table, on the Payments tab, in its own full-width section."""
 	create_custom_fields(
 		{
 			"Sales Invoice": [
+				{
+					"fieldname": SECTION,
+					"label": "Planned Refund",
+					"fieldtype": "Section Break",
+					"insert_after": "payments_tab",
+					"depends_on": SHOWN_WHEN_PLANNED,
+				},
 				{
 					"fieldname": FIELD,
 					"label": "Planned Refund",
 					"fieldtype": "Table",
 					"options": CHILD,
-					"insert_after": "custom_payment_mode",
+					"insert_after": SECTION,
 					"read_only": 1,
 					"print_hide": 1,
 					"no_copy": 1,
-					"depends_on": "eval:doc.custom_planned_payments && doc.custom_planned_payments.length",
+					"depends_on": SHOWN_WHEN_PLANNED,
 					"description": (
 						"How this refund will be paid once the return is approved. The Payment Entries "
 						"are created and submitted with the return itself."
 					),
-				}
+				},
 			]
 		},
 		ignore_validate=True,
 	)
+
+	# create_custom_fields creates but never corrects, and this field first shipped on the Details
+	# tab beside Payment Mode, where the grid had a third of the width it needs. Put it right on
+	# every migrate, so a site that already has it ends up where a fresh one does.
+	name = "Sales Invoice-" + FIELD
+	if frappe.db.exists("Custom Field", name):
+		current = frappe.db.get_value("Custom Field", name, "insert_after")
+		if current != SECTION:
+			frappe.db.set_value("Custom Field", name, "insert_after", SECTION)
+			frappe.clear_cache(doctype="Sales Invoice")
 
 
 def planned_rows(doc) -> list:

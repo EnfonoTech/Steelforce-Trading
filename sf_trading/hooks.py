@@ -755,6 +755,7 @@ fixtures = [
 			"Payment Entry Reference-custom_reference_date",
 			"Sales Order-custom_payment_mode",
 			"Price List-custom_branches",
+			"Sales Invoice-custom_planned_refund_section",
 			"Sales Invoice-custom_planned_payments",
 			"Journal Entry-custom_loyalty_sales_invoice",
 			"Journal Entry Account-custom_loyalty_sales_invoice",
