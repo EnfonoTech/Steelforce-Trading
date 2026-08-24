@@ -8,7 +8,8 @@ with the feature silently off.
 
 Reads the old values straight out of `tabSingles` rather than through the doctype: by the time
 this runs, permission_manager has already dropped the fields, so the meta no longer knows them
-while the rows are still there. Also brings the override rows across.
+while the rows are still there. It has to be raw SQL -- `Singles` is a plain table, not a DocType,
+so the query builder cannot see it. Also brings the override rows across.
 
 Anything the old settings never held falls back to what the new doctype ships as, so a site that
 never touched them ends up exactly as a fresh install would.
@@ -65,10 +66,10 @@ def _old_values() -> dict:
 	if not frappe.db.exists("DocType", "PM Settings"):
 		return {}
 
-	rows = frappe.db.get_all(
-		"Singles",
-		filters={"doctype": "PM Settings", "field": ["in", list(FIELDS)]},
-		fields=["field", "value"],
+	rows = frappe.db.sql(
+		"""select field, value from `tabSingles` where doctype = %s and field in %s""",
+		("PM Settings", FIELDS),
+		as_dict=True,
 	)
 
 	values = {}
@@ -87,7 +88,10 @@ def _old_values() -> dict:
 def _already_set(field: str) -> bool:
 	"""Leave alone anything already chosen on the new doctype."""
 	return bool(
-		frappe.db.exists("Singles", {"doctype": "SF Trading Settings", "field": field})
+		frappe.db.sql(
+			"""select 1 from `tabSingles` where doctype = %s and field = %s limit 1""",
+			("SF Trading Settings", field),
+		)
 	)
 
 
