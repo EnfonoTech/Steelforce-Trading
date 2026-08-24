@@ -320,6 +320,25 @@ def workflow_applicability(doctype: str, doc=None) -> dict | None:
 
 
 @frappe.whitelist()
+def get_return_approval_settings() -> dict:
+	"""The approval rule itself, for the form to apply to a document it is still holding.
+
+	`get_return_approval_state` needs a saved document; the payment popup has to decide before
+	there is one -- a return typed on a new invoice never reaches the server until it is saved,
+	and by then the popup has already offered Save & Submit. So the rule comes down instead and
+	the form applies it to the totals in front of it.
+	"""
+	if not approval_enabled():
+		return {"enabled": False}
+
+	return {
+		"enabled": True,
+		"by_amount": restricts_by_amount(),
+		"threshold": threshold(),
+	}
+
+
+@frappe.whitelist()
 def get_return_approval_state(sales_invoice: str) -> dict:
 	"""What the Sales Invoice form asks so it can say why Submit is not on offer."""
 	frappe.has_permission(RETURN_DOCTYPE, "read", doc=sales_invoice, throw=True)

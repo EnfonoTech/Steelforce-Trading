@@ -623,6 +623,62 @@ frappe.ui.form.on("Sales Invoice", {
 // POS Total / Payment Popup
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// Returns that need approval
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// A return above the configured threshold cannot be submitted directly — it goes through the PM
+// Workflow (see sf_trading/sales_return.py). The payment popup did not know that: it opened on
+// save, offered Save & Submit, and the submit was then refused with "Approval Required", leaving
+// the cashier holding a dialog that could not finish.
+//
+// So the popup is not opened for such a return at all. There is nothing useful to type into it
+// yet either: the refund Payment Entry can only be created against a SUBMITTED return, and this
+// one is not going to be submitted until somebody approves it. The refund is collected afterwards,
+// from the approved return, with the Receive Payment button that is already there.
+//
+// The rule is fetched once per session and applied to the document in hand, because a return typed
+// on a new invoice has no name to ask the server about yet.
+
+let sf_return_approval_rule = null;
+
+function sf_load_return_approval_rule(then) {
+	if (sf_return_approval_rule) { then && then(); return; }
+	frappe.call({
+		method: "sf_trading.sales_return.get_return_approval_settings",
+		callback: function(r) {
+			sf_return_approval_rule = (r && r.message) || { enabled: false };
+			then && then();
+		},
+		error: function() { sf_return_approval_rule = { enabled: false }; then && then(); },
+	});
+}
+
+function sf_return_needs_approval(frm) {
+	const rule = sf_return_approval_rule;
+	if (!rule || !rule.enabled) return false;
+	if (!frm.doc.is_return || frm.doc.docstatus !== 0) return false;
+	if (!rule.by_amount) return true;
+	const amount = Math.abs(flt(frm.doc.base_grand_total || frm.doc.grand_total || 0));
+	return amount - flt(rule.threshold) > 0.0001;
+}
+
+// Said once per document rather than on every save, so it reads as information and not as nagging.
+function sf_say_needs_approval(frm) {
+	if (frm.__sf_said_needs_approval === frm.doc.name) return;
+	frm.__sf_said_needs_approval = frm.doc.name;
+	frappe.msgprint({
+		title: __("Approval Required"),
+		message:
+			__("This return is above the approval limit, so it cannot be submitted directly.") +
+			"<br><br>" +
+			__("Save it, then use <b>Actions &rarr; Send for Approval</b>. The Actions menu only appears once the form is saved — Frappe hides it while there are unsaved changes.") +
+			"<br><br>" +
+			__("Once it has been approved the return submits itself. Open it then and use <b>Receive Payment</b> to pay the refund out."),
+		indicator: "orange",
+	});
+}
+
 function sf_trading_open_invoice_print(frm, format_override) {
 	if (!frm || !frm.doc || !frm.doc.name) return;
 	const format = encodeURIComponent(
@@ -642,6 +698,7 @@ frappe.ui.form.on("Sales Invoice", {
 		});
 	},
 	refresh: function(frm) {
+		sf_load_return_approval_rule();
 		if (!frm._sf_savesubmit_wrapped) {
 			frm._sf_savesubmit_wrapped = true;
 			frm.savesubmit = function(btn, callback, on_error) {
@@ -706,6 +763,12 @@ frappe.ui.form.on("Sales Invoice", {
 		}
 	},
 	before_submit: function(frm) {
+		// a return the chain has to approve is never submitted from here, popup or not
+		if (sf_return_needs_approval(frm)) {
+			frappe.validated = false;
+			sf_say_needs_approval(frm);
+			return;
+		}
 		if (frm.doc.custom_payment_mode === "Cheque") {
 			frappe.validated = false;
 			if (Math.abs(flt(frm.doc.grand_total)) > 0 && Math.abs(flt(frm.doc.outstanding_amount)) > 0) {
@@ -751,6 +814,13 @@ frappe.ui.form.on("Sales Invoice", {
 	after_save: function(frm) {
 		if (frappe.flags.sf_trading_skip_payment_popup || frappe.flags.sf_trading_popup_showing) return;
 		if (frm.doc.docstatus !== 0 || !frm.doc.name || frm.doc.name.startsWith("new-")) return;
+
+		// The refund can only be paid against a submitted return, and this one is waiting on an
+		// approval — so there is nothing to collect yet. Say so instead of opening the popup.
+		if (sf_return_needs_approval(frm)) {
+			sf_say_needs_approval(frm);
+			return;
+		}
 
 		if (frm.doc.custom_payment_mode === "Credit") {
 			if (frappe.flags.sf_trading_credit_confirm_open) return;
