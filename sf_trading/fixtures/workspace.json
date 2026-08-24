@@ -238,6 +238,17 @@
    {
     "dependencies": "",
     "hidden": 0,
+    "is_query_report": 1,
+    "label": "Pending Advance SO",
+    "link_count": 0,
+    "link_to": "Pending Advance SO",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
     "is_query_report": 0,
     "label": "Purchase",
     "link_count": 5,
