@@ -39,6 +39,7 @@ app_include_js = [
 	# ── Multi-doctype: cross-selling + purchasing ──
 	f"/assets/sf_trading/js/return_qty_autofix.js?{_v}",
 	f"/assets/sf_trading/js/accounting_dimension_sync.js?{_v}",
+	f"/assets/sf_trading/js/branch_price_list.js?{_v}",
 	f"/assets/sf_trading/js/sales_invoice_item_search.js?{_v}",
 	f"/assets/sf_trading/js/purchase_invoice_cost_center.js?{_v}",
 	f"/assets/sf_trading/js/stock_availability.js?{_v}",
@@ -158,6 +159,8 @@ after_migrate = [
 	"sf_trading.payment_entry_reference_date.ensure_custom_fields",
 	# Payment Mode on the order, carried onto the invoice raised from it
 	"sf_trading.sales_order_payment_mode.ensure_custom_fields",
+	# Applicable for Branches on Price List — branch-wise pricing, ERPNext's own way
+	"sf_trading.branch_price_list.ensure_custom_fields",
 ]
 
 # Uninstallation
@@ -223,6 +226,9 @@ _BRANCH_HOOK = "sf_trading.inter_branch.auto_set_branch_from_warehouse"
 # _BRANCH_HOOK so an auto-resolved branch is honoured.
 _LH_HOOK = "sf_trading.branch_defaults.set_letter_head_from_branch"
 _SP_HOOK = "sf_trading.api.selling_price_validation.validate_selling_price"
+# Prices the document from its branch's Price List (Applicable for Branches), when the branch
+# names one and nobody has deliberately picked another list.
+_BPL_HOOK = "sf_trading.branch_price_list.apply_branch_price_list"
 
 # Picks the purchase tax template matching the document currency (default
 # template for company-currency docs, "Import VAT 0%" otherwise).
@@ -293,6 +299,7 @@ doc_events = {
 			# before_validate, because the controller's own validate is what reads the two
 			# advance switches and calls set_advances()
 			"sf_trading.overrides.sales_invoice_advance.set_advance_allocation",
+			_BPL_HOOK,
 		],
 		"validate": [
 			"sf_trading.api.sales_invoice_override.validate",
@@ -310,19 +317,23 @@ doc_events = {
 		"on_cancel": "sf_trading.api.quotation.update_quotation_status_from_invoice",
 	},
 	"Sales Order": {
-		"before_validate": _CC_HOOK,
+		"before_validate": [_CC_HOOK, _BPL_HOOK],
 		"validate": [_LH_HOOK, _SP_HOOK],
 	},
 	"Quotation": {
-		"before_validate": _CC_HOOK,
+		"before_validate": [_CC_HOOK, _BPL_HOOK],
 		"validate": [_LH_HOOK, _SP_HOOK],
 	},
 	"Delivery Note": {
-		"before_validate": _CC_HOOK,
+		"before_validate": [_CC_HOOK, _BPL_HOOK],
 		# _SDBNB_DN_HOOK last: it reads the expense_account the controller and the
 		# earlier hooks have already settled on, then re-points stock rows at the
 		# Stock Delivered But Not Billed account when the company opts in.
 		"validate": [_BRANCH_HOOK, _LH_HOOK, _SP_HOOK, _SDBNB_DN_HOOK, _SBND_DN_HOOK],
+	},
+	# a branch may be priced from one selling list and one buying list, no more
+	"Price List": {
+		"validate": "sf_trading.branch_price_list.validate_price_list",
 	},
 	"Company": {
 		"validate": [
@@ -338,6 +349,7 @@ doc_events = {
 			# before_validate, because the controller's own validate is what reads these
 			# two switches and calls set_advances()
 			"sf_trading.overrides.purchase_invoice.set_advance_allocation",
+			_BPL_HOOK,
 		],
 		"validate": [
 			"sf_trading.overrides.purchase_invoice.validate",
@@ -348,15 +360,15 @@ doc_events = {
 		"on_submit": "sf_trading.api.purchase_return.auto_create_pr_return",
 	},
 	"Purchase Order": {
-		"before_validate": [_CC_HOOK, _PTT_HOOK],
+		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
 		"validate": _LH_HOOK,
 	},
 	"Purchase Receipt": {
-		"before_validate": [_CC_HOOK, _PTT_HOOK],
+		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
 		"validate": [_BRANCH_HOOK, _LH_HOOK],
 	},
 	"Supplier Quotation": {
-		"before_validate": [_CC_HOOK, _PTT_HOOK],
+		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
 		"validate": _LH_HOOK,
 	},
 	# core logs the impersonation but drops the reason — put it back on the row
@@ -722,6 +734,7 @@ fixtures = [
 			"Payment Entry-custom_pdc_source_payment_entry",
 			"Payment Entry Reference-custom_reference_date",
 			"Sales Order-custom_payment_mode",
+			"Price List-custom_branches",
 			"Journal Entry-custom_loyalty_sales_invoice",
 			"Journal Entry Account-custom_loyalty_sales_invoice",
 			"Payment Entry-custom_payment_advice",
