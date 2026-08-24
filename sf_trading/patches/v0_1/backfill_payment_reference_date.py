@@ -15,14 +15,19 @@ Idempotent -- only rows whose value is still NULL are read, so a replay finds no
 
 import frappe
 
-from sf_trading.payment_entry_reference_date import FIELD, date_field_for
+from sf_trading.payment_entry_reference_date import FIELD, date_field_for, ensure_custom_fields
 
 CHUNK = 500
 
 
 def execute():
+	# Patches run in the middle of a migrate and after_migrate hooks run at the end of it, so
+	# the field this fills does not exist yet at this point -- which is why the first version of
+	# this patch filled nothing and then marked itself done. Creating it here is idempotent:
+	# create_custom_fields skips a field that already exists.
+	ensure_custom_fields()
+	frappe.clear_cache()
 	if not frappe.db.has_column("Payment Entry Reference", FIELD):
-		# the after_migrate hook creates it; nothing to fill if it has not run yet
 		return
 
 	doctypes = frappe.db.get_all(
