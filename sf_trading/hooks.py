@@ -154,6 +154,8 @@ after_migrate = [
 	"sf_trading.stock_entry_expense.ensure_custom_fields",
 	# the link from a cheque's Internal Transfer back to the cheque it banks
 	"sf_trading.pdc_transfer.ensure_custom_fields",
+	# the referenced document's own date, on the Payment Entry references grid
+	"sf_trading.payment_entry_reference_date.ensure_custom_fields",
 ]
 
 # Uninstallation
@@ -242,7 +244,11 @@ doc_events = {
 		"before_submit": "sf_trading.period_closing.validate_open_items",
 	},
 	"Payment Entry": {
-		"validate": "sf_trading.api.payment_advice_hooks.validate_payment_entry_advice",
+		"validate": [
+			"sf_trading.api.payment_advice_hooks.validate_payment_entry_advice",
+			# each reference row carries the date of the document it is paying
+			"sf_trading.payment_entry_reference_date.set_reference_dates",
+		],
 		# an Internal Transfer raised from a post-dated cheque closes that cheque when it is
 		# submitted, and re-opens it if it is cancelled
 		"on_submit": [
@@ -704,9 +710,10 @@ fixtures = [
 		"doctype": "Custom Field",
 		"filters": [["name", "in", (
 			"Payment Entry-custom_zatca_payment_means_code",
-			# created by sf_trading.pdc_transfer on migrate; listed here so an export
-			# keeps it in step
+			# created by sf_trading.pdc_transfer / payment_entry_reference_date on migrate;
+			# listed here so an export keeps them in step
 			"Payment Entry-custom_pdc_source_payment_entry",
+			"Payment Entry Reference-custom_reference_date",
 			"Journal Entry-custom_loyalty_sales_invoice",
 			"Journal Entry Account-custom_loyalty_sales_invoice",
 			"Payment Entry-custom_payment_advice",
