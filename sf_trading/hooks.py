@@ -156,6 +156,8 @@ after_migrate = [
 	"sf_trading.pdc_transfer.ensure_custom_fields",
 	# the referenced document's own date, on the Payment Entry references grid
 	"sf_trading.payment_entry_reference_date.ensure_custom_fields",
+	# Payment Mode on the order, carried onto the invoice raised from it
+	"sf_trading.sales_order_payment_mode.ensure_custom_fields",
 ]
 
 # Uninstallation
@@ -719,6 +721,7 @@ fixtures = [
 			# listed here so an export keeps them in step
 			"Payment Entry-custom_pdc_source_payment_entry",
 			"Payment Entry Reference-custom_reference_date",
+			"Sales Order-custom_payment_mode",
 			"Journal Entry-custom_loyalty_sales_invoice",
 			"Journal Entry Account-custom_loyalty_sales_invoice",
 			"Payment Entry-custom_payment_advice",

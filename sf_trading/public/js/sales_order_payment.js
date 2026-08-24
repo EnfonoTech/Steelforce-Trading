@@ -75,6 +75,17 @@ function sf_trading_render_so_dialog(frm, state) {
 		...cash_modes.map((_m, i) => "csh_" + i),
 		...cheque_modes.map((_m, i) => "chq_" + i),
 	];
+	// The order says how it is meant to be settled, so the dialog opens on that footing: a
+	// cheque order arrives with the balance already sitting on the first cheque line, a cash
+	// order on the first cash line, and an order marked Credit prefills nothing — a deposit on
+	// a credit order is allowed, it is just not what anybody expects to be typing.
+	const order_mode = frm.doc.custom_payment_mode || "";
+	const prefill =
+		order_mode === "Cheque" && cheque_modes.length
+			? "chq_0"
+			: order_mode === "Cash" && cash_modes.length
+			? "csh_0"
+			: null;
 
 	const fields = [
 		{
@@ -87,6 +98,15 @@ function sf_trading_render_so_dialog(frm, state) {
 			precision,
 		},
 	];
+	if (order_mode) {
+		fields.push({
+			fieldname: "order_mode",
+			fieldtype: "Data",
+			label: __("Order Payment Mode"),
+			default: __(order_mode),
+			read_only: 1,
+		});
+	}
 	if (flt(state.advance_paid) > 0) {
 		fields.push({
 			fieldname: "advance_paid",
@@ -108,7 +128,7 @@ function sf_trading_render_so_dialog(frm, state) {
 					fieldname: "csh_" + idx,
 					fieldtype: "Currency",
 					label: mode,
-					default: 0,
+					default: prefill === "csh_" + idx ? balance : 0,
 					options: "currency",
 					precision,
 				},
@@ -149,7 +169,7 @@ function sf_trading_render_so_dialog(frm, state) {
 					fieldname: "chq_" + idx,
 					fieldtype: "Currency",
 					label: mode,
-					default: 0,
+					default: prefill === "chq_" + idx ? balance : 0,
 					options: "currency",
 					precision,
 				},

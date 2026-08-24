@@ -881,6 +881,26 @@ function sf_trading_show_pos_total_popup(frm) {
 	ensure_payments_then_show();
 }
 
+// What the customer still has to hand over.
+//
+// A draft invoice carries outstanding_amount equal to its full grand total — ERPNext only nets
+// the advance off it at submit — so an invoice raised from an order whose deposit has already
+// been allocated used to ask for the whole amount again, and the payment was then refused after
+// submit ("Payment total exceeds outstanding amount") because by then the real outstanding was
+// the balance. On a draft the advance is therefore taken off here; on a submitted invoice
+// outstanding_amount is already net of it and is used as it stands.
+function sf_trading_amount_to_collect(frm, precision) {
+	const submitted = frm.doc.docstatus === 1;
+	const gross = flt(
+		(submitted && frm.doc.outstanding_amount > 0 ? frm.doc.outstanding_amount : 0) ||
+		frm.doc.rounded_total ||
+		frm.doc.grand_total ||
+		0
+	);
+	const advance = submitted ? 0 : flt(frm.doc.total_advance || 0);
+	return flt(Math.abs(gross) - Math.abs(advance), precision);
+}
+
 function sf_trading_get_currency_precision(currency_code) {
 	var doc = frappe.model.get_doc(":Currency", currency_code);
 	if (doc && doc.number_format) return get_number_format_info(doc.number_format).precision;
@@ -894,12 +914,17 @@ function sf_trading_render_dialog(frm, payments_list) {
 
 	const currency = frm.doc.currency || "";
 	const curr_precision = sf_trading_get_currency_precision(currency);
-	const invoice_total = flt(Math.abs(flt(
-		(frm.doc.outstanding_amount > 0 ? frm.doc.outstanding_amount : null) ||
-		frm.doc.rounded_total || frm.doc.grand_total || 0
-	)), curr_precision);
+	const invoice_total = sf_trading_amount_to_collect(frm, curr_precision);
 
-	if (invoice_total <= 0) { frappe.flags.sf_trading_popup_showing = false; frappe.msgprint(__("Invoice total must be greater than zero.")); return; }
+	if (invoice_total <= 0) {
+		frappe.flags.sf_trading_popup_showing = false;
+		frappe.msgprint(
+			flt(frm.doc.total_advance) > 0
+				? __("Nothing left to collect — the advance on this invoice covers it.")
+				: __("Invoice total must be greater than zero.")
+		);
+		return;
+	}
 
 	// Opened on an already-submitted invoice (Receive Payment button) — the
 	// Payment Entry is dated today; the submit-time flow keeps the invoice date.
@@ -1050,10 +1075,7 @@ function sf_trading_show_pdc_popup(frm) {
 
 	const currency = frm.doc.currency || "";
 	const precision = sf_trading_get_currency_precision(currency);
-	const invoice_total = flt(Math.abs(flt(
-		(frm.doc.outstanding_amount > 0 ? frm.doc.outstanding_amount : null) ||
-		frm.doc.rounded_total || frm.doc.grand_total || 0
-	)), precision);
+	const invoice_total = sf_trading_amount_to_collect(frm, precision);
 	const base_args = { company: frm.doc.company, is_return: frm.doc.is_return ? 1 : 0, branch: frm.doc.branch || "" };
 
 	frappe.call({
