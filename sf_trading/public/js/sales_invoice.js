@@ -905,8 +905,10 @@ function sf_trading_render_dialog(frm, payments_list) {
 		);
 	});
 
-	// Loyalty / small balance write-off: books the unpaid remainder as a
-	// deduction on the last Payment Entry so the invoice closes fully paid.
+	// Loyalty (the write-off mechanism under a business-facing name): books the
+	// unpaid remainder as a deduction on the last Payment Entry so the invoice closes
+	// fully paid. The field, the API argument and the company's Write Off Account are
+	// all still `write_off` — only what the cashier reads changed.
 	const allow_write_off = !frm.doc.is_return;
 	let wo_config = null;
 	if (allow_write_off) {
@@ -914,28 +916,28 @@ function sf_trading_render_dialog(frm, payments_list) {
 			.then(function(r) { wo_config = (r && r.message) || {}; });
 		fields.push(
 			{ fieldtype: "Section Break", fieldname: "row_wo", label: "", hide_border: 1 },
-			{ fieldname: "write_off", fieldtype: "Currency", label: __("Write Off"), default: 0, options: "currency", precision: curr_precision },
+			{ fieldname: "write_off", fieldtype: "Currency", label: __("Loyalty"), default: 0, options: "currency", precision: curr_precision },
 			{ fieldtype: "Column Break", fieldname: "cb_wo" }
 		);
 	}
 
 	function validate_write_off(write_off) {
 		if (write_off < 0) {
-			frappe.msgprint({ title: __("Error"), message: __("Write off amount cannot be negative."), indicator: "red" });
+			frappe.msgprint({ title: __("Error"), message: __("Loyalty amount cannot be negative."), indicator: "red" });
 			return false;
 		}
 		if (!write_off) return true;
 		if (!wo_config || !wo_config.write_off_account) {
-			frappe.msgprint({ title: __("Write Off Not Configured"), message: __("Set 'Write Off Account' on company {0}.", [frm.doc.company]), indicator: "red" });
+			frappe.msgprint({ title: __("Loyalty Not Configured"), message: __("Set 'Write Off Account' on company {0}.", [frm.doc.company]), indicator: "red" });
 			return false;
 		}
 		const wo_limit = flt(wo_config.custom_max_payment_write_off);
 		if (!wo_limit) {
-			frappe.msgprint({ title: __("Write Off Not Configured"), message: __("Set 'Max Payment Write Off' on company {0} to allow write off in payments.", [frm.doc.company]), indicator: "red" });
+			frappe.msgprint({ title: __("Loyalty Not Configured"), message: __("Set 'Max Payment Write Off' on company {0} to allow write off in payments.", [frm.doc.company]), indicator: "red" });
 			return false;
 		}
 		if (write_off - wo_limit > 0.0001) {
-			frappe.msgprint({ title: __("Write Off Limit Exceeded"), message: __("Write off amount {0} exceeds the company limit of {1}.", [format_currency(write_off, currency), format_currency(wo_limit, currency)]), indicator: "red" });
+			frappe.msgprint({ title: __("Loyalty Limit Exceeded"), message: __("Loyalty amount {0} exceeds the company limit of {1}.", [format_currency(write_off, currency), format_currency(wo_limit, currency)]), indicator: "red" });
 			return false;
 		}
 		return true;
@@ -1073,21 +1075,21 @@ function sf_trading_show_pdc_popup(frm) {
 
 	function validate_write_off(write_off) {
 		if (write_off < 0) {
-			frappe.msgprint({ title: __("Error"), message: __("Write off amount cannot be negative."), indicator: "red" });
+			frappe.msgprint({ title: __("Error"), message: __("Loyalty amount cannot be negative."), indicator: "red" });
 			return false;
 		}
 		if (!write_off) return true;
 		if (!wo_config || !wo_config.write_off_account) {
-			frappe.msgprint({ title: __("Write Off Not Configured"), message: __("Set 'Write Off Account' on company {0}.", [frm.doc.company]), indicator: "red" });
+			frappe.msgprint({ title: __("Loyalty Not Configured"), message: __("Set 'Write Off Account' on company {0}.", [frm.doc.company]), indicator: "red" });
 			return false;
 		}
 		const wo_limit = flt(wo_config.custom_max_payment_write_off);
 		if (!wo_limit) {
-			frappe.msgprint({ title: __("Write Off Not Configured"), message: __("Set 'Max Payment Write Off' on company {0} to allow write off in payments.", [frm.doc.company]), indicator: "red" });
+			frappe.msgprint({ title: __("Loyalty Not Configured"), message: __("Set 'Max Payment Write Off' on company {0} to allow write off in payments.", [frm.doc.company]), indicator: "red" });
 			return false;
 		}
 		if (write_off - wo_limit > 0.0001) {
-			frappe.msgprint({ title: __("Write Off Limit Exceeded"), message: __("Write off amount {0} exceeds the company limit of {1}.", [format_currency(write_off, currency), format_currency(wo_limit, currency)]), indicator: "red" });
+			frappe.msgprint({ title: __("Loyalty Limit Exceeded"), message: __("Loyalty amount {0} exceeds the company limit of {1}.", [format_currency(write_off, currency), format_currency(wo_limit, currency)]), indicator: "red" });
 			return false;
 		}
 		return true;
@@ -1130,7 +1132,7 @@ function sf_trading_show_pdc_popup(frm) {
 		if (allow_write_off) {
 			fields.push(
 				{ fieldtype: "Section Break", fieldname: "wo_row", label: "", hide_border: 1 },
-				{ fieldname: "write_off", fieldtype: "Currency", label: __("Write Off"), default: 0, options: "currency", precision },
+				{ fieldname: "write_off", fieldtype: "Currency", label: __("Loyalty"), default: 0, options: "currency", precision },
 				{ fieldtype: "Column Break" }
 			);
 		}
