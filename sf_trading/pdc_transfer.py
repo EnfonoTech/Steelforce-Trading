@@ -63,6 +63,14 @@ def ensure_custom_fields():
 		ignore_validate=True,
 	)
 
+	# create_custom_fields creates but never corrects, and this field shipped read-only before a
+	# transfer could be built by hand. Put it right on every migrate, so a site that already has
+	# the old field ends up with the same field as a fresh one.
+	name = "Payment Entry-" + SOURCE_FIELD
+	if frappe.db.exists("Custom Field", name) and frappe.db.get_value("Custom Field", name, "read_only"):
+		frappe.db.set_value("Custom Field", name, "read_only", 0)
+		frappe.clear_cache(doctype="Payment Entry")
+
 
 def cheque_modes() -> list:
 	"""Modes of Payment whose ZATCA payment means code is the cheque code."""
