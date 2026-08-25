@@ -71,6 +71,9 @@ frappe.ui.form.on("Sales Invoice", {
 	},
 	custom_payment_mode: function (frm) {
 		sf_apply_customer_credit_filter(frm);
+		if (frm.doc.custom_payment_mode !== "Cash" && frm.doc.custom_driver) {
+			frm.set_value("custom_driver", "");
+		}
 		if (frm.doc.custom_payment_mode === "Cheque" && frm.doc.branch) {
 			frappe.call({
 				method: "sf_trading.api.sales_invoice_payment.branch_has_pdc_modes",

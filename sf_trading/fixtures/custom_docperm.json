@@ -2,7 +2,7 @@
  {
   "amend": 0,
   "cancel": 0,
-  "create": 0,
+  "create": 1,
   "delete": 0,
   "docstatus": 0,
   "doctype": "Custom DocPerm",
@@ -10,7 +10,7 @@
   "export": 0,
   "if_owner": 0,
   "import": 0,
-  "modified": "2026-06-27 17:30:53.204748",
+  "modified": "2026-08-20 20:03:11.561108",
   "name": "ch4gvhjnge",
   "parent": "Driver",
   "permlevel": 0,

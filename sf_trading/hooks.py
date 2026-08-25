@@ -53,6 +53,7 @@ app_include_js = [
 # doctype_js: loaded only when that specific doctype form opens
 doctype_js = {
 	"Sales Invoice":    "public/js/sales_invoice.js",
+	"Sales Order":      "public/js/sales_order.js",
 	"Stock Entry":      "public/js/stock_entry.js",
 	"Material Request": "public/js/material_request.js",
 	"Customer":         "public/js/customer_company.js",
