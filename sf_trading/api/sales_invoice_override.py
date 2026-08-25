@@ -120,10 +120,14 @@ def clear_driver_for_non_cash(doc, method=None):
 
 
 def validate_driver_payment(doc, _method=None):
-	"""Block new Cash+Driver invoice if the same driver has an overdue unsettled invoice."""
-	if doc.is_return:
+	"""Block a new Cash+Driver document if that driver has an overdue unsettled invoice.
+
+	Hooked on Sales Order as well as Sales Invoice, so every field is read with `get`: an order has
+	no is_return, and attribute access would raise on it rather than simply finding nothing.
+	"""
+	if doc.get("is_return"):
 		return
-	if doc.custom_payment_mode == "Credit":
+	if doc.get("custom_payment_mode") == "Credit":
 		return
 	if not doc.get("custom_driver"):
 		return

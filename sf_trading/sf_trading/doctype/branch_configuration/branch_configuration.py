@@ -5,6 +5,10 @@ from frappe.model.document import Document
 class BranchConfiguration(Document):
 
 	def validate(self):
+		from sf_trading.branch_price_list import validate_branch_price_lists
+
+		validate_branch_price_lists(self)
+
 		if self.company:
 			for w in self.warehouse:
 				if w.warehouse:

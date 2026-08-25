@@ -1,59 +1,50 @@
 # sf_trading/branch_price_list.py
-"""Branch-wise pricing, through the Price List rather than around it.
+"""Branch-wise pricing, owned by Branch Configuration.
 
-The ask was branch-wise Item Price. Item Price already keys on a Price List, and ERPNext
-resolves a document's rates from the Price List named on that document — so the way to price a
-branch differently is to give the branch its own price list, not to teach Item Price about
-branches. Doing it the other way means patching `erpnext.stock.get_item_details.get_item_price`
-and overriding Item Price's duplicate check, and then every upgrade is a risk and every other
-feature that reads a price (Pricing Rules, the POS, the minimum-margin check, the item search
-dropdown) has to be taught the same trick separately. Priced through the Price List, all of
-that keeps working untouched.
+The ask was branch-wise Item Price. Item Price already keys on a Price List and ERPNext prices a
+document from the list named on it, so the way to price a branch differently is to give the branch
+its own price list -- not to teach Item Price about branches, which would mean patching
+`erpnext.stock.get_item_details.get_item_price`, overriding Item Price's duplicate check, and then
+re-teaching Pricing Rules, the minimum-margin check, the item-search dropdown and the POS the same
+trick one at a time.
 
-The mapping is modelled on ERPNext's own **Applicable for Countries** on Price List, and reads
-the same way:
+**Where the mapping lives.** On Branch Configuration, beside the branch's modes of payment, its
+warehouses, its cost centers and its users. That is already the one place a branch is described and
+the one place its access is controlled, so a price list belongs there too -- and it lets a branch
+carry several lists with one marked **Default**, which a field on Price List could not express.
 
-* A price list with **no** branches applies everywhere. That is every price list on the site
-  today, which is why nothing changes until somebody fills the table in.
-* A price list naming branches is *the* list for those branches. One list can serve several
-  branches, which is the common case — three branches on one retail price, one branch on its
-  own.
-* A branch may not be claimed by two enabled selling lists (nor by two buying lists). That is
-  refused when the price list is saved, naming the other list, because an ambiguous answer here
-  would be a silent wrong price.
-
-Branch is never mandatory. A document with no branch, or a branch no list names, is priced
-exactly as before.
+  * No rows on the branch -> nothing changes. The branch is priced from the customer's or the
+    company's default list and every price list stays selectable, exactly as before.
+  * Rows, one marked Default -> documents for that branch are priced from the default, and the
+    Price List field only offers the branch's own lists. A branch with a single row needs no tick:
+    one list is its own default.
+  * A branch may hold one default selling list and one default buying list, no more. Two defaults
+    of a kind would each be a valid answer to "what is this branch priced from", and the document
+    would take whichever the query returned first.
 
 A branch list holds differences, not a whole catalogue
 ------------------------------------------------------
 ERPNext prices a row from ONE list. Swap the list and any item that list does not price returns
 nothing -- `get_price_list_rate_for` gives None and the row keeps whatever it had, which on a new
-row is zero. A branch that prices twenty items differently would therefore zero-rate the other
-sixteen thousand.
-
-So a row the branch's list is silent about falls back to the list the document would otherwise
-have used. That is what "this branch charges differently for these items" means to the people
-using it, and it is the difference between a price list that holds a handful of overrides and one
-that has to be maintained in full for every branch.
+row is zero. A branch pricing twenty items differently would therefore zero-rate the other sixteen
+thousand. So a row the branch's list is silent about falls back to the list the document would
+otherwise have used.
 
 What gets replaced, and what does not
 -------------------------------------
-Applied at `before_validate`, which is the last point before ERPNext prices the rows. It sets
-the price list when the document is carrying the *default* one — empty, or the party's default,
-or the group's, or the global Selling/Buying Settings default, or another branch's list. It
-leaves a list somebody chose deliberately alone: overriding that would make the field
-unusable. On the form the switch is immediate, on `branch` change, so nobody is surprised at
-save time.
+Applied at `before_validate`, the last point before the controller prices the rows. It sets the
+price list when the document is carrying a *default* one -- empty, or the party's, or the group's,
+or the global Selling/Buying Settings default, or another branch's list. A list somebody chose
+deliberately from the branch's own set is left alone. On the form the switch is immediate, on
+`branch` change, so nobody types against prices that move at save.
 """
 
 import frappe
 from frappe import _
-from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
-BRANCH_TABLE = "custom_branches"
-CHILD_DOCTYPE = "Price List Branch"
+CHILD = "Branch Configuration Price List"
+TABLE_FIELD = "price_list"
 
 # The price list field each side of the business keeps its answer in.
 PRICE_LIST_FIELD = {"selling": "selling_price_list", "buying": "buying_price_list"}
@@ -61,31 +52,6 @@ PRICE_LIST_FIELD = {"selling": "selling_price_list", "buying": "buying_price_lis
 SELLING_DOCTYPES = ("Quotation", "Sales Order", "Delivery Note", "Sales Invoice")
 BUYING_DOCTYPES = ("Supplier Quotation", "Purchase Order", "Purchase Receipt", "Purchase Invoice")
 
-
-def ensure_custom_fields():
-	"""after_migrate: the branch table on Price List, right under Applicable for Countries."""
-	create_custom_fields(
-		{
-			"Price List": [
-				{
-					"fieldname": BRANCH_TABLE,
-					"label": "Applicable for Branches",
-					"fieldtype": "Table",
-					"options": CHILD_DOCTYPE,
-					"insert_after": "countries",
-					"description": (
-						"Leave empty and this price list applies to every branch. Name branches and "
-						"it becomes the price list for those branches — their documents are priced "
-						"from it instead of the default list."
-					),
-				}
-			]
-		},
-		ignore_validate=True,
-	)
-
-
-# ─── Resolution ───────────────────────────────────────────────────────────────
 
 def kind_for(doctype: str) -> str | None:
 	if doctype in SELLING_DOCTYPES:
@@ -95,46 +61,106 @@ def kind_for(doctype: str) -> str | None:
 	return None
 
 
-def mapped_price_lists(kind: str) -> dict:
-	"""{branch: price list} for every enabled price list of this kind that names branches."""
-	# A Table field puts no column on the parent, so the child table is the thing to test — and
-	# it is absent on a bench that has pulled this code but not migrated yet.
-	if not frappe.db.table_exists(CHILD_DOCTYPE):
-		return {}
+# ─── Reading the configuration ────────────────────────────────────────────────
 
-	rows = frappe.get_all(
-		CHILD_DOCTYPE,
-		filters={"parenttype": "Price List", "parentfield": BRANCH_TABLE, "branch": ["is", "set"]},
-		fields=["branch", "parent"],
+def _rows(branch: str) -> list:
+	"""The branch's price list rows, or nothing when the branch names none."""
+	if not branch or not frappe.db.table_exists(CHILD):
+		return []
+	return frappe.get_all(
+		CHILD,
+		filters={"parent": branch, "parenttype": "Branch Configuration"},
+		fields=["price_list", "is_default", "idx"],
+		order_by="idx asc",
 		ignore_permissions=True,
 	)
-	if not rows:
-		return {}
 
-	enabled = set(
+
+def _of_kind(rows: list, kind: str) -> list:
+	"""Only the rows whose price list is enabled and serves this side of the business."""
+	names = [row.price_list for row in rows if row.price_list]
+	if not names:
+		return []
+
+	usable = set(
 		frappe.get_all(
 			"Price List",
-			filters={"enabled": 1, kind: 1, "name": ["in", list({r.parent for r in rows})]},
+			filters={"name": ["in", names], "enabled": 1, kind: 1},
 			pluck="name",
 			ignore_permissions=True,
 		)
 	)
+	return [row for row in rows if row.price_list in usable]
 
-	mapping = {}
-	for row in rows:
-		if row.parent in enabled:
-			# validate_price_list guarantees one list per branch per kind; first wins if a site
-			# somehow has two, rather than raising while somebody is only saving an invoice
-			mapping.setdefault(row.branch, row.parent)
-	return mapping
+
+def allowed_price_lists(branch: str, kind: str) -> list:
+	"""Every price list this branch may use on this side. Empty means "no opinion"."""
+	if kind not in PRICE_LIST_FIELD:
+		return []
+	return [row.price_list for row in _of_kind(_rows(branch), kind)]
+
+
+def default_price_list(branch: str, kind: str) -> str | None:
+	"""What this branch is priced from: its default row, or its only row."""
+	rows = _of_kind(_rows(branch), kind)
+	if not rows:
+		return None
+
+	default = next((row for row in rows if cint(row.is_default)), None)
+	if default:
+		return default.price_list
+	# a branch with a single list of this kind needs no tick to mean it
+	return rows[0].price_list if len(rows) == 1 else None
+
+
+def branch_managed_lists(kind: str) -> set:
+	"""Every price list any branch names, so a switch of branch can replace another's list."""
+	if not frappe.db.table_exists(CHILD):
+		return set()
+	rows = frappe.get_all(
+		CHILD,
+		filters={"parenttype": "Branch Configuration", "price_list": ["is", "set"]},
+		fields=["price_list", "is_default", "idx"],
+		ignore_permissions=True,
+	)
+	return {row.price_list for row in _of_kind(rows, kind)}
 
 
 @frappe.whitelist()
-def get_branch_price_list(branch: str, kind: str = "selling") -> str | None:
-	"""The price list this branch is priced from, or nothing. What the form asks."""
+def get_branch_price_list(branch: str, kind: str = "selling") -> dict:
+	"""What the form asks when a branch is chosen: the default, and what may be picked."""
 	if not branch or kind not in PRICE_LIST_FIELD:
-		return None
-	return mapped_price_lists(kind).get(branch)
+		return {"default": None, "allowed": []}
+	return {"default": default_price_list(branch, kind), "allowed": allowed_price_lists(branch, kind)}
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def branch_price_list_query(doctype, txt, searchfield, start, page_len, filters):
+	"""Link query: the price lists a branch may use, for the Price List field on a document.
+
+	Falls back to every enabled list of that kind when the branch names none, so a site that has
+	not configured anything sees exactly what it always saw.
+	"""
+	filters = filters or {}
+	kind = filters.get("kind") or "selling"
+	allowed = allowed_price_lists(filters.get("branch"), kind)
+
+	conditions = {"enabled": 1, kind: 1}
+	if allowed:
+		conditions["name"] = ["in", allowed]
+	if txt:
+		conditions["name"] = ["like", f"%{txt}%"] if not allowed else ["in", [a for a in allowed if txt.lower() in a.lower()]]
+
+	rows = frappe.get_all(
+		"Price List",
+		filters=conditions,
+		fields=["name", "currency"],
+		order_by="name asc",
+		limit_start=start,
+		limit_page_length=page_len,
+	)
+	return [[row.name, row.currency] for row in rows]
 
 
 # ─── Applying it to a document ────────────────────────────────────────────────
@@ -172,14 +198,7 @@ def _default_price_lists(doc, kind: str) -> set:
 
 
 def apply_branch_price_list(doc, method=None):
-	"""before_validate: price the document from its branch's list, if it has one.
-
-	before_validate on purpose -- it is the last point before the controller prices the rows.
-	A branch that only gets resolved later in validate (from the warehouse, see
-	inter_branch.auto_set_branch_from_warehouse) therefore takes effect on the next save, not
-	this one; the form sets the list the moment the branch is chosen, so this is the API's
-	safety net rather than the everyday path.
-	"""
+	"""before_validate: price the document from its branch's default list, if it has one."""
 	kind = kind_for(doc.doctype)
 	if not kind:
 		return
@@ -189,8 +208,7 @@ def apply_branch_price_list(doc, method=None):
 		return
 
 	fieldname = PRICE_LIST_FIELD[kind]
-	mapping = mapped_price_lists(kind)
-	wanted = mapping.get(branch)
+	wanted = default_price_list(branch, kind)
 	if not wanted:
 		return
 
@@ -198,10 +216,11 @@ def apply_branch_price_list(doc, method=None):
 	if current == wanted:
 		return
 
-	# Replaceable: the default list, or another branch's list (the branch was switched). Not
-	# replaceable: anything a person went and picked.
-	replaceable = current in _default_price_lists(doc, kind) or current in set(mapping.values())
-	if not replaceable:
+	# Replaceable: the default list, or a list some other branch manages (the branch was switched).
+	# Not replaceable: a list from this branch's own set, which somebody picked on purpose.
+	if current in allowed_price_lists(branch, kind):
+		return
+	if not (current in _default_price_lists(doc, kind) or current in branch_managed_lists(kind)):
 		return
 
 	doc.set(fieldname, wanted)
@@ -210,6 +229,33 @@ def apply_branch_price_list(doc, method=None):
 	doc.set("plc_conversion_rate", None)
 
 	_fill_gaps_from(doc, fallback=current, branch_list=wanted)
+
+
+def validate_price_list_allowed(doc, method=None):
+	"""validate: a document may only use a price list its branch is configured for.
+
+	Only bites when the branch names lists at all -- a branch with none has no opinion, and every
+	document on a site that has configured nothing passes untouched.
+	"""
+	kind = kind_for(doc.doctype)
+	if not kind:
+		return
+
+	branch = doc.get("branch")
+	chosen = doc.get(PRICE_LIST_FIELD[kind])
+	if not branch or not chosen:
+		return
+
+	allowed = allowed_price_lists(branch, kind)
+	if not allowed or chosen in allowed:
+		return
+
+	frappe.throw(
+		_("{0} is not one of the price lists branch {1} may use: {2}.").format(
+			frappe.bold(chosen), frappe.bold(branch), ", ".join(allowed)
+		),
+		title=_("Price List Not Allowed for This Branch"),
+	)
 
 
 def _fill_gaps_from(doc, fallback: str, branch_list: str):
@@ -262,8 +308,7 @@ def _fill_gaps_from(doc, fallback: str, branch_list: str):
 		rate = fallback_rates.get(row.item_code)
 		if not rate:
 			continue
-		# only where the branch has nothing to say: a rate somebody typed is never overwritten,
-		# because a row already carrying one is left exactly as the controller would leave it
+		# only where the branch has nothing to say: a rate somebody typed is never overwritten
 		if flt(row.get("price_list_rate")) and flt(row.get("rate")):
 			continue
 		row.price_list_rate = rate
@@ -271,44 +316,43 @@ def _fill_gaps_from(doc, fallback: str, branch_list: str):
 			row.rate = rate
 
 
-# ─── Guarding the mapping itself ───────────────────────────────────────────────
+# ─── Guarding the configuration itself ────────────────────────────────────────
 
-def validate_price_list(doc, method=None):
-	"""A branch may be claimed by one enabled selling list and one enabled buying list.
-
-	Two lists claiming the same branch would each be a valid answer to "what is this branch
-	priced from", and the document would take whichever the query happened to return first.
-	Refused here, where somebody is looking at the price list, rather than later on an invoice.
-	"""
-	rows = doc.get(BRANCH_TABLE) or []
+def validate_branch_price_lists(doc, method=None):
+	"""Called from the Branch Configuration controller: one default per side, no repeats."""
+	rows = doc.get(TABLE_FIELD) or []
 	if not rows:
 		return
 
-	branches = [row.branch for row in rows if row.branch]
-	if not branches:
-		return
-
 	seen = set()
-	for branch in branches:
-		if branch in seen:
+	for row in rows:
+		if not row.price_list:
+			continue
+		if row.price_list in seen:
 			frappe.throw(
-				_("Branch {0} is listed twice on this price list.").format(frappe.bold(branch)),
-				title=_("Duplicate Branch"),
+				_("Price list {0} is listed twice on this branch.").format(frappe.bold(row.price_list)),
+				title=_("Duplicate Price List"),
 			)
-		seen.add(branch)
+		seen.add(row.price_list)
 
-	if not frappe.db.exists("DocType", CHILD_DOCTYPE):
-		return
+		if not frappe.db.get_value("Price List", row.price_list, "enabled"):
+			frappe.throw(
+				_("Price list {0} is disabled.").format(frappe.bold(row.price_list)),
+				title=_("Price List Disabled"),
+			)
 
 	for kind in ("selling", "buying"):
-		if not doc.get(kind):
-			continue
-		for branch, price_list in mapped_price_lists(kind).items():
-			if branch in seen and price_list != doc.name:
-				frappe.throw(
-					_("Branch {0} is already priced from {1}, which is also a {2} price list. "
-					  "A branch can only be priced from one {2} price list.").format(
-						frappe.bold(branch), frappe.bold(price_list), _(kind)
-					),
-					title=_("Branch Already Priced"),
-				)
+		defaults = [
+			row.price_list
+			for row in rows
+			if cint(row.is_default)
+			and row.price_list
+			and frappe.db.get_value("Price List", row.price_list, kind)
+		]
+		if len(defaults) > 1:
+			frappe.throw(
+				_("Only one {0} price list can be the default for this branch. {1} are both ticked.").format(
+					_(kind), frappe.bold(", ".join(defaults))
+				),
+				title=_("More Than One Default"),
+			)

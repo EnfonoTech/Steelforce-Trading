@@ -62,8 +62,12 @@ doctype_js = {
 	"Material Request": "public/js/material_request.js",
 	"Customer":         "public/js/customer_company.js",
 	"Quotation":        "public/js/quotation.js",
-	# Receive Payment on a submitted order — the invoice popup's twin
-	"Sales Order":      "public/js/sales_order_payment.js",
+	# Receive Payment on a submitted order — the invoice popup's twin — and the three fields the
+	# order now shares with the invoice
+	"Sales Order":      [
+		"public/js/sales_order_payment.js",
+		"public/js/sales_order_parity.js",
+	],
 	"Supplier Quotation": "public/js/purchase_tax_template.js",
 	"Purchase Receipt":   "public/js/purchase_tax_template.js",
 	# Payment Advice sits in the Create menu beside Payment Request, under the same conditions
@@ -161,12 +165,10 @@ after_migrate = [
 	"sf_trading.pdc_transfer.ensure_custom_fields",
 	# the referenced document's own date, on the Payment Entry references grid
 	"sf_trading.payment_entry_reference_date.ensure_custom_fields",
-	# Payment Mode on the order, carried onto the invoice raised from it
-	"sf_trading.sales_order_payment_mode.ensure_custom_fields",
+	# the invoice's Sales Person, Payment Mode and Delivery Person, on the order
+	"sf_trading.sales_order_fields.ensure_custom_fields",
 	# the refund a return will pay once it is approved
 	"sf_trading.planned_payment.ensure_custom_fields",
-	# Applicable for Branches on Price List — branch-wise pricing, ERPNext's own way
-	"sf_trading.branch_price_list.ensure_custom_fields",
 ]
 
 # Uninstallation
@@ -235,6 +237,9 @@ _SP_HOOK = "sf_trading.api.selling_price_validation.validate_selling_price"
 # Prices the document from its branch's Price List (Applicable for Branches), when the branch
 # names one and nobody has deliberately picked another list.
 _BPL_HOOK = "sf_trading.branch_price_list.apply_branch_price_list"
+# Refuses a price list the document's branch is not configured for. Only bites when the branch
+# names any: a branch with none has no opinion.
+_BPL_GUARD = "sf_trading.branch_price_list.validate_price_list_allowed"
 
 # Picks the purchase tax template matching the document currency (default
 # template for company-currency docs, "Import VAT 0%" otherwise).
@@ -317,6 +322,7 @@ doc_events = {
 			"sf_trading.api.sales_invoice_override.validate_driver_payment",
 			# a late return cannot be SAVED, so it cannot be parked in drafts either
 			"sf_trading.sales_return.validate_return_window",
+			_BPL_GUARD,
 			_BRANCH_HOOK,
 			_LH_HOOK,
 			_SP_HOOK,
@@ -334,23 +340,29 @@ doc_events = {
 		"on_cancel": "sf_trading.api.quotation.update_quotation_status_from_invoice",
 	},
 	"Sales Order": {
-		"before_validate": [_CC_HOOK, _BPL_HOOK],
-		"validate": [_LH_HOOK, _SP_HOOK],
+		"before_validate": [
+			_CC_HOOK,
+			_BPL_HOOK,
+			# a delivery person belongs to a cash sale, on the order as on the invoice
+			"sf_trading.api.sales_invoice_override.clear_driver_for_non_cash",
+		],
+		"validate": [
+			_LH_HOOK,
+			_SP_HOOK,
+			_BPL_GUARD,
+			"sf_trading.api.sales_invoice_override.validate_driver_payment",
+		],
 	},
 	"Quotation": {
 		"before_validate": [_CC_HOOK, _BPL_HOOK],
-		"validate": [_LH_HOOK, _SP_HOOK],
+		"validate": [_LH_HOOK, _SP_HOOK, _BPL_GUARD],
 	},
 	"Delivery Note": {
 		"before_validate": [_CC_HOOK, _BPL_HOOK],
 		# _SDBNB_DN_HOOK last: it reads the expense_account the controller and the
 		# earlier hooks have already settled on, then re-points stock rows at the
 		# Stock Delivered But Not Billed account when the company opts in.
-		"validate": [_BRANCH_HOOK, _LH_HOOK, _SP_HOOK, _SDBNB_DN_HOOK, _SBND_DN_HOOK],
-	},
-	# a branch may be priced from one selling list and one buying list, no more
-	"Price List": {
-		"validate": "sf_trading.branch_price_list.validate_price_list",
+		"validate": [_BRANCH_HOOK, _LH_HOOK, _SP_HOOK, _BPL_GUARD, _SDBNB_DN_HOOK, _SBND_DN_HOOK],
 	},
 	"Company": {
 		"validate": [
@@ -372,21 +384,22 @@ doc_events = {
 			"sf_trading.overrides.purchase_invoice.validate",
 			_BRANCH_HOOK,
 			_LH_HOOK,
+			_BPL_GUARD,
 		],
 		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
 		"on_submit": "sf_trading.api.purchase_return.auto_create_pr_return",
 	},
 	"Purchase Order": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": _LH_HOOK,
+		"validate": [_LH_HOOK, _BPL_GUARD],
 	},
 	"Purchase Receipt": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_BRANCH_HOOK, _LH_HOOK],
+		"validate": [_BRANCH_HOOK, _LH_HOOK, _BPL_GUARD],
 	},
 	"Supplier Quotation": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": _LH_HOOK,
+		"validate": [_LH_HOOK, _BPL_GUARD],
 	},
 	# core logs the impersonation but drops the reason — put it back on the row
 	"Activity Log": {
@@ -754,7 +767,8 @@ fixtures = [
 			"Payment Entry-custom_pdc_source_payment_entry",
 			"Payment Entry Reference-custom_reference_date",
 			"Sales Order-custom_payment_mode",
-			"Price List-custom_branches",
+			"Sales Order-custom_sales_person",
+			"Sales Order-custom_driver",
 			"Sales Invoice-custom_planned_refund_section",
 			"Sales Invoice-custom_planned_payments",
 			"Journal Entry-custom_loyalty_sales_invoice",

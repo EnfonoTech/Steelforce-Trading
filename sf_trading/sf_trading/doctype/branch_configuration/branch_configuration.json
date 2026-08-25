@@ -13,7 +13,9 @@
   "mode_of_payment",
   "warehouse",
   "cost_center",
-  "user"
+  "user",
+  "price_list_section",
+  "price_list"
  ],
  "fields": [
   {
@@ -64,12 +66,24 @@
    "fieldtype": "Table",
    "label": "User",
    "options": "Branch Configuration User"
+  },
+  {
+   "fieldname": "price_list_section",
+   "fieldtype": "Section Break",
+   "label": "Price List"
+  },
+  {
+   "fieldname": "price_list",
+   "fieldtype": "Table",
+   "label": "Price List",
+   "options": "Branch Configuration Price List",
+   "description": "Which price lists this branch may use, and which one its documents are priced from. Leave empty and the branch behaves exactly as before — priced from the customer's or the company's default list, with every list selectable."
   }
  ],
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-06-11 16:50:45.609542",
+ "modified": "2026-08-25 09:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "Branch Configuration",
