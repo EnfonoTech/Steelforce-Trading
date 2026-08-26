@@ -14,20 +14,26 @@ overwritten, so a chart someone recoloured stays recoloured.
 import json
 
 import frappe
+
+from sf_trading.sales_performance_block import BLOCK, ensure_block
 from frappe.utils import getdate, nowdate
 
 MODULE = "Sf Trading"
 DASHBOARD = "Branch Sales Performance"
 WORKSPACE = "Sales Performance"
 
+# label, method, description, colour. Order matters: this is the order they sit on the workspace.
 CARDS = [
-	("SF MTD Sales", "card_mtd_actual", "Sales this month", "blue"),
-	("SF MTD Target", "card_mtd_target", "Target for this month", "cyan"),
-	("SF MTD Achievement", "card_mtd_achievement", "This month against target", "green"),
-	("SF YTD Sales", "card_ytd_actual", "Sales this fiscal year", "blue"),
-	("SF YTD Target", "card_ytd_target", "Target to date this year", "cyan"),
-	("SF YTD Achievement", "card_ytd_achievement", "Year against target", "green"),
-	("SF YTD Shortfall", "card_ytd_shortfall", "Ahead of or behind target", "orange"),
+	("SF MTD Sales", "card_mtd_actual", "Sales this month", "#2490ef"),
+	("SF MTD Target", "card_mtd_target", "Target for this month", "#7c3aed"),
+	("SF MTD Achievement", "card_mtd_achievement", "This month against target", "#29cd42"),
+	("SF Needed Per Day", "card_needed_per_day", "Per remaining day to finish the month on target",
+	 "#f5a524"),
+	("SF YTD Sales", "card_ytd_actual", "Sales this fiscal year", "#2490ef"),
+	("SF YTD Target", "card_ytd_target", "Target for the months counted so far", "#7c3aed"),
+	("SF YTD Achievement", "card_ytd_achievement", "Year against target", "#29cd42"),
+	("SF YTD Shortfall", "card_ytd_shortfall", "Ahead of or behind target", "#ff5858"),
+	("SF Top Seller", "card_top_seller", "Furthest ahead of their own target", "#00bcd4"),
 ]
 
 
@@ -61,10 +67,14 @@ def ensure_report_flags():
 def ensure_cards():
 	for label, method, description, colour in CARDS:
 		if frappe.db.exists("Number Card", label):
-			# BHD is three decimals and a card rounds whatever it is handed unless told not to
+			# BHD is three decimals and a card rounds whatever it is handed unless told not to.
+			# Colour and description are refreshed too, so a restyle ships without hand-editing
+			# nine cards on every site.
 			frappe.db.set_value("Number Card", label, {
 				"show_full_number": 1,
 				"method": f"sf_trading.sales_target.{method}",
+				"color": colour,
+				"label": label,
 			}, update_modified=False)
 			continue
 		frappe.get_doc({
@@ -149,70 +159,91 @@ def ensure_dashboard():
 		doc.insert(ignore_permissions=True)
 
 
-def ensure_workspace():
-	"""Where a user goes to set a target and to see whether it was met."""
-	if frappe.db.exists("Workspace", WORKSPACE):
-		return
-	content = [
+def workspace_content():
+	"""The workspace layout: numbers first, then the overview block, then where to go next."""
+	return [
 		{"type": "header", "data": {"text": "<span class=\"h4\"><b>Sales Performance</b></span>", "col": 12}},
 		{"type": "number_card", "data": {"number_card_name": "SF MTD Sales", "col": 3}},
 		{"type": "number_card", "data": {"number_card_name": "SF MTD Target", "col": 3}},
 		{"type": "number_card", "data": {"number_card_name": "SF MTD Achievement", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "SF Needed Per Day", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "SF YTD Sales", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "SF YTD Target", "col": 3}},
 		{"type": "number_card", "data": {"number_card_name": "SF YTD Achievement", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "SF Top Seller", "col": 3}},
 		{"type": "spacer", "data": {"col": 12}},
-		{"type": "header", "data": {"text": "<span class=\"h4\"><b>Targets & Reports</b></span>", "col": 12}},
+		{"type": "custom_block", "data": {"custom_block_name": BLOCK, "col": 12}},
+		{"type": "spacer", "data": {"col": 12}},
+		{"type": "header", "data": {"text": "<span class=\"h4\"><b>Where the money came from</b></span>", "col": 12}},
+		{"type": "chart", "data": {"chart_name": "SF Target vs Actual by Month", "col": 6}},
+		{"type": "chart", "data": {"chart_name": "SF Achievement by Branch", "col": 6}},
+		{"type": "chart", "data": {"chart_name": "SF Sales by Branch", "col": 6}},
+		{"type": "chart", "data": {"chart_name": "SF Sales by Sales Person", "col": 6}},
+		{"type": "spacer", "data": {"col": 12}},
+		{"type": "header", "data": {"text": "<span class=\"h4\"><b>Targets &amp; Reports</b></span>", "col": 12}},
 		{"type": "shortcut", "data": {"shortcut_name": "Performance Board", "col": 3}},
 		{"type": "shortcut", "data": {"shortcut_name": "Sales Target", "col": 3}},
 		{"type": "shortcut", "data": {"shortcut_name": "Sales Target Scorecard", "col": 3}},
 		{"type": "shortcut", "data": {"shortcut_name": "Branch Sales Target vs Actual", "col": 3}},
 		{"type": "shortcut", "data": {"shortcut_name": "Sales Person Target vs Actual", "col": 3}},
-		{"type": "spacer", "data": {"col": 12}},
-		{"type": "chart", "data": {"chart_name": "SF Target vs Actual by Month", "col": 12}},
+		{"type": "shortcut", "data": {"shortcut_name": "Sales Target Monthly Trend", "col": 3}},
+		{"type": "quick_list", "data": {"label": "Sales Target", "col": 6}},
 	]
-	doc = frappe.get_doc({
-		"doctype": "Workspace", "name": WORKSPACE, "label": WORKSPACE, "title": WORKSPACE,
-		"module": MODULE, "public": 1, "icon": "getting-started",
-		"content": json.dumps(content),
-	})
-	doc.append("shortcuts", {"label": "Sales Target", "type": "DocType", "link_to": "Sales Target"})
+
+
+def _fill_workspace(doc):
+	"""One canonical arrangement, used for a new workspace and for upgrading an old one."""
+	doc.set("shortcuts", [])
+	doc.set("number_cards", [])
+	doc.set("charts", [])
+	doc.set("custom_blocks", [])
+	doc.set("quick_lists", [])
+	doc.content = json.dumps(workspace_content())
+
+	doc.append("shortcuts", {"label": "Performance Board", "type": "Page",
+	                         "link_to": "sales-performance-board"})
+	doc.append("shortcuts", {"label": "Sales Target", "type": "DocType", "link_to": "Sales Target",
+	                         "stats_filter": json.dumps({"fiscal_year": _defaults()[1]})})
 	for report in ("Sales Target Scorecard", "Branch Sales Target vs Actual",
 	               "Sales Person Target vs Actual", "Sales Target Monthly Trend"):
-		# doc_view must stay empty for a Report shortcut: the field only accepts the
-		# DocType views ("", List, Report Builder, Dashboard, Tree, New, Calendar, Kanban) and
-		# "Report" is refused, which aborted a migrate before this was found
+		# doc_view must stay empty for a Report shortcut: the field only accepts the DocType
+		# views, and "Report" is refused -- which aborted a migrate before this was found
 		doc.append("shortcuts", {"label": report, "type": "Report", "link_to": report,
 		                         "report_ref_doctype": "Sales Invoice"})
 	doc.append("shortcuts", {"label": DASHBOARD, "type": "Dashboard", "link_to": DASHBOARD})
-	doc.append("shortcuts", {"label": "Performance Board", "type": "Page",
-	                         "link_to": "sales-performance-board"})
+
 	for card in CARDS:
 		doc.append("number_cards", {"number_card_name": card[0], "label": card[0]})
-	doc.append("charts", {"chart_name": "SF Target vs Actual by Month", "label": "Target vs Actual"})
-	doc.append("links", {"label": "Sales Performance", "type": "Card Break", "link_count": 2,
-	                     "onboard": 0, "hidden": 0})
-	doc.append("links", {"label": "Sales Target", "type": "Link", "link_type": "DocType",
-	                     "link_to": "Sales Target", "onboard": 0, "hidden": 0})
-	doc.append("links", {"label": "Sales Target Scorecard", "type": "Link", "link_type": "Report",
-	                     "link_to": "Sales Target Scorecard", "is_query_report": 1,
-	                     "dependencies": "Sales Invoice", "onboard": 0, "hidden": 0})
-	doc.insert(ignore_permissions=True)
+	for chart, label in (("SF Target vs Actual by Month", "Target vs Actual"),
+	                     ("SF Achievement by Branch", "Achievement by Branch"),
+	                     ("SF Sales by Branch", "Sales by Branch"),
+	                     ("SF Sales by Sales Person", "Sales by Sales Person")):
+		doc.append("charts", {"chart_name": chart, "label": label})
+	doc.append("custom_blocks", {"custom_block_name": BLOCK, "label": "Sales Performance Overview"})
+	doc.append("quick_lists", {"document_type": "Sales Target", "label": "Sales Target",
+	                           "quick_list_filter": json.dumps({})})
 
 
-def ensure_workspace_page_link():
-	"""Add the Sales Performance page shortcut to a workspace that already exists.
+def ensure_workspace():
+	"""Build the workspace, or upgrade one that predates the overview block.
 
-	ensure_workspace() only builds a missing one, and on every site that migrated before the
-	page existed the workspace is already there -- without this the page would be reachable
-	only by typing its route.
+	An existing workspace is only rewritten while it still lacks the block -- after that a
+	layout somebody rearranged is theirs, and a migrate leaves it alone.
 	"""
-	if not frappe.db.exists("Workspace", WORKSPACE):
+	if frappe.db.exists("Workspace", WORKSPACE):
+		doc = frappe.get_doc("Workspace", WORKSPACE)
+		if BLOCK in (doc.content or ""):
+			return
+		_fill_workspace(doc)
+		doc.save(ignore_permissions=True)
 		return
-	ws = frappe.get_doc("Workspace", WORKSPACE)
-	if any(s.link_to == "sales-performance-board" for s in ws.shortcuts):
-		return
-	ws.append("shortcuts", {"label": "Performance Board", "type": "Page",
-	                        "link_to": "sales-performance-board"})
-	ws.save(ignore_permissions=True)
+
+	doc = frappe.get_doc({
+		"doctype": "Workspace", "name": WORKSPACE, "label": WORKSPACE, "title": WORKSPACE,
+		"module": MODULE, "public": 1, "icon": "getting-started",
+	})
+	_fill_workspace(doc)
+	doc.insert(ignore_permissions=True)
 
 
 def setup():
@@ -222,8 +253,8 @@ def setup():
 	never a reason to abort a migrate half way through somebody's deploy. Failures are logged
 	and the rest still runs.
 	"""
-	for step in (ensure_report_flags, ensure_cards, ensure_charts, ensure_dashboard,
-	             ensure_workspace, ensure_workspace_page_link):
+	for step in (ensure_report_flags, ensure_block, ensure_cards, ensure_charts,
+	             ensure_dashboard, ensure_workspace):
 		try:
 			step()
 		except Exception:

@@ -579,6 +579,41 @@ def card_ytd_achievement(filters=None):
 
 
 @frappe.whitelist()
+def card_needed_per_day(filters=None):
+	"""What the rest of the month has to sell per day to finish on target.
+
+	The one number on the wall that changes behaviour today: a percentage tells you that you are
+	behind, this tells you by how much per remaining day.
+	"""
+	c, agg = _totals(filters)
+	if not c.fiscal_year:
+		return _money(c, 0)
+	slot = next((s for s in month_slots(c.fiscal_year) if s.start <= c.as_on <= s.end), None)
+	if not slot:
+		return _money(c, 0)
+	remaining = (slot.end - c.as_on).days + 1
+	gap = flt(agg.get("mtd_target")) - flt(agg.get("mtd_actual"))
+	if gap <= 0:
+		return _money(c, 0)
+	return _money(c, gap / max(remaining, 1))
+
+
+@frappe.whitelist()
+def card_top_seller(filters=None):
+	"""Who is furthest ahead of their own target this year — a name, not a number."""
+	c = _card_context(filters)
+	if not (c.company and c.fiscal_year):
+		return "—"
+	rows = [r for r in scorecard(c.company, c.fiscal_year, "Sales Person", c.basis, c.as_on,
+	                             c.branch)
+	        if r["dimension_value"] != UNASSIGNED and r["ytd_target"]]
+	if not rows:
+		return "—"
+	best = max(rows, key=lambda r: r["ytd_pct"])
+	return f"{best['dimension_value']} · {flt(best['ytd_pct'], 0)}%"
+
+
+@frappe.whitelist()
 def card_ytd_shortfall(filters=None):
 	c, agg = _totals(filters)
 	return _money(c, flt(agg.get("ytd_actual")) - flt(agg.get("ytd_target")))
