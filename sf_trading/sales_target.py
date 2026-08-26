@@ -127,6 +127,38 @@ def allowed_branches() -> list | None:
 	return values or None
 
 
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def branch_query(doctype, txt, searchfield, start, page_len, filters):
+	"""Branches belonging to a company, for the Sales Target form.
+
+	Core's Branch carries no `company` field -- filtering a link on one returns
+	`Unknown column 'tabBranch.company'` and the picker dies. What ties a branch to a company
+	here is this app's own Branch Configuration, so ask that. Sites that have not configured a
+	branch yet still get the full list rather than an empty picker.
+	"""
+	company = (filters or {}).get("company")
+	like = f"%{txt or ''}%"
+	if company and frappe.db.exists("Branch Configuration", {"company": company}):
+		return frappe.db.sql(
+			"""
+			select b.name from `tabBranch` b
+			where b.name like %(txt)s
+			  and exists (
+				select 1 from `tabBranch Configuration` bc
+				where bc.branch = b.name and bc.company = %(company)s
+			  )
+			order by b.name limit %(start)s, %(page_len)s
+			""",
+			{"txt": like, "company": company, "start": start, "page_len": page_len},
+		)
+	return frappe.db.sql(
+		"""select name from `tabBranch` where name like %(txt)s order by name
+		   limit %(start)s, %(page_len)s""",
+		{"txt": like, "start": start, "page_len": page_len},
+	)
+
+
 # ─── Actuals ──────────────────────────────────────────────────────────────────
 
 def actuals(company: str, fiscal_year: str, dimension: str, basis: str = "Net of VAT",

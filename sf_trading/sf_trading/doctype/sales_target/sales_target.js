@@ -11,7 +11,11 @@ frappe.ui.form.on("Sales Target", {
 			return { filters: { is_group: 0, enabled: 1 } };
 		});
 		frm.set_query("branch", function () {
-			return { filters: { company: frm.doc.company } };
+			// Branch has no company field of its own — Branch Configuration is what ties the two
+			return {
+				query: "sf_trading.sales_target.branch_query",
+				filters: { company: frm.doc.company },
+			};
 		});
 	},
 
