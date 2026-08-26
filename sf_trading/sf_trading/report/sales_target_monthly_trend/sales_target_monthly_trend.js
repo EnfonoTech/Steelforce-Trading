@@ -14,6 +14,11 @@ frappe.query_reports["Sales Target Monthly Trend"] = {
 			fieldname: "basis", label: __("Measured On"), fieldtype: "Select",
 			options: ["Net of VAT", "Gross"].join("\n"), default: "Net of VAT",
 		},
+		{
+			fieldname: "from_date", label: __("From Date"), fieldtype: "Date",
+			description: __("Optional. Narrows the fiscal year; a part month's target is prorated."),
+		},
+		{ fieldname: "to_date", label: __("To Date"), fieldtype: "Date" },
 		{ fieldname: "branch", label: __("Branch"), fieldtype: "Link", options: "Branch" },
 		{
 			fieldname: "sales_person", label: __("Sales Person"), fieldtype: "Link",

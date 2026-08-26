@@ -10,7 +10,7 @@ import frappe
 from frappe import _
 from frappe.utils import flt
 
-from sf_trading.sales_target import actuals, month_slots, targets
+from sf_trading.sales_target import actuals, month_coverage, month_slots, targets
 
 
 def execute(filters=None):
@@ -24,9 +24,13 @@ def execute(filters=None):
 
 	# invoices are always narrowed by the branch filter; targets only when the dimension is a
 	# person, because a branch's target carries no branch field of its own
-	act = actuals(company, fiscal_year, dimension, basis, filters.branch)
+	act = actuals(company, fiscal_year, dimension, basis, filters.branch,
+	              from_date=filters.from_date, to_date=filters.to_date)
 	tgt = targets(company, fiscal_year, dimension,
 	              filters.branch if dimension == "Sales Person" else None)
+	coverage = month_coverage(fiscal_year, filters.from_date, filters.to_date)
+	if filters.from_date or filters.to_date:
+		tgt = {k: flt(v) * coverage.get(k[1], 0) for k, v in tgt.items()}
 
 	def keep(name):
 		if dimension == "Sales Person":
@@ -35,6 +39,8 @@ def execute(filters=None):
 
 	data = []
 	for slot in month_slots(fiscal_year):
+		if (filters.from_date or filters.to_date) and not coverage.get(slot.month):
+			continue
 		target = sum(flt(v) for (name, m), v in tgt.items() if m == slot.month and keep(name))
 		actual = sum(flt(v) for (name, m), v in act.items() if m == slot.month and keep(name))
 		data.append({

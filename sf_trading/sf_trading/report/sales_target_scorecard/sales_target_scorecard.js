@@ -19,6 +19,11 @@ frappe.query_reports["Sales Target Scorecard"] = {
 			options: ["Net of VAT", "Gross"].join("\n"), default: "Net of VAT",
 		},
 		{ fieldname: "as_on", label: __("As On"), fieldtype: "Date", default: frappe.datetime.get_today() },
+		{
+			fieldname: "from_date", label: __("From Date"), fieldtype: "Date",
+			description: __("Optional. Narrows the fiscal year; a part month's target is prorated."),
+		},
+		{ fieldname: "to_date", label: __("To Date"), fieldtype: "Date" },
 		{ fieldname: "branch", label: __("Branch"), fieldtype: "Link", options: "Branch" },
 	],
 

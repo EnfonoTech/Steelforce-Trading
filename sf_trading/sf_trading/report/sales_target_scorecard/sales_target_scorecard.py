@@ -22,7 +22,8 @@ def execute(filters=None):
 	currency = frappe.get_cached_value("Company", company, "default_currency") if company else None
 
 	rows = scorecard(company, fiscal_year, dimension, filters.basis or "Net of VAT",
-	                 filters.as_on, filters.branch)
+	                 filters.as_on, filters.branch,
+	                 from_date=filters.from_date, to_date=filters.to_date)
 	for r in rows:
 		r["currency"] = currency
 

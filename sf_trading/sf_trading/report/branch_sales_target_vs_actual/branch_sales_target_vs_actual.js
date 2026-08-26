@@ -15,6 +15,11 @@ frappe.query_reports["Branch Sales Target vs Actual"] = {
 			options: ["Net of VAT", "Gross"].join("\n"), default: "Net of VAT",
 		},
 		{
+			fieldname: "from_date", label: __("From Date"), fieldtype: "Date",
+			description: __("Optional. Narrows the fiscal year; a part month's target is prorated."),
+		},
+		{ fieldname: "to_date", label: __("To Date"), fieldtype: "Date" },
+		{
 			fieldname: "period", label: __("Period"), fieldtype: "Select",
 			options: ["Monthly", "Quarterly", "Half-Yearly", "Yearly"].join("\n"),
 			default: "Monthly",

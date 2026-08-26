@@ -162,11 +162,17 @@ def branch_query(doctype, txt, searchfield, start, page_len, filters):
 # ─── Actuals ──────────────────────────────────────────────────────────────────
 
 def actuals(company: str, fiscal_year: str, dimension: str, basis: str = "Net of VAT",
-            branch: str | None = None, include_unassigned: bool = True) -> dict:
-	"""{(dimension value, month name): amount} of net sales."""
+            branch: str | None = None, include_unassigned: bool = True,
+            from_date=None, to_date=None) -> dict:
+	"""{(dimension value, month name): amount} of net sales, optionally within a date range."""
 	if dimension not in DIMENSIONS:
 		frappe.throw(_("Unknown dimension {0}").format(dimension))
 	start, end = fiscal_year_bounds(fiscal_year)
+	# a range narrows the year, it never widens it: a target belongs to a fiscal year
+	if from_date:
+		start = max(start, getdate(from_date))
+	if to_date:
+		end = min(end, getdate(to_date))
 	amount = BASIS_FIELD.get(basis or "Net of VAT", BASIS_FIELD["Net of VAT"])
 	column = DIMENSIONS[dimension]["column"]
 
@@ -239,6 +245,27 @@ def targets(company: str, fiscal_year: str, dimension: str, branch: str | None =
 	return {(r.dimension_value, r.month): flt(r.amount) for r in rows}
 
 
+def month_coverage(fiscal_year: str, from_date=None, to_date=None) -> dict:
+	"""{month name: 0..1} — how much of each month the chosen dates cover.
+
+	A monthly target cannot be compared against half a month of sales without being halved
+	first. Ask for 1–15 August and the August target counts 15/31, not all of it.
+	"""
+	start, end = fiscal_year_bounds(fiscal_year)
+	if from_date:
+		start = max(start, getdate(from_date))
+	if to_date:
+		end = min(end, getdate(to_date))
+
+	out = {}
+	for slot in month_slots(fiscal_year):
+		lo, hi = max(slot.start, start), min(slot.end, end)
+		days = (slot.end - slot.start).days + 1
+		covered = (hi - lo).days + 1 if hi >= lo else 0
+		out[slot.month] = covered / days if days else 0.0
+	return out
+
+
 def target_months(tgt: dict, name: str | None = None) -> set:
 	"""The months that actually carry a target — for one dimension value, or for all of them.
 
@@ -265,9 +292,15 @@ def variance_dataset(filters, dimension: str):
 	# The branch filter reads differently per dimension, and getting this backwards returns a
 	# silently empty grid: a BRANCH target carries no `branch` field of its own (the branch IS
 	# the dimension value), so it must be matched by name, while a PERSON target may carry one.
-	act = actuals(company, fiscal_year, dimension, basis, branch)
+	from_date, to_date = filters.get("from_date"), filters.get("to_date")
+	act = actuals(company, fiscal_year, dimension, basis, branch,
+	              from_date=from_date, to_date=to_date)
 	tgt = targets(company, fiscal_year, dimension,
 	              branch if dimension == "Sales Person" else None)
+	coverage = month_coverage(fiscal_year, from_date, to_date)
+	if from_date or to_date:
+		# half a month of sales is judged against half a month of target
+		tgt = {k: flt(v) * coverage.get(k[1], 0) for k, v in tgt.items()}
 	currency = frappe.get_cached_value("Company", company, "default_currency")
 
 	# Narrowing the buckets rather than the totals keeps the grid honest with itself: every
@@ -275,6 +308,9 @@ def variance_dataset(filters, dimension: str):
 	months_with_target = target_months(tgt)
 	only_target_months = cint(filters.get("only_target_months", 1)) and months_with_target
 	report_buckets = buckets(fiscal_year, period)
+	if from_date or to_date:
+		report_buckets = [b for b in report_buckets
+		                  if any(coverage.get(m, 0) > 0 for m in b.months)]
 	if only_target_months:
 		report_buckets = [b for b in report_buckets
 		                  if any(m in months_with_target for m in b.months)]
@@ -361,14 +397,23 @@ def variance_dataset(filters, dimension: str):
 # ─── Scorecard (month to date / year to date) ─────────────────────────────────
 
 def scorecard(company: str, fiscal_year: str, dimension: str, basis: str = "Net of VAT",
-              as_on: str | None = None, branch: str | None = None) -> list:
+              as_on: str | None = None, branch: str | None = None,
+              from_date=None, to_date=None) -> list:
 	as_on = getdate(as_on or nowdate())
-	act = actuals(company, fiscal_year, dimension, basis, branch)
+	act = actuals(company, fiscal_year, dimension, basis, branch,
+	              from_date=from_date, to_date=to_date)
 	tgt = targets(company, fiscal_year, dimension, branch)
 	slots = month_slots(fiscal_year)
 	this_month = [s for s in slots if s.start <= as_on <= s.end]
 	current = this_month[0].month if this_month else None
 	elapsed = [s.month for s in slots if s.start <= as_on]
+
+	# With dates given, "year to date" means the range asked for, and a part-month target is
+	# prorated to match the days actually included.
+	if from_date or to_date:
+		coverage = month_coverage(fiscal_year, from_date, to_date)
+		tgt = {k: flt(v) * coverage.get(k[1], 0) for k, v in tgt.items()}
+		elapsed = [m for m in (s.month for s in slots) if coverage.get(m, 0) > 0]
 
 	# a month in progress is credited pro rata, so a target is not "missed" on the 2nd
 	fraction = 1.0

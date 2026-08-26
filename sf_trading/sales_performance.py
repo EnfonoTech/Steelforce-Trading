@@ -22,18 +22,18 @@ MODULE = "Sf Trading"
 DASHBOARD = "Branch Sales Performance"
 WORKSPACE = "Sales Performance"
 
-# label, method, description, colour. Order matters: this is the order they sit on the workspace.
+# record name (what the workspace references), the label a human reads, the method, the colour.
+# "SF MTD SALES" told nobody anything; the label says which period and which quantity it is.
 CARDS = [
-	("SF MTD Sales", "card_mtd_actual", "Sales this month", "#2490ef"),
-	("SF MTD Target", "card_mtd_target", "Target for this month", "#7c3aed"),
-	("SF MTD Achievement", "card_mtd_achievement", "This month against target", "#29cd42"),
-	("SF Needed Per Day", "card_needed_per_day", "Per remaining day to finish the month on target",
-	 "#f5a524"),
-	("SF YTD Sales", "card_ytd_actual", "Sales this fiscal year", "#2490ef"),
-	("SF YTD Target", "card_ytd_target", "Target for the months counted so far", "#7c3aed"),
-	("SF YTD Achievement", "card_ytd_achievement", "Year against target", "#29cd42"),
-	("SF YTD Shortfall", "card_ytd_shortfall", "Ahead of or behind target", "#ff5858"),
-	("SF Top Seller", "card_top_seller", "Furthest ahead of their own target", "#00bcd4"),
+	("SF MTD Sales", "Sales · This Month", "card_mtd_actual", "#2490ef"),
+	("SF MTD Target", "Target · This Month", "card_mtd_target", "#7c3aed"),
+	("SF MTD Achievement", "Achieved · This Month", "card_mtd_achievement", "#29cd42"),
+	("SF Needed Per Day", "Needed per Day · Rest of Month", "card_needed_per_day", "#f5a524"),
+	("SF YTD Sales", "Sales · Year to Date", "card_ytd_actual", "#2490ef"),
+	("SF YTD Target", "Target · Year to Date", "card_ytd_target", "#7c3aed"),
+	("SF YTD Achievement", "Achieved · Year to Date", "card_ytd_achievement", "#29cd42"),
+	("SF YTD Shortfall", "Ahead / Behind · Year to Date", "card_ytd_shortfall", "#ff5858"),
+	("SF Top Seller", "Top Sales Person", "card_top_seller", "#00bcd4"),
 ]
 
 
@@ -65,12 +65,12 @@ def ensure_report_flags():
 
 
 def ensure_cards():
-	for label, method, description, colour in CARDS:
-		if frappe.db.exists("Number Card", label):
+	for name, label, method, colour in CARDS:
+		if frappe.db.exists("Number Card", name):
 			# BHD is three decimals and a card rounds whatever it is handed unless told not to.
 			# Colour and description are refreshed too, so a restyle ships without hand-editing
 			# nine cards on every site.
-			frappe.db.set_value("Number Card", label, {
+			frappe.db.set_value("Number Card", name, {
 				"show_full_number": 1,
 				"method": f"sf_trading.sales_target.{method}",
 				"color": colour,
@@ -78,7 +78,7 @@ def ensure_cards():
 			}, update_modified=False)
 			continue
 		frappe.get_doc({
-			"doctype": "Number Card", "name": label, "label": label, "type": "Custom",
+			"doctype": "Number Card", "name": name, "label": label, "type": "Custom",
 			"method": f"sf_trading.sales_target.{method}", "module": MODULE,
 			"is_public": 1, "show_full_number": 1, "color": colour,
 			"filters_json": "{}",
@@ -92,6 +92,13 @@ def ensure_charts():
 	group_by_filters = json.dumps([
 		["Sales Invoice", "docstatus", "=", 1],
 		["Sales Invoice", "company", "=", company],
+	])
+	# without this the chart is topped by a "null" bar worth 750k: every invoice raised before
+	# the sales person field became mandatory on 15 July 2026
+	person_filters = json.dumps([
+		["Sales Invoice", "docstatus", "=", 1],
+		["Sales Invoice", "company", "=", company],
+		["Sales Invoice", "custom_sales_person", "is", "set"],
 	])
 
 	charts = [
@@ -107,7 +114,7 @@ def ensure_charts():
 			"chart_type": "Group By", "document_type": "Sales Invoice",
 			"group_by_type": "Sum", "group_by_based_on": "custom_sales_person",
 			"aggregate_function_based_on": "base_net_total", "number_of_groups": 0,
-			"type": "Bar", "filters_json": group_by_filters, "timespan": "Last Year",
+			"type": "Bar", "filters_json": person_filters, "timespan": "Last Year",
 		},
 		{
 			"name": "SF Target vs Actual by Month", "chart_name": "SF Target vs Actual by Month",
@@ -151,8 +158,8 @@ def ensure_dashboard():
 			"doctype": "Dashboard", "dashboard_name": DASHBOARD, "module": MODULE,
 			"is_default": 0,
 		})
-		for label, *_rest in CARDS:
-			doc.append("cards", {"card": label})
+		for name, *_rest in CARDS:
+			doc.append("cards", {"card": name})
 		for chart in ("SF Target vs Actual by Month", "SF Achievement by Branch",
 		              "SF Sales by Branch", "SF Sales by Sales Person"):
 			doc.append("charts", {"chart": chart, "width": "Half"})
@@ -162,14 +169,17 @@ def ensure_dashboard():
 def workspace_content():
 	"""The workspace layout: numbers first, then the overview block, then where to go next."""
 	return [
-		{"type": "header", "data": {"text": "<span class=\"h4\"><b>Sales Performance</b></span>", "col": 12}},
+		{"type": "header", "data": {"text": "<span class=\"h4\"><b>This month</b></span>", "col": 12}},
 		{"type": "number_card", "data": {"number_card_name": "SF MTD Sales", "col": 3}},
 		{"type": "number_card", "data": {"number_card_name": "SF MTD Target", "col": 3}},
 		{"type": "number_card", "data": {"number_card_name": "SF MTD Achievement", "col": 3}},
 		{"type": "number_card", "data": {"number_card_name": "SF Needed Per Day", "col": 3}},
+		{"type": "header", "data": {"text": "<span class=\"h4\"><b>Year to date</b></span>", "col": 12}},
 		{"type": "number_card", "data": {"number_card_name": "SF YTD Sales", "col": 3}},
 		{"type": "number_card", "data": {"number_card_name": "SF YTD Target", "col": 3}},
 		{"type": "number_card", "data": {"number_card_name": "SF YTD Achievement", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "SF YTD Shortfall", "col": 3}},
+		{"type": "header", "data": {"text": "<span class=\"h4\"><b>People</b></span>", "col": 12}},
 		{"type": "number_card", "data": {"number_card_name": "SF Top Seller", "col": 3}},
 		{"type": "spacer", "data": {"col": 12}},
 		{"type": "custom_block", "data": {"custom_block_name": BLOCK, "col": 12}},
@@ -213,6 +223,8 @@ def _fill_workspace(doc):
 	doc.append("shortcuts", {"label": DASHBOARD, "type": "Dashboard", "link_to": DASHBOARD})
 
 	for card in CARDS:
+		# the workspace block matches on label, so this label must stay the RECORD name; the
+		# friendly wording lives on the card itself and is what gets displayed
 		doc.append("number_cards", {"number_card_name": card[0], "label": card[0]})
 	for chart in ("SF Target vs Actual by Month", "SF Achievement by Branch",
 	              "SF Sales by Branch", "SF Sales by Sales Person"):
