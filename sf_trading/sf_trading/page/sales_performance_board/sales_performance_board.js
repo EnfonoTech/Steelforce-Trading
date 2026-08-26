@@ -15,7 +15,10 @@ frappe.pages["sales-performance-board"].on_page_load = function (wrapper) {
 	new SalesPerformance(page);
 };
 
-const SP_FMT = (v, currency) => format_currency(flt(v), currency || frappe.boot.sysdefaults.currency);
+// BHD prints its symbol right-to-left, and two figures next to each other then swap places on
+// screen. Each one is isolated so what is read is what is meant.
+const SP_MONEY = (v, currency) => format_currency(flt(v), currency || frappe.boot.sysdefaults.currency);
+const SP_FMT = (v, currency) => `<bdi dir="ltr">${SP_MONEY(v, currency)}</bdi>`;
 const SP_PCT = (v) => (v === null || v === undefined ? "—" : `${flt(v, 1)}%`);
 // green once the target is met, amber within reach, red when it is not
 const SP_TONE = (pct) => (pct === null || pct === undefined ? "flat" : pct >= 100 ? "good" : pct >= 80 ? "warn" : "bad");
@@ -101,6 +104,10 @@ class SalesPerformance {
 	}
 
 	refresh() {
+		if (this._skip_next_refresh) {
+			this._skip_next_refresh = false;
+			return;
+		}
 		const $c = this.$body.find(".sfsp-content");
 		const $l = this.$body.find(".sfsp-loading");
 		$l.show().text(__("Loading…"));
@@ -144,6 +151,13 @@ class SalesPerformance {
 		this._branch_pct(d.branches);
 		this._table(".sfsp-branches", d.branches, cur, __("No branch has sold anything yet."));
 		this._table(".sfsp-people", d.people, cur, __("No sales person has sold anything yet."));
+		// The server picks the year when the filter is blank; show which one it chose. Writing
+		// the field fires its change handler, so the refetch it would cause is skipped -- the
+		// data on screen already came from that very year.
+		if (!this._val("fiscal_year") && d.meta.fiscal_year) {
+			this._skip_next_refresh = true;
+			this.filters.fiscal_year.set_value(d.meta.fiscal_year);
+		}
 		this.$body.find(".sfsp-foot").text(
 			__("{0} · {1} · {2} · as on {3} · generated {4}", [
 				d.meta.company, d.meta.fiscal_year, d.meta.basis, d.meta.as_on, d.meta.generated_on])
@@ -167,7 +181,7 @@ class SalesPerformance {
 				<div class="sfsp-hero-main">
 					<div class="sfsp-hero-label">${note}</div>
 					<div class="sfsp-hero-value">${SP_FMT(s.ytd_actual, cur)}</div>
-					<div class="sfsp-hero-sub">${__("of")} <b>${SP_FMT(s.ytd_target, cur)}</b> ${delta}</div>
+					<div class="sfsp-hero-sub" dir="ltr">${__("of")} <b>${SP_FMT(s.ytd_target, cur)}</b> ${delta}</div>
 				</div>
 				<div class="sfsp-hero-gauge">
 					<div class="sfsp-gauge-pct">${SP_PCT(pct)}</div>
@@ -265,7 +279,7 @@ class SalesPerformance {
 					<div class="sfsp-row-name">${frappe.utils.escape_html(r.name)}</div>
 					<div class="sfsp-row-bar"><span class="${SP_TONE(pct)}" style="width:${bar}%"></span></div>
 					<div class="sfsp-row-pct ${SP_TONE(pct)}">${SP_PCT(pct)}</div>
-					<div class="sfsp-row-amt">${SP_FMT(r.actual, cur)}
+					<div class="sfsp-row-amt" dir="ltr">${SP_FMT(r.actual, cur)}
 						<span class="text-muted">/ ${SP_FMT(r.target, cur)}</span></div>
 				</div>`;
 		}).join("");
@@ -284,22 +298,22 @@ class SalesPerformance {
 			.sfsp-hero-value { font-size:34px; font-weight:700; line-height:1.2; }
 			.sfsp-hero-sub { color:var(--text-muted); }
 			.sfsp-delta { margin-left:10px; font-weight:600; }
-			.sfsp-delta.up { color:var(--green-600); } .sfsp-delta.down { color:var(--red-500); }
+			.sfsp-delta.up { color:#1f9d3a; } .sfsp-delta.down { color:#e03636; }
 			.sfsp-hero-gauge { min-width:280px; flex:1; max-width:420px; }
 			.sfsp-gauge-pct { font-size:26px; font-weight:700; text-align:right; }
 			.sfsp-bar { height:10px; border-radius:6px; background:var(--gray-200); overflow:hidden; margin:6px 0; }
-			.sfsp-bar > span { display:block; height:100%; background:var(--blue-500); }
-			.sfsp-hero-inner.good .sfsp-bar > span { background:var(--green-500); }
-			.sfsp-hero-inner.warn .sfsp-bar > span { background:var(--orange-500); }
-			.sfsp-hero-inner.bad  .sfsp-bar > span { background:var(--red-400); }
+			.sfsp-bar > span { display:block; height:100%; background:#2490ef; }
+			.sfsp-hero-inner.good .sfsp-bar > span { background:#29cd42; }
+			.sfsp-hero-inner.warn .sfsp-bar > span { background:#f5a524; }
+			.sfsp-hero-inner.bad  .sfsp-bar > span { background:#ff5858; }
 			.sfsp-gauge-note { color:var(--text-muted); font-size:12px; text-align:right; }
 			.sfsp-kpi { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
 				gap:10px; margin-bottom:14px; }
 			.sfsp-kpi-card { border:1px solid var(--border-color); border-left:3px solid var(--gray-400);
 				border-radius:8px; padding:12px 14px; background:var(--fg-color); }
-			.sfsp-kpi-card.good { border-left-color:var(--green-500); }
-			.sfsp-kpi-card.warn { border-left-color:var(--orange-500); }
-			.sfsp-kpi-card.bad  { border-left-color:var(--red-400); }
+			.sfsp-kpi-card.good { border-left-color:#29cd42; }
+			.sfsp-kpi-card.warn { border-left-color:#f5a524; }
+			.sfsp-kpi-card.bad  { border-left-color:#ff5858; }
 			.sfsp-kpi-label { color:var(--text-muted); font-size:11px; text-transform:uppercase;
 				letter-spacing:.04em; }
 			.sfsp-kpi-value { font-size:20px; font-weight:650; }
@@ -315,14 +329,14 @@ class SalesPerformance {
 			.sfsp-row:last-child { border-bottom:0; }
 			.sfsp-row-name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 			.sfsp-row-bar { height:8px; border-radius:5px; background:var(--gray-200); overflow:hidden; }
-			.sfsp-row-bar > span { display:block; height:100%; background:var(--blue-500); }
-			.sfsp-row-bar > span.good { background:var(--green-500); }
-			.sfsp-row-bar > span.warn { background:var(--orange-500); }
-			.sfsp-row-bar > span.bad  { background:var(--red-400); }
+			.sfsp-row-bar > span { display:block; height:100%; background:#2490ef; }
+			.sfsp-row-bar > span.good { background:#29cd42; }
+			.sfsp-row-bar > span.warn { background:#f5a524; }
+			.sfsp-row-bar > span.bad  { background:#ff5858; }
 			.sfsp-row-pct { text-align:right; font-weight:600; }
-			.sfsp-row-pct.good { color:var(--green-600); }
-			.sfsp-row-pct.warn { color:var(--orange-500); }
-			.sfsp-row-pct.bad  { color:var(--red-500); }
+			.sfsp-row-pct.good { color:#1f9d3a; }
+			.sfsp-row-pct.warn { color:#c67c06; }
+			.sfsp-row-pct.bad  { color:#e03636; }
 			.sfsp-row-amt { text-align:right; font-size:12px; white-space:nowrap; }
 			.sfsp-foot { font-size:11px; margin-top:6px; }
 			@media (max-width: 992px) {
