@@ -161,7 +161,7 @@ def ensure_workspace():
 		{"type": "number_card", "data": {"number_card_name": "SF YTD Achievement", "col": 3}},
 		{"type": "spacer", "data": {"col": 12}},
 		{"type": "header", "data": {"text": "<span class=\"h4\"><b>Targets & Reports</b></span>", "col": 12}},
-		{"type": "shortcut", "data": {"shortcut_name": "Sales Performance", "col": 3}},
+		{"type": "shortcut", "data": {"shortcut_name": "Performance Board", "col": 3}},
 		{"type": "shortcut", "data": {"shortcut_name": "Sales Target", "col": 3}},
 		{"type": "shortcut", "data": {"shortcut_name": "Sales Target Scorecard", "col": 3}},
 		{"type": "shortcut", "data": {"shortcut_name": "Branch Sales Target vs Actual", "col": 3}},
@@ -183,8 +183,8 @@ def ensure_workspace():
 		doc.append("shortcuts", {"label": report, "type": "Report", "link_to": report,
 		                         "report_ref_doctype": "Sales Invoice"})
 	doc.append("shortcuts", {"label": DASHBOARD, "type": "Dashboard", "link_to": DASHBOARD})
-	doc.append("shortcuts", {"label": "Sales Performance", "type": "Page",
-	                         "link_to": "sales-performance"})
+	doc.append("shortcuts", {"label": "Performance Board", "type": "Page",
+	                         "link_to": "sales-performance-board"})
 	for card in CARDS:
 		doc.append("number_cards", {"number_card_name": card[0], "label": card[0]})
 	doc.append("charts", {"chart_name": "SF Target vs Actual by Month", "label": "Target vs Actual"})
@@ -208,10 +208,10 @@ def ensure_workspace_page_link():
 	if not frappe.db.exists("Workspace", WORKSPACE):
 		return
 	ws = frappe.get_doc("Workspace", WORKSPACE)
-	if any(s.link_to == "sales-performance" for s in ws.shortcuts):
+	if any(s.link_to == "sales-performance-board" for s in ws.shortcuts):
 		return
-	ws.append("shortcuts", {"label": "Sales Performance", "type": "Page",
-	                        "link_to": "sales-performance"})
+	ws.append("shortcuts", {"label": "Performance Board", "type": "Page",
+	                        "link_to": "sales-performance-board"})
 	ws.save(ignore_permissions=True)
 
 

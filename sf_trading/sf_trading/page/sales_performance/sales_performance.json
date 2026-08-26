@@ -7,19 +7,31 @@
  "modified": "2026-08-27 08:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
- "name": "sales-performance",
+ "name": "sales-performance-board",
  "owner": "Administrator",
- "page_name": "sales-performance",
+ "page_name": "sales-performance-board",
  "roles": [
-  {"role": "Accounts Manager"},
-  {"role": "Accounts User"},
-  {"role": "Sales Manager"},
-  {"role": "Sales User"},
-  {"role": "Branch Head"},
-  {"role": "System Manager"}
+  {
+   "role": "Accounts Manager"
+  },
+  {
+   "role": "Accounts User"
+  },
+  {
+   "role": "Sales Manager"
+  },
+  {
+   "role": "Sales User"
+  },
+  {
+   "role": "Branch Head"
+  },
+  {
+   "role": "System Manager"
+  }
  ],
  "script": null,
  "standard": "Yes",
  "style": null,
- "title": "Sales Performance"
+ "title": "Sales Performance Board"
 }

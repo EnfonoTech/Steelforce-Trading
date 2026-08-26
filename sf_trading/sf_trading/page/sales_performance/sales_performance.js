@@ -6,7 +6,7 @@
 //
 // The reports remain the place to audit a figure; this is the place to see where you stand.
 
-frappe.pages["sales-performance"].on_page_load = function (wrapper) {
+frappe.pages["sales-performance-board"].on_page_load = function (wrapper) {
 	const page = frappe.ui.make_app_page({
 		parent: wrapper,
 		title: __("Sales Performance"),

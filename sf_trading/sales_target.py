@@ -501,7 +501,8 @@ def _money(c, value):
 
 
 def _percent(value):
-	return {"value": flt(value), "fieldtype": "Percent"}
+	"""A number card renders a plain string verbatim; anything else gets currency-decorated."""
+	return f"{flt(value, 1)}%"
 
 
 @frappe.whitelist()
