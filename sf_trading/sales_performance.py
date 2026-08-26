@@ -187,7 +187,7 @@ def workspace_content():
 		{"type": "shortcut", "data": {"shortcut_name": "Branch Sales Target vs Actual", "col": 3}},
 		{"type": "shortcut", "data": {"shortcut_name": "Sales Person Target vs Actual", "col": 3}},
 		{"type": "shortcut", "data": {"shortcut_name": "Sales Target Monthly Trend", "col": 3}},
-		{"type": "quick_list", "data": {"label": "Sales Target", "col": 6}},
+		{"type": "quick_list", "data": {"quick_list_name": "Sales Target", "col": 6}},
 	]
 
 
@@ -214,12 +214,10 @@ def _fill_workspace(doc):
 
 	for card in CARDS:
 		doc.append("number_cards", {"number_card_name": card[0], "label": card[0]})
-	for chart, label in (("SF Target vs Actual by Month", "Target vs Actual"),
-	                     ("SF Achievement by Branch", "Achievement by Branch"),
-	                     ("SF Sales by Branch", "Sales by Branch"),
-	                     ("SF Sales by Sales Person", "Sales by Sales Person")):
-		doc.append("charts", {"chart_name": chart, "label": label})
-	doc.append("custom_blocks", {"custom_block_name": BLOCK, "label": "Sales Performance Overview"})
+	for chart in ("SF Target vs Actual by Month", "SF Achievement by Branch",
+	              "SF Sales by Branch", "SF Sales by Sales Person"):
+		doc.append("charts", {"chart_name": chart, "label": chart})
+	doc.append("custom_blocks", {"custom_block_name": BLOCK, "label": BLOCK})
 	doc.append("quick_lists", {"document_type": "Sales Target", "label": "Sales Target",
 	                           "quick_list_filter": json.dumps({})})
 
