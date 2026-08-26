@@ -29,6 +29,12 @@ HTML = """<div class="sfws">
       <div class="sfws-people"></div>
     </div>
   </div>
+  <div class="sfws-cols sfws-second">
+    <div class="sfws-panel sfws-wide">
+      <div class="sfws-title">Top seller in each branch</div>
+      <div class="sfws-toppers"></div>
+    </div>
+  </div>
   <div class="sfws-foot"></div>
 </div>"""
 
@@ -46,6 +52,13 @@ STYLE = """
   text-overflow:ellipsis; }
 .sfws-tile-extra { font-size:11px; color:var(--text-muted); }
 .sfws-cols { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
+.sfws-second { margin-top:12px; }
+.sfws-topper { display:flex; justify-content:space-between; align-items:baseline; gap:10px;
+  padding:6px 0; border-bottom:1px solid var(--border-color); }
+.sfws-topper:last-child { border-bottom:0; }
+.sfws-topper-branch { font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+  color:var(--text-muted); min-width:70px; }
+.sfws-topper-name { font-weight:600; flex:1; }
 .sfws-panel { border:1px solid var(--border-color); border-radius:8px; padding:12px;
   background:var(--card-bg, var(--fg-color)); overflow:hidden; }
 .sfws-wide { grid-column: span 2; }
@@ -111,6 +124,16 @@ frappe.call({ method: "sf_trading.sales_target.performance_snapshot" }).then((r)
              `${__("best seller")}: ${frappe.utils.escape_html(s.best_person || "\\u2014")}`);
 
     root_element.querySelector(".sfws-branches").innerHTML = rows(d.branches, cur);
+
+    const toppers = d.top_per_branch || [];
+    root_element.querySelector(".sfws-toppers").innerHTML = toppers.length
+        ? toppers.map((t) => `<div class="sfws-topper">
+              <span class="sfws-topper-branch">${frappe.utils.escape_html(t.branch)}</span>
+              <span class="sfws-topper-name">${frappe.utils.escape_html(t.name)}</span>
+              <span class="sfws-amt" dir="ltr">${money(t.actual, cur)}</span>
+              <span class="sfws-pct ${tone(t.pct)}">${pctText(t.pct)}</span>
+           </div>`).join("")
+        : `<div class="sfws-amt">${__("Nobody has sold in a branch yet.")}</div>`;
     root_element.querySelector(".sfws-people").innerHTML =
         rows(d.people.filter((p) => p.name !== "Unassigned").slice(0, 6), cur);
 

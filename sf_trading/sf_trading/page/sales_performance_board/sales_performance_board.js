@@ -48,6 +48,14 @@ class SalesPerformance {
 			fieldname: "branch", label: __("Branch"), fieldtype: "Link", options: "Branch",
 			change: () => this.refresh(),
 		});
+		this.filters.from_date = this.page.add_field({
+			fieldname: "from_date", label: __("From"), fieldtype: "Date",
+			change: () => this.refresh(),
+		});
+		this.filters.to_date = this.page.add_field({
+			fieldname: "to_date", label: __("To"), fieldtype: "Date",
+			change: () => this.refresh(),
+		});
 		this.filters.basis = this.page.add_field({
 			fieldname: "basis", label: __("Measured On"), fieldtype: "Select",
 			options: ["Net of VAT", "Gross"].join("\n"), default: "Net of VAT",
@@ -67,6 +75,7 @@ class SalesPerformance {
 		return {
 			company: this._val("company"), fiscal_year: this._val("fiscal_year"),
 			basis: this._val("basis") || "Net of VAT", branch: this._val("branch"),
+			from_date: this._val("from_date"), to_date: this._val("to_date"),
 		};
 	}
 
@@ -94,7 +103,8 @@ class SalesPerformance {
 					</div>
 					<div class="sfsp-grid">
 						<div class="sfsp-card"><h6>${__("Branches")}</h6><div class="sfsp-branches"></div></div>
-						<div class="sfsp-card sfsp-span2"><h6>${__("Sales people")}</h6><div class="sfsp-people"></div></div>
+						<div class="sfsp-card"><h6>${__("Top seller in each branch")}</h6><div class="sfsp-toppers"></div></div>
+						<div class="sfsp-card"><h6>${__("Sales people")}</h6><div class="sfsp-people"></div></div>
 					</div>
 					<div class="sfsp-foot text-muted"></div>
 				</div>
@@ -117,6 +127,7 @@ class SalesPerformance {
 			args: {
 				company: this._val("company"), fiscal_year: this._val("fiscal_year"),
 				basis: this._val("basis") || "Net of VAT", branch: this._val("branch"),
+				from_date: this._val("from_date"), to_date: this._val("to_date"),
 			},
 			callback: (r) => {
 				if (!r || !r.message) {
@@ -151,6 +162,7 @@ class SalesPerformance {
 		this._branch_pct(d.branches);
 		this._table(".sfsp-branches", d.branches, cur, __("No branch has sold anything yet."));
 		this._table(".sfsp-people", d.people, cur, __("No sales person has sold anything yet."));
+		this._toppers(d.top_per_branch || [], cur);
 		// The server picks the year when the filter is blank; show which one it chose. Writing
 		// the field fires its change handler, so the refetch it would cause is skipped -- the
 		// data on screen already came from that very year.
@@ -270,6 +282,26 @@ class SalesPerformance {
 			colors: ["#29cd42"],
 			tooltipOptions: { formatTooltipY: (v) => `${v}%` },
 		});
+	}
+
+	_toppers(list, cur) {
+		// the best seller overall is usually the same person every month; the best in each
+		// branch is the number a branch head can act on
+		const $t = this.$body.find(".sfsp-toppers");
+		if (!list.length) {
+			$t.html(`<p class="text-muted">${__("Nobody has sold in a branch yet.")}</p>`);
+			return;
+		}
+		$t.html(list.map((t) => `
+			<div class="sfsp-row">
+				<div class="sfsp-row-top">
+					<span class="sfsp-row-name">${frappe.utils.escape_html(t.branch)} —
+						${frappe.utils.escape_html(t.name)}</span>
+					<span class="sfsp-row-pct ${SP_TONE(t.pct)}">${SP_PCT(t.pct)}</span>
+				</div>
+				<div class="sfsp-row-amt" dir="ltr">${SP_FMT(t.actual, cur)}
+					<span class="text-muted">${__("of")} ${SP_FMT(t.target, cur)}</span></div>
+			</div>`).join(""));
 	}
 
 	_table(selector, rows, cur, empty) {

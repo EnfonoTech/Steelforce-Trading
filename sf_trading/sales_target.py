@@ -447,9 +447,36 @@ def scorecard(company: str, fiscal_year: str, dimension: str, basis: str = "Net 
 
 # ─── The Sales Performance page ───────────────────────────────────────────────
 
+def top_per_branch(company, fiscal_year, basis, months, branches):
+	"""The best salesman inside each branch — not the best overall, repeated.
+
+	Akhil out-sells everyone from SFSB, so a single "top seller" hides whoever is carrying SFSS.
+	Each branch is asked separately.
+	"""
+	out = []
+	for row in branches:
+		br = row["name"]
+		act = actuals(company, fiscal_year, "Sales Person", basis, br, include_unassigned=False)
+		tgt = targets(company, fiscal_year, "Sales Person", br)
+		people = {}
+		for (name, m), amount in act.items():
+			if months and m not in months:
+				continue
+			people[name] = people.get(name, 0) + flt(amount)
+		if not people:
+			continue
+		name, amount = max(people.items(), key=lambda kv: kv[1])
+		target = sum(flt(tgt.get((name, m))) for m in (months or []))
+		out.append({
+			"branch": br, "name": name, "actual": amount, "target": target,
+			"pct": (amount / target * 100) if target else None,
+		})
+	return out
+
+
 @frappe.whitelist()
 def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", branch=None,
-                         as_on=None):
+                         as_on=None, from_date=None, to_date=None):
 	"""Everything the Sales Performance page draws, in one payload.
 
 	One call, one set of numbers: the same failure the DCR and VAT screens taught -- two panels
@@ -470,13 +497,24 @@ def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", bra
 
 	window = target_months(targets(company, fiscal_year, "Branch")) | target_months(
 		targets(company, fiscal_year, "Sales Person"))
-	branch_act = actuals(company, fiscal_year, "Branch", basis, branch)
+	coverage = month_coverage(fiscal_year, from_date, to_date)
+	ranged = bool(from_date or to_date)
+	if ranged:
+		# dates asked for win over "the months that carry a target"
+		window = {m for m, share in coverage.items() if share > 0}
+
+	branch_act = actuals(company, fiscal_year, "Branch", basis, branch,
+	                     from_date=from_date, to_date=to_date)
 	branch_tgt = targets(company, fiscal_year, "Branch")
 	if branch:
 		branch_tgt = {k: v for k, v in branch_tgt.items() if k[0] == branch}
-	person_act = actuals(company, fiscal_year, "Sales Person", basis, branch)
+	person_act = actuals(company, fiscal_year, "Sales Person", basis, branch,
+	                     from_date=from_date, to_date=to_date)
 	person_tgt = targets(company, fiscal_year, "Sales Person",
 	                     branch if branch else None)
+	if ranged:
+		branch_tgt = {k: flt(v) * coverage.get(k[1], 0) for k, v in branch_tgt.items()}
+		person_tgt = {k: flt(v) * coverage.get(k[1], 0) for k, v in person_tgt.items()}
 
 	def table(act, tgt):
 		everyones = target_months(tgt)
@@ -503,8 +541,10 @@ def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", bra
 		"short": s.month[:3],
 		"target": sum(flt(v) for (n, m), v in branch_tgt.items() if m == s.month),
 		"actual": sum(flt(v) for (n, m), v in branch_act.items() if m == s.month),
-		"elapsed": s.start <= as_on,
+		"elapsed": s.start <= as_on and (not ranged or coverage.get(s.month, 0) > 0),
 	} for s in slots]
+	if ranged:
+		months = [m for m in months if coverage.get(m["month"], 0) > 0]
 
 	branches, people = table(branch_act, branch_tgt), table(person_act, person_tgt)
 	counted_months = [m for m in months if m["elapsed"] and (m["month"] in window or not window)]
@@ -541,6 +581,8 @@ def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", bra
 		"months": months,
 		"branches": branches,
 		"people": people,
+		"top_per_branch": top_per_branch(company, fiscal_year, basis,
+		                                 [m["month"] for m in counted_months], branches),
 	}
 
 
