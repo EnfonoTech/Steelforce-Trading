@@ -56,4 +56,15 @@ def execute(filters=None):
 		{"label": _("Currency"), "fieldname": "currency", "fieldtype": "Link",
 		 "options": "Currency", "hidden": 1, "width": 80},
 	]
-	return columns, data
+	chart = {
+		"data": {
+			"labels": [d["month"][:3] for d in data],
+			"datasets": [
+				{"name": _("Actual"), "chartType": "bar", "values": [d["actual_amount"] for d in data]},
+				{"name": _("Target"), "chartType": "line", "values": [d["target_amount"] for d in data]},
+			],
+		},
+		"type": "axis-mixed",
+		"colors": ["#2490ef", "#ff5858"],
+	}
+	return columns, data, None, chart

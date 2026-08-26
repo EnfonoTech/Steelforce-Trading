@@ -42,4 +42,25 @@ def execute(filters=None):
 		{"label": _("Currency"), "fieldname": "currency", "fieldtype": "Link",
 		 "options": "Currency", "hidden": 1, "width": 80},
 	]
-	return columns, rows
+	named = [r for r in rows if r["dimension_value"] != "Unassigned"]
+	chart = {
+		"data": {
+			"labels": [r["dimension_value"] for r in named][:10],
+			"datasets": [{"name": _("YTD %"), "values": [round(r["ytd_pct"], 1) for r in named][:10]}],
+			"yMarkers": [{"label": _("Target"), "value": 100}],
+		},
+		"type": "bar",
+		"colors": ["#29cd42"],
+	}
+	ytd_t = sum(r["ytd_target"] for r in rows)
+	ytd_a = sum(r["ytd_actual"] for r in rows)
+	pct = (ytd_a / ytd_t * 100) if ytd_t else 0
+	summary = [
+		{"label": _("YTD Target"), "value": ytd_t, "datatype": "Currency", "currency": currency},
+		{"label": _("YTD Actual"), "value": ytd_a, "datatype": "Currency", "currency": currency},
+		{"label": _("Variance"), "value": ytd_a - ytd_t, "datatype": "Currency",
+		 "currency": currency, "indicator": "Green" if ytd_a >= ytd_t else "Red"},
+		{"label": _("Achieved"), "value": pct, "datatype": "Percent",
+		 "indicator": "Green" if pct >= 100 else "Orange" if pct >= 80 else "Red"},
+	]
+	return columns, rows, None, chart, summary

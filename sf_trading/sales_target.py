@@ -305,7 +305,33 @@ def variance_dataset(filters, dimension: str):
 		data.append(row)
 
 	data.sort(key=lambda r: r["total_actual"], reverse=True)
-	return columns, data
+
+	# A query report may hand back (columns, data, message, chart, report_summary). Drawing the
+	# same numbers the grid holds means the picture can never contradict the table under it.
+	top = [r for r in data if r["dimension_value"] != UNASSIGNED][:10]
+	chart = {
+		"data": {
+			"labels": [r["dimension_value"] for r in top],
+			"datasets": [
+				{"name": _("Target"), "values": [r["total_target"] for r in top]},
+				{"name": _("Actual"), "values": [r["total_actual"] for r in top]},
+			],
+		},
+		"type": "bar",
+		"colors": ["#ff5858", "#2490ef"],
+	}
+	total_t = sum(r["total_target"] for r in data)
+	total_a = sum(r["total_actual"] for r in data)
+	pct = (total_a / total_t * 100) if total_t else 0
+	summary = [
+		{"label": _("Target"), "value": total_t, "datatype": "Currency", "currency": currency},
+		{"label": _("Actual"), "value": total_a, "datatype": "Currency", "currency": currency},
+		{"label": _("Variance"), "value": total_a - total_t, "datatype": "Currency",
+		 "currency": currency, "indicator": "Green" if total_a >= total_t else "Red"},
+		{"label": _("Achieved"), "value": pct, "datatype": "Percent",
+		 "indicator": "Green" if pct >= 100 else "Orange" if pct >= 80 else "Red"},
+	]
+	return columns, data, None, chart, summary
 
 
 # ─── Scorecard (month to date / year to date) ─────────────────────────────────
@@ -343,6 +369,97 @@ def scorecard(company: str, fiscal_year: str, dimension: str, basis: str = "Net 
 		})
 	rows.sort(key=lambda r: r["ytd_actual"], reverse=True)
 	return rows
+
+
+# ─── The Sales Performance page ───────────────────────────────────────────────
+
+@frappe.whitelist()
+def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", branch=None,
+                         as_on=None):
+	"""Everything the Sales Performance page draws, in one payload.
+
+	One call, one set of numbers: the same failure the DCR and VAT screens taught -- two panels
+	built from two queries drift, and the person reading them cannot tell which is wrong.
+	"""
+	company = company or frappe.defaults.get_user_default("Company")
+	as_on = getdate(as_on or nowdate())
+	fiscal_year = fiscal_year or frappe.db.get_value(
+		"Fiscal Year", {"year_start_date": ["<=", as_on], "year_end_date": [">=", as_on]}, "name"
+	)
+	if not (company and fiscal_year):
+		frappe.throw(_("A company and a fiscal year are needed"))
+
+	currency = frappe.get_cached_value("Company", company, "default_currency")
+	slots = month_slots(fiscal_year)
+	elapsed = [s.month for s in slots if s.start <= as_on]
+	this_month = next((s.month for s in slots if s.start <= as_on <= s.end), None)
+
+	branch_act = actuals(company, fiscal_year, "Branch", basis, branch)
+	branch_tgt = targets(company, fiscal_year, "Branch")
+	if branch:
+		branch_tgt = {k: v for k, v in branch_tgt.items() if k[0] == branch}
+	person_act = actuals(company, fiscal_year, "Sales Person", basis, branch)
+	person_tgt = targets(company, fiscal_year, "Sales Person",
+	                     branch if branch else None)
+
+	def table(act, tgt):
+		rows = []
+		for name in {k[0] for k in act} | {k[0] for k in tgt}:
+			ytd_t = sum(flt(tgt.get((name, m))) for m in elapsed)
+			ytd_a = sum(flt(act.get((name, m))) for m in elapsed)
+			rows.append({
+				"name": name,
+				"target": ytd_t,
+				"actual": ytd_a,
+				"variance": ytd_a - ytd_t,
+				"pct": (ytd_a / ytd_t * 100) if ytd_t else None,
+				"mtd_actual": flt(act.get((name, this_month))) if this_month else 0.0,
+				"mtd_target": flt(tgt.get((name, this_month))) if this_month else 0.0,
+			})
+		rows.sort(key=lambda r: r["actual"], reverse=True)
+		return rows
+
+	months = [{
+		"month": s.month,
+		"short": s.month[:3],
+		"target": sum(flt(v) for (n, m), v in branch_tgt.items() if m == s.month),
+		"actual": sum(flt(v) for (n, m), v in branch_act.items() if m == s.month),
+		"elapsed": s.start <= as_on,
+	} for s in slots]
+
+	branches, people = table(branch_act, branch_tgt), table(person_act, person_tgt)
+	ytd_target = sum(m["target"] for m in months if m["elapsed"])
+	ytd_actual = sum(m["actual"] for m in months if m["elapsed"])
+	mtd = next((m for m in months if m["month"] == this_month), None) or {"target": 0, "actual": 0}
+
+	# the month in progress is credited pro rata, so nobody is "behind" on the 2nd
+	fraction = 1.0
+	current_slot = next((s for s in slots if s.month == this_month), None)
+	if current_slot:
+		days = (current_slot.end - current_slot.start).days + 1
+		fraction = ((as_on - current_slot.start).days + 1) / days
+
+	return {
+		"meta": {
+			"company": company, "fiscal_year": fiscal_year, "currency": currency,
+			"basis": basis, "branch": branch, "as_on": str(as_on),
+			"month": this_month, "generated_on": frappe.utils.now_datetime().strftime("%d-%m-%Y %H:%M"),
+			"has_targets": bool(branch_tgt or person_tgt),
+		},
+		"summary": {
+			"mtd_actual": mtd["actual"], "mtd_target": mtd["target"],
+			"mtd_target_to_date": flt(mtd["target"]) * fraction,
+			"mtd_pct": (mtd["actual"] / mtd["target"] * 100) if mtd["target"] else None,
+			"ytd_actual": ytd_actual, "ytd_target": ytd_target,
+			"ytd_pct": (ytd_actual / ytd_target * 100) if ytd_target else None,
+			"variance": ytd_actual - ytd_target,
+			"best_branch": branches[0]["name"] if branches else None,
+			"best_person": next((p["name"] for p in people if p["name"] != UNASSIGNED), None),
+		},
+		"months": months,
+		"branches": branches,
+		"people": people,
+	}
 
 
 # ─── Number cards ─────────────────────────────────────────────────────────────

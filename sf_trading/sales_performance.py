@@ -161,6 +161,7 @@ def ensure_workspace():
 		{"type": "number_card", "data": {"number_card_name": "SF YTD Achievement", "col": 3}},
 		{"type": "spacer", "data": {"col": 12}},
 		{"type": "header", "data": {"text": "<span class=\"h4\"><b>Targets & Reports</b></span>", "col": 12}},
+		{"type": "shortcut", "data": {"shortcut_name": "Sales Performance", "col": 3}},
 		{"type": "shortcut", "data": {"shortcut_name": "Sales Target", "col": 3}},
 		{"type": "shortcut", "data": {"shortcut_name": "Sales Target Scorecard", "col": 3}},
 		{"type": "shortcut", "data": {"shortcut_name": "Branch Sales Target vs Actual", "col": 3}},
@@ -182,6 +183,8 @@ def ensure_workspace():
 		doc.append("shortcuts", {"label": report, "type": "Report", "link_to": report,
 		                         "report_ref_doctype": "Sales Invoice"})
 	doc.append("shortcuts", {"label": DASHBOARD, "type": "Dashboard", "link_to": DASHBOARD})
+	doc.append("shortcuts", {"label": "Sales Performance", "type": "Page",
+	                         "link_to": "sales-performance"})
 	for card in CARDS:
 		doc.append("number_cards", {"number_card_name": card[0], "label": card[0]})
 	doc.append("charts", {"chart_name": "SF Target vs Actual by Month", "label": "Target vs Actual"})
@@ -195,6 +198,23 @@ def ensure_workspace():
 	doc.insert(ignore_permissions=True)
 
 
+def ensure_workspace_page_link():
+	"""Add the Sales Performance page shortcut to a workspace that already exists.
+
+	ensure_workspace() only builds a missing one, and on every site that migrated before the
+	page existed the workspace is already there -- without this the page would be reachable
+	only by typing its route.
+	"""
+	if not frappe.db.exists("Workspace", WORKSPACE):
+		return
+	ws = frappe.get_doc("Workspace", WORKSPACE)
+	if any(s.link_to == "sales-performance" for s in ws.shortcuts):
+		return
+	ws.append("shortcuts", {"label": "Sales Performance", "type": "Page",
+	                        "link_to": "sales-performance"})
+	ws.save(ignore_permissions=True)
+
+
 def setup():
 	"""after_migrate entry point.
 
@@ -203,7 +223,7 @@ def setup():
 	and the rest still runs.
 	"""
 	for step in (ensure_report_flags, ensure_cards, ensure_charts, ensure_dashboard,
-	             ensure_workspace):
+	             ensure_workspace, ensure_workspace_page_link):
 		try:
 			step()
 		except Exception:
