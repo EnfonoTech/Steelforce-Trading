@@ -274,13 +274,17 @@ class SalesPerformance {
 		const body = rows.map((r) => {
 			const pct = r.pct;
 			const bar = Math.max(0, Math.min(100, flt(pct || 0)));
+			// Stacked rather than four columns: a currency column of "550,341.398 د.ب" squeezed
+			// the bar out of existence in the narrow card, and the bar is the point of the row.
 			return `
 				<div class="sfsp-row">
-					<div class="sfsp-row-name">${frappe.utils.escape_html(r.name)}</div>
+					<div class="sfsp-row-top">
+						<span class="sfsp-row-name">${frappe.utils.escape_html(r.name)}</span>
+						<span class="sfsp-row-pct ${SP_TONE(pct)}">${SP_PCT(pct)}</span>
+					</div>
 					<div class="sfsp-row-bar"><span class="${SP_TONE(pct)}" style="width:${bar}%"></span></div>
-					<div class="sfsp-row-pct ${SP_TONE(pct)}">${SP_PCT(pct)}</div>
 					<div class="sfsp-row-amt" dir="ltr">${SP_FMT(r.actual, cur)}
-						<span class="text-muted">/ ${SP_FMT(r.target, cur)}</span></div>
+						<span class="text-muted">${__("of")} ${SP_FMT(r.target, cur)}</span></div>
 				</div>`;
 		}).join("");
 		this.$body.find(selector).html(body);
@@ -324,20 +328,21 @@ class SalesPerformance {
 			.sfsp-card h6 { color:var(--text-muted); text-transform:uppercase; font-size:11px;
 				letter-spacing:.04em; margin-bottom:8px; }
 			.sfsp-span2 { grid-column: span 2; }
-			.sfsp-row { display:grid; grid-template-columns:130px 1fr 56px auto; gap:10px;
-				align-items:center; padding:6px 0; border-bottom:1px solid var(--border-color); }
+			.sfsp-row { padding:8px 0; border-bottom:1px solid var(--border-color); }
 			.sfsp-row:last-child { border-bottom:0; }
+			.sfsp-row-top { display:flex; justify-content:space-between; align-items:baseline; gap:8px; }
 			.sfsp-row-name { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-			.sfsp-row-bar { height:8px; border-radius:5px; background:var(--gray-200); overflow:hidden; }
+			.sfsp-row-bar { height:8px; border-radius:5px; background:var(--gray-200);
+				overflow:hidden; margin:5px 0 3px; }
 			.sfsp-row-bar > span { display:block; height:100%; background:#2490ef; }
 			.sfsp-row-bar > span.good { background:#29cd42; }
 			.sfsp-row-bar > span.warn { background:#f5a524; }
 			.sfsp-row-bar > span.bad  { background:#ff5858; }
-			.sfsp-row-pct { text-align:right; font-weight:600; }
+			.sfsp-row-pct { font-weight:600; white-space:nowrap; }
 			.sfsp-row-pct.good { color:#1f9d3a; }
 			.sfsp-row-pct.warn { color:#c67c06; }
 			.sfsp-row-pct.bad  { color:#e03636; }
-			.sfsp-row-amt { text-align:right; font-size:12px; white-space:nowrap; }
+			.sfsp-row-amt { font-size:12px; color:var(--text-muted); }
 			.sfsp-foot { font-size:11px; margin-top:6px; }
 			@media (max-width: 992px) {
 				.sfsp-grid { grid-template-columns:1fr; }
