@@ -18,6 +18,7 @@ frappe.ui.form.on("Sales Target", {
 	},
 
 	onload(frm) {
+		sf_set_dimension_doctype(frm);
 		if (frm.is_new()) {
 			if (!frm.doc.company) frm.set_value("company", frappe.defaults.get_user_default("Company"));
 			if (!frm.doc.fiscal_year) {
@@ -42,6 +43,8 @@ frappe.ui.form.on("Sales Target", {
 	},
 
 	dimension_type(frm) {
+		// the Dynamic Link has nothing to offer until this is set
+		sf_set_dimension_doctype(frm);
 		frm.set_value("dimension_value", null);
 		if (frm.doc.dimension_type === "Branch") frm.set_value("branch", null);
 	},
@@ -55,6 +58,12 @@ frappe.ui.form.on("Sales Target Month", {
 	target_amount: (frm) => sf_total(frm),
 	targets_remove: (frm) => sf_total(frm),
 });
+
+function sf_set_dimension_doctype(frm) {
+	const map = { Branch: "Branch", "Sales Person": "Sales Person" };
+	const target = map[frm.doc.dimension_type] || "Branch";
+	if (frm.doc.dimension_doctype !== target) frm.set_value("dimension_doctype", target);
+}
 
 function sf_total(frm) {
 	let total = 0;

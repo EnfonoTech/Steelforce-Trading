@@ -22,6 +22,12 @@ class SalesTarget(Document):
 		parts.append(self.fiscal_year)
 		self.name = " - ".join(str(p) for p in parts if p)
 
+	def before_insert(self):
+		# frappe checks Dynamic Links in insert() BEFORE it runs validate(), so a doctype set
+		# in validate() arrives too late and the insert dies with "Dimension DocType must be
+		# set first". On update the order is the other way round, hence both hooks.
+		self.set_dimension_doctype()
+
 	def validate(self):
 		self.set_dimension_doctype()
 		self.validate_dimension()
