@@ -7,9 +7,20 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "dimension_type", "dimension_doctype", "dimension_value", "branch",
-  "column_break_head", "company", "fiscal_year", "basis", "currency", "disabled",
-  "section_targets", "annual_target", "targets", "total_target"
+  "dimension_type",
+  "branch",
+  "sales_person",
+  "dimension_value",
+  "column_break_head",
+  "company",
+  "fiscal_year",
+  "basis",
+  "currency",
+  "disabled",
+  "section_targets",
+  "annual_target",
+  "targets",
+  "total_target"
  ],
  "fields": [
   {
@@ -23,32 +34,38 @@
    "reqd": 1
   },
   {
-   "fieldname": "dimension_doctype",
-   "fieldtype": "Link",
-   "hidden": 1,
-   "label": "Dimension DocType",
-   "options": "DocType",
-   "read_only": 1
-  },
-  {
-   "fieldname": "dimension_value",
-   "fieldtype": "Dynamic Link",
-   "in_list_view": 1,
-   "in_standard_filter": 1,
-   "label": "Branch / Sales Person",
-   "options": "dimension_doctype",
-   "reqd": 1
-  },
-  {
-   "depends_on": "eval:doc.dimension_type==\"Sales Person\"",
-   "description": "Optional. Leave blank for this person's whole number across branches; set it to give them a separate target per branch.",
+   "depends_on": "eval:doc.dimension_type",
+   "description": "For a branch target this IS the target. For a person's target it is optional: leave it blank for their whole number across branches, or set it to give them a separate target per branch.",
    "fieldname": "branch",
    "fieldtype": "Link",
    "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Branch",
+   "mandatory_depends_on": "eval:doc.dimension_type==\"Branch\"",
    "options": "Branch"
   },
-  {"fieldname": "column_break_head", "fieldtype": "Column Break"},
+  {
+   "depends_on": "eval:doc.dimension_type==\"Sales Person\"",
+   "fieldname": "sales_person",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Sales Person",
+   "mandatory_depends_on": "eval:doc.dimension_type==\"Sales Person\"",
+   "options": "Sales Person"
+  },
+  {
+   "description": "The branch or the salesman this target belongs to. Filled from the fields above; every report groups on it.",
+   "fieldname": "dimension_value",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Target For",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
   {
    "fieldname": "company",
    "fieldtype": "Link",
@@ -90,7 +107,11 @@
    "label": "Disabled",
    "description": "A disabled target is ignored by every report and card."
   },
-  {"fieldname": "section_targets", "fieldtype": "Section Break", "label": "Monthly Targets"},
+  {
+   "fieldname": "section_targets",
+   "fieldtype": "Section Break",
+   "label": "Monthly Targets"
+  },
   {
    "description": "Type the year's number here and use <b>Distribute Evenly</b> to fill the twelve months, then adjust any month by hand.",
    "fieldname": "annual_target",
@@ -122,15 +143,57 @@
  "name": "Sales Target",
  "owner": "Administrator",
  "permissions": [
-  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1,
-   "role": "System Manager", "share": 1, "write": 1},
-  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1,
-   "role": "Accounts Manager", "share": 1, "write": 1},
-  {"create": 1, "delete": 0, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1,
-   "role": "Sales Manager", "share": 1, "write": 1},
-  {"read": 1, "report": 1, "role": "Accounts User"},
-  {"read": 1, "report": 1, "role": "Sales User"},
-  {"read": 1, "report": 1, "role": "Branch Head"}
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Accounts User"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Sales User"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Branch Head"
+  }
  ],
  "sort_field": "modified",
  "sort_order": "DESC",

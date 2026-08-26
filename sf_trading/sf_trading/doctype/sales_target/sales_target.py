@@ -1,9 +1,15 @@
 # sf_trading/sf_trading/doctype/sales_target/sales_target.py
 """One target: a branch's or a salesman's twelve monthly numbers for one fiscal year.
 
-Named after what it is about rather than a series, so the list reads as
-`SFSB - 2026`, `Akhil - 2026`, `Prakash - SFSS - 2026` and a person hunting for their own
-number finds it by typing their name.
+Named after what it is about rather than a series, so the list reads `SFSB - 2026`,
+`Akhil - 2026`, `Prakash - SFSS - 2026`, and somebody hunting for their own number finds it by
+typing their name.
+
+`branch` carries two meanings, on purpose. For a branch target it IS the target. For a person's
+target it is the optional split -- blank means their whole number across branches, set means a
+separate target per branch, which is how Prakash and Shihab Ck (who both sell out of SFSB and
+SFSS) can be given either shape. `dimension_value` is the one field every report groups on, so
+the reports never have to know which of the two applies.
 """
 
 import frappe
@@ -11,48 +17,42 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import flt
 
-from sf_trading.sales_target import DIMENSIONS, MONTHS, month_slots
+from sf_trading.sales_target import MONTHS, month_slots
 
 
 class SalesTarget(Document):
 	def autoname(self):
+		self.set_dimension_value()
 		parts = [self.dimension_value]
 		if self.dimension_type == "Sales Person" and self.branch:
 			parts.append(self.branch)
 		parts.append(self.fiscal_year)
 		self.name = " - ".join(str(p) for p in parts if p)
 
-	def before_insert(self):
-		# frappe checks Dynamic Links in insert() BEFORE it runs validate(), so a doctype set
-		# in validate() arrives too late and the insert dies with "Dimension DocType must be
-		# set first". On update the order is the other way round, hence both hooks.
-		self.set_dimension_doctype()
-
 	def validate(self):
-		self.set_dimension_doctype()
+		self.set_dimension_value()
 		self.validate_dimension()
 		self.validate_months()
 		self.set_total()
 		self.validate_duplicate()
 
-	def set_dimension_doctype(self):
-		self.dimension_doctype = DIMENSIONS[self.dimension_type]["doctype"]
+	def set_dimension_value(self):
+		if self.dimension_type == "Branch":
+			self.sales_person = None
+			self.dimension_value = self.branch
+		else:
+			self.dimension_value = self.sales_person
 
 	def validate_dimension(self):
-		if not frappe.db.exists(self.dimension_doctype, self.dimension_value):
-			frappe.throw(_("{0} {1} does not exist").format(
-				_(self.dimension_doctype), frappe.bold(self.dimension_value)))
+		if not self.dimension_value:
+			frappe.throw(_("Name the {0} this target belongs to.").format(_(self.dimension_type)))
 
-		if self.dimension_type == "Branch":
-			# a branch target is the branch's whole number; a second branch field would be a
-			# contradiction, not a refinement
-			self.branch = None
-			return
-
-		if frappe.db.get_value("Sales Person", self.dimension_value, "is_group"):
+		if self.dimension_type == "Sales Person" and frappe.db.get_value(
+			"Sales Person", self.sales_person, "is_group"
+		):
 			frappe.throw(
 				_("{0} is a group in the Sales Person tree, not a salesman. Set the target on the "
-				  "people under it.").format(frappe.bold(self.dimension_value)))
+				  "people under it.").format(frappe.bold(self.sales_person)))
 
 	def validate_months(self):
 		allowed = {s.month for s in month_slots(self.fiscal_year)}
@@ -89,5 +89,5 @@ class SalesTarget(Document):
 		)
 		if existing:
 			frappe.throw(_("{0} already carries a target for {1}. Edit {2} instead of adding a "
-			               "second one — two records would both be counted.").format(
+			               "second one — both would be counted.").format(
 				frappe.bold(self.dimension_value), self.fiscal_year, frappe.bold(existing)))
