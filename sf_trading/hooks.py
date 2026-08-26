@@ -165,6 +165,8 @@ after_migrate = [
 	"sf_trading.pdc_transfer.ensure_custom_fields",
 	# the referenced document's own date, on the Payment Entry references grid
 	"sf_trading.payment_entry_reference_date.ensure_custom_fields",
+	# Sales Performance: number cards, charts, dashboard and the workspace that holds them
+	"sf_trading.sales_performance.setup",
 	# the invoice's Sales Person, Payment Mode and Delivery Person, on the order
 	"sf_trading.sales_order_fields.ensure_custom_fields",
 	# the refund a return will pay once it is approved

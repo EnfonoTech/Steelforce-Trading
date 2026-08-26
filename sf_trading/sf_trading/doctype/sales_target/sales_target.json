@@ -1,0 +1,140 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "Prompt",
+ "creation": "2026-08-27 06:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "dimension_type", "dimension_doctype", "dimension_value", "branch",
+  "column_break_head", "company", "fiscal_year", "basis", "currency", "disabled",
+  "section_targets", "annual_target", "targets", "total_target"
+ ],
+ "fields": [
+  {
+   "default": "Branch",
+   "fieldname": "dimension_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Target For",
+   "options": "Branch\nSales Person",
+   "reqd": 1
+  },
+  {
+   "fieldname": "dimension_doctype",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Dimension DocType",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "dimension_value",
+   "fieldtype": "Dynamic Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Branch / Sales Person",
+   "options": "dimension_doctype",
+   "reqd": 1
+  },
+  {
+   "depends_on": "eval:doc.dimension_type==\"Sales Person\"",
+   "description": "Optional. Leave blank for this person's whole number across branches; set it to give them a separate target per branch.",
+   "fieldname": "branch",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Branch",
+   "options": "Branch"
+  },
+  {"fieldname": "column_break_head", "fieldtype": "Column Break"},
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "fiscal_year",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Fiscal Year",
+   "options": "Fiscal Year",
+   "reqd": 1
+  },
+  {
+   "default": "Net of VAT",
+   "description": "What the target is measured against. Net of VAT is the sales value; Gross includes the tax.",
+   "fieldname": "basis",
+   "fieldtype": "Select",
+   "label": "Measured On",
+   "options": "Net of VAT\nGross",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "company.default_currency",
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled",
+   "description": "A disabled target is ignored by every report and card."
+  },
+  {"fieldname": "section_targets", "fieldtype": "Section Break", "label": "Monthly Targets"},
+  {
+   "description": "Type the year's number here and use <b>Distribute Evenly</b> to fill the twelve months, then adjust any month by hand.",
+   "fieldname": "annual_target",
+   "fieldtype": "Currency",
+   "label": "Annual Target",
+   "options": "currency"
+  },
+  {
+   "fieldname": "targets",
+   "fieldtype": "Table",
+   "label": "Months",
+   "options": "Sales Target Month",
+   "reqd": 1
+  },
+  {
+   "fieldname": "total_target",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Total Target",
+   "options": "currency",
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-27 06:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "Sales Target",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1,
+   "role": "System Manager", "share": 1, "write": 1},
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1,
+   "role": "Accounts Manager", "share": 1, "write": 1},
+  {"create": 1, "delete": 0, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1,
+   "role": "Sales Manager", "share": 1, "write": 1},
+  {"read": 1, "report": 1, "role": "Accounts User"},
+  {"read": 1, "report": 1, "role": "Sales User"},
+  {"read": 1, "report": 1, "role": "Branch Head"}
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "dimension_value",
+ "track_changes": 1
+}
