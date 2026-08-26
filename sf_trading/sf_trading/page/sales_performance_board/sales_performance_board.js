@@ -158,9 +158,15 @@ class SalesPerformance {
 			this._skip_next_refresh = true;
 			this.filters.fiscal_year.set_value(d.meta.fiscal_year);
 		}
+		const w = d.meta.window || [];
+		// a target that starts in July must not be judged against sales from January
+		const covers = w.length
+			? __("year to date covers {0} to {1}", [w[0], w[w.length - 1]])
+			: __("no target set yet");
 		this.$body.find(".sfsp-foot").text(
-			__("{0} · {1} · {2} · as on {3} · generated {4}", [
-				d.meta.company, d.meta.fiscal_year, d.meta.basis, d.meta.as_on, d.meta.generated_on])
+			__("{0} · {1} · {2} · {3} · as on {4} · generated {5}", [
+				d.meta.company, d.meta.fiscal_year, d.meta.basis, covers, d.meta.as_on,
+				d.meta.generated_on])
 		);
 	}
 

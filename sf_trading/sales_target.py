@@ -239,6 +239,16 @@ def targets(company: str, fiscal_year: str, dimension: str, branch: str | None =
 	return {(r.dimension_value, r.month): flt(r.amount) for r in rows}
 
 
+def target_months(tgt: dict, name: str | None = None) -> set:
+	"""The months that actually carry a target — for one dimension value, or for all of them.
+
+	Targets do not have to start in January. Steel Force set theirs from July, and comparing a
+	full year of sales against half a year of targets reads as 631% achieved, which is worse
+	than useless. Every surface narrows to these months instead.
+	"""
+	return {m for (n, m), v in tgt.items() if (name is None or n == name) and flt(v)}
+
+
 # ─── Shared report body ───────────────────────────────────────────────────────
 
 def variance_dataset(filters, dimension: str):
@@ -260,12 +270,21 @@ def variance_dataset(filters, dimension: str):
 	              branch if dimension == "Sales Person" else None)
 	currency = frappe.get_cached_value("Company", company, "default_currency")
 
+	# Narrowing the buckets rather than the totals keeps the grid honest with itself: every
+	# column shown is a month that carries a target, so the totals tie to what is on screen.
+	months_with_target = target_months(tgt)
+	only_target_months = cint(filters.get("only_target_months", 1)) and months_with_target
+	report_buckets = buckets(fiscal_year, period)
+	if only_target_months:
+		report_buckets = [b for b in report_buckets
+		                  if any(m in months_with_target for m in b.months)]
+
 	label = _("Branch") if dimension == "Branch" else _("Sales Person")
 	columns = [
 		{"label": label, "fieldname": "dimension_value", "fieldtype": "Link",
 		 "options": DIMENSIONS[dimension]["doctype"], "width": 180},
 	]
-	for b in buckets(fiscal_year, period):
+	for b in report_buckets:
 		for suffix, field in ((_("Target"), "target"), (_("Actual"), "actual"), (_("Variance"), "variance")):
 			columns.append({
 				"label": f"{b.label} {suffix}", "fieldname": f"{b.key}_{field}",
@@ -291,7 +310,7 @@ def variance_dataset(filters, dimension: str):
 	for name in sorted(names):
 		row = {"dimension_value": name, "currency": currency}
 		total_t = total_a = 0.0
-		for b in buckets(fiscal_year, period):
+		for b in report_buckets:
 			t = sum(flt(tgt.get((name, m))) for m in b.months)
 			a = sum(flt(act.get((name, m))) for m in b.months)
 			row[f"{b.key}_target"] = t
@@ -357,12 +376,15 @@ def scorecard(company: str, fiscal_year: str, dimension: str, basis: str = "Net 
 		days = (this_month[0].end - this_month[0].start).days + 1
 		fraction = ((as_on - this_month[0].start).days + 1) / days
 
+	all_target_months = target_months(tgt)
 	rows = []
 	for name in sorted({k[0] for k in act} | {k[0] for k in tgt}):
+		mine = target_months(tgt, name) or all_target_months
+		counted = [m for m in elapsed if m in mine] if mine else elapsed
 		mtd_t = flt(tgt.get((name, current))) if current else 0.0
 		mtd_a = flt(act.get((name, current))) if current else 0.0
-		ytd_t = sum(flt(tgt.get((name, m))) for m in elapsed)
-		ytd_a = sum(flt(act.get((name, m))) for m in elapsed)
+		ytd_t = sum(flt(tgt.get((name, m))) for m in counted)
+		ytd_a = sum(flt(act.get((name, m))) for m in counted)
 		rows.append({
 			"dimension_value": name,
 			"mtd_target": mtd_t, "mtd_actual": mtd_a,
@@ -399,6 +421,8 @@ def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", bra
 	elapsed = [s.month for s in slots if s.start <= as_on]
 	this_month = next((s.month for s in slots if s.start <= as_on <= s.end), None)
 
+	window = target_months(targets(company, fiscal_year, "Branch")) | target_months(
+		targets(company, fiscal_year, "Sales Person"))
 	branch_act = actuals(company, fiscal_year, "Branch", basis, branch)
 	branch_tgt = targets(company, fiscal_year, "Branch")
 	if branch:
@@ -408,10 +432,13 @@ def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", bra
 	                     branch if branch else None)
 
 	def table(act, tgt):
+		everyones = target_months(tgt)
 		rows = []
 		for name in {k[0] for k in act} | {k[0] for k in tgt}:
-			ytd_t = sum(flt(tgt.get((name, m))) for m in elapsed)
-			ytd_a = sum(flt(act.get((name, m))) for m in elapsed)
+			mine = target_months(tgt, name) or everyones
+			counted = [m for m in elapsed if m in mine] if mine else elapsed
+			ytd_t = sum(flt(tgt.get((name, m))) for m in counted)
+			ytd_a = sum(flt(act.get((name, m))) for m in counted)
 			rows.append({
 				"name": name,
 				"target": ytd_t,
@@ -433,8 +460,9 @@ def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", bra
 	} for s in slots]
 
 	branches, people = table(branch_act, branch_tgt), table(person_act, person_tgt)
-	ytd_target = sum(m["target"] for m in months if m["elapsed"])
-	ytd_actual = sum(m["actual"] for m in months if m["elapsed"])
+	counted_months = [m for m in months if m["elapsed"] and (m["month"] in window or not window)]
+	ytd_target = sum(m["target"] for m in counted_months)
+	ytd_actual = sum(m["actual"] for m in counted_months)
 	mtd = next((m for m in months if m["month"] == this_month), None) or {"target": 0, "actual": 0}
 
 	# the month in progress is credited pro rata, so nobody is "behind" on the 2nd
@@ -450,6 +478,8 @@ def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", bra
 			"basis": basis, "branch": branch, "as_on": str(as_on),
 			"month": this_month, "generated_on": frappe.utils.now_datetime().strftime("%d-%m-%Y %H:%M"),
 			"has_targets": bool(branch_tgt or person_tgt),
+			# which months the year-to-date figures actually cover, so the screen can say so
+			"window": [m["month"] for m in counted_months],
 		},
 		"summary": {
 			"mtd_actual": mtd["actual"], "mtd_target": mtd["target"],

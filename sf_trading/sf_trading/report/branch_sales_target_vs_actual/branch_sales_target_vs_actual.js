@@ -19,6 +19,11 @@ frappe.query_reports["Branch Sales Target vs Actual"] = {
 			options: ["Monthly", "Quarterly", "Half-Yearly", "Yearly"].join("\n"),
 			default: "Monthly",
 		},
+		{
+			fieldname: "only_target_months", label: __("Only months with a target"),
+			fieldtype: "Check", default: 1,
+			description: __("Targets need not start in January. Untick to see the whole year."),
+		},
 		{ fieldname: "branch", label: __("Branch"), fieldtype: "Link", options: "Branch" },
 	],
 
