@@ -75,18 +75,19 @@ class SalesTarget(Document):
 		self.total_target = sum(flt(r.target_amount) for r in self.targets)
 
 	def validate_duplicate(self):
-		existing = frappe.db.get_value(
-			"Sales Target",
-			{
-				"company": self.company,
-				"fiscal_year": self.fiscal_year,
-				"dimension_type": self.dimension_type,
-				"dimension_value": self.dimension_value,
-				"branch": self.branch or "",
-				"name": ["!=", self.name],
-			},
-			"name",
-		)
+		filters = {
+			"company": self.company,
+			"fiscal_year": self.fiscal_year,
+			"dimension_type": self.dimension_type,
+			"dimension_value": self.dimension_value,
+			"branch": self.branch or "",
+		}
+		# On a new record the twin carries the SAME autoname, so excluding by name would exclude
+		# the very row being guarded against -- and the user would meet a raw
+		# "Duplicate entry ... for key PRIMARY" from the insert instead of a sentence.
+		if not self.is_new():
+			filters["name"] = ["!=", self.name]
+		existing = frappe.db.get_value("Sales Target", filters, "name")
 		if existing:
 			frappe.throw(_("{0} already carries a target for {1}. Edit {2} instead of adding a "
 			               "second one — both would be counted.").format(
