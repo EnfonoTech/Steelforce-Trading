@@ -447,7 +447,8 @@ def scorecard(company: str, fiscal_year: str, dimension: str, basis: str = "Net 
 
 # ─── The Sales Performance page ───────────────────────────────────────────────
 
-def top_per_branch(company, fiscal_year, basis, months, branches):
+def top_per_branch(company, fiscal_year, basis, months, branches, from_date=None, to_date=None,
+                   coverage=None):
 	"""The best salesman inside each branch — not the best overall, repeated.
 
 	Akhil out-sells everyone from SFSB, so a single "top seller" hides whoever is carrying SFSS.
@@ -456,8 +457,15 @@ def top_per_branch(company, fiscal_year, basis, months, branches):
 	out = []
 	for row in branches:
 		br = row["name"]
-		act = actuals(company, fiscal_year, "Sales Person", basis, br, include_unassigned=False)
+		act = actuals(company, fiscal_year, "Sales Person", basis, br, include_unassigned=False,
+		              from_date=from_date, to_date=to_date)
+		# A person's target may be branch-split or a single whole-branch number; ask for both,
+		# preferring the split when it exists, or the topper's percentage reads as blank.
 		tgt = targets(company, fiscal_year, "Sales Person", br)
+		if not tgt:
+			tgt = targets(company, fiscal_year, "Sales Person")
+		if coverage:
+			tgt = {k: flt(v) * coverage.get(k[1], 0) for k, v in tgt.items()}
 		people = {}
 		for (name, m), amount in act.items():
 			if months and m not in months:
@@ -581,8 +589,9 @@ def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", bra
 		"months": months,
 		"branches": branches,
 		"people": people,
-		"top_per_branch": top_per_branch(company, fiscal_year, basis,
-		                                 [m["month"] for m in counted_months], branches),
+		"top_per_branch": top_per_branch(
+			company, fiscal_year, basis, [m["month"] for m in counted_months], branches,
+			from_date=from_date, to_date=to_date, coverage=coverage if ranged else None),
 	}
 
 
