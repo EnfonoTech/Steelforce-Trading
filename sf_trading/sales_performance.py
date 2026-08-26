@@ -163,8 +163,11 @@ def ensure_workspace():
 	doc.append("shortcuts", {"label": "Sales Target", "type": "DocType", "link_to": "Sales Target"})
 	for report in ("Sales Target Scorecard", "Branch Sales Target vs Actual",
 	               "Sales Person Target vs Actual", "Sales Target Monthly Trend"):
+		# doc_view must stay empty for a Report shortcut: the field only accepts the
+		# DocType views ("", List, Report Builder, Dashboard, Tree, New, Calendar, Kanban) and
+		# "Report" is refused, which aborted a migrate before this was found
 		doc.append("shortcuts", {"label": report, "type": "Report", "link_to": report,
-		                         "doc_view": "Report", "report_ref_doctype": "Sales Invoice"})
+		                         "report_ref_doctype": "Sales Invoice"})
 	doc.append("shortcuts", {"label": DASHBOARD, "type": "Dashboard", "link_to": DASHBOARD})
 	for card in CARDS:
 		doc.append("number_cards", {"number_card_name": card[0], "label": card[0]})
@@ -180,8 +183,16 @@ def ensure_workspace():
 
 
 def setup():
-	"""after_migrate entry point."""
-	ensure_cards()
-	ensure_charts()
-	ensure_dashboard()
-	ensure_workspace()
+	"""after_migrate entry point.
+
+	Each step is guarded: this is cosmetic furniture, and a dashboard that will not build is
+	never a reason to abort a migrate half way through somebody's deploy. Failures are logged
+	and the rest still runs.
+	"""
+	for step in (ensure_cards, ensure_charts, ensure_dashboard, ensure_workspace):
+		try:
+			step()
+		except Exception:
+			frappe.log_error(
+				frappe.get_traceback(), f"sf_trading sales performance: {step.__name__} failed"
+			)
