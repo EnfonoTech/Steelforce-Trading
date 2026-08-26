@@ -385,13 +385,15 @@ def scorecard(company: str, fiscal_year: str, dimension: str, basis: str = "Net 
 		mtd_a = flt(act.get((name, current))) if current else 0.0
 		ytd_t = sum(flt(tgt.get((name, m))) for m in counted)
 		ytd_a = sum(flt(act.get((name, m))) for m in counted)
+		# rounded here rather than at the edge: a Dashboard Chart plots the raw column and would
+		# otherwise label a bar 229.30891583333337
 		rows.append({
 			"dimension_value": name,
 			"mtd_target": mtd_t, "mtd_actual": mtd_a,
-			"mtd_target_to_date": mtd_t * fraction,
-			"mtd_pct": (mtd_a / mtd_t * 100) if mtd_t else 0.0,
+			"mtd_target_to_date": flt(mtd_t * fraction, 3),
+			"mtd_pct": flt((mtd_a / mtd_t * 100) if mtd_t else 0.0, 1),
 			"ytd_target": ytd_t, "ytd_actual": ytd_a,
-			"ytd_pct": (ytd_a / ytd_t * 100) if ytd_t else 0.0,
+			"ytd_pct": flt((ytd_a / ytd_t * 100) if ytd_t else 0.0, 1),
 			"variance": ytd_a - ytd_t,
 		})
 	rows.sort(key=lambda r: r["ytd_actual"], reverse=True)

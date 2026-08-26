@@ -42,7 +42,8 @@ STYLE = """
 .sfws-tile.bad { border-left-color:#ff5858; }
 .sfws-tile-label { font-size:11px; text-transform:uppercase; letter-spacing:.04em;
   color:var(--text-muted); }
-.sfws-tile-value { font-size:19px; font-weight:650; }
+.sfws-tile-value { font-size:18px; font-weight:650; white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; }
 .sfws-tile-extra { font-size:11px; color:var(--text-muted); }
 .sfws-cols { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
 .sfws-panel { border:1px solid var(--border-color); border-radius:8px; padding:12px;
