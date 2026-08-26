@@ -278,7 +278,8 @@ def variance_dataset(filters, dimension: str):
 		 "options": "currency", "width": 140},
 		{"label": _("Variance"), "fieldname": "total_variance", "fieldtype": "Currency",
 		 "options": "currency", "width": 130},
-		{"label": _("Achieved %"), "fieldname": "achieved_pct", "fieldtype": "Percent", "width": 110},
+		{"label": _("Achieved %"), "fieldname": "achieved_pct", "fieldtype": "Percent", "width": 110,
+		 "disable_total": 1},
 		{"label": _("Currency"), "fieldname": "currency", "fieldtype": "Link", "options": "Currency",
 		 "hidden": 1, "width": 80},
 	]
