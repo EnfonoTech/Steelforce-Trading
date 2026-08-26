@@ -45,6 +45,19 @@ def _defaults():
 	return company, fiscal_year
 
 
+def ensure_report_flags():
+	"""Keep the trend report free of a total row.
+
+	The flag is in the report's own JSON, but the standard-report sync copied the file's
+	`modified` onto the record and left `add_total_row` at 1 anyway -- so the trend kept
+	returning a thirteenth row and the chart drew it as a month taller than the year. Set it
+	here, where it is deterministic on every site.
+	"""
+	if frappe.db.exists("Report", "Sales Target Monthly Trend"):
+		frappe.db.set_value("Report", "Sales Target Monthly Trend", "add_total_row", 0,
+		                    update_modified=False)
+
+
 def ensure_cards():
 	for label, method, description, colour in CARDS:
 		if frappe.db.exists("Number Card", label):
@@ -189,7 +202,8 @@ def setup():
 	never a reason to abort a migrate half way through somebody's deploy. Failures are logged
 	and the rest still runs.
 	"""
-	for step in (ensure_cards, ensure_charts, ensure_dashboard, ensure_workspace):
+	for step in (ensure_report_flags, ensure_cards, ensure_charts, ensure_dashboard,
+	             ensure_workspace):
 		try:
 			step()
 		except Exception:
