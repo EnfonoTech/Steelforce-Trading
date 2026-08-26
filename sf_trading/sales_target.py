@@ -39,7 +39,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import add_months, flt, get_first_day, get_last_day, getdate, nowdate
+from frappe.utils import add_months, cint, flt, get_first_day, get_last_day, getdate, nowdate
 
 TARGET_DOCTYPE = "Sales Target"
 MONTHS = [
