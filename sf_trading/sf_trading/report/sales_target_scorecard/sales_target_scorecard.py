@@ -54,8 +54,10 @@ def execute(filters=None):
 		"type": "bar",
 		"colors": ["#29cd42"],
 	}
-	ytd_t = sum(r["ytd_target"] for r in rows)
-	ytd_a = sum(r["ytd_actual"] for r in rows)
+	# the same rule as the variance reports: Unassigned is shown, never counted in the headline
+	attributed = [r for r in rows if r["dimension_value"] != "Unassigned"]
+	ytd_t = sum(r["ytd_target"] for r in attributed)
+	ytd_a = sum(r["ytd_actual"] for r in attributed)
 	pct = (ytd_a / ytd_t * 100) if ytd_t else 0
 	summary = [
 		{"label": _("YTD Target"), "value": ytd_t, "datatype": "Currency", "currency": currency},

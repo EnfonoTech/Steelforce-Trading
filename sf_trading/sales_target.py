@@ -321,8 +321,12 @@ def variance_dataset(filters, dimension: str):
 		"type": "bar",
 		"colors": ["#ff5858", "#2490ef"],
 	}
-	total_t = sum(r["total_target"] for r in data)
-	total_a = sum(r["total_actual"] for r in data)
+	# Unassigned stays a visible ROW -- 753,961 of pre-July history belongs to nobody and hiding
+	# it would be a lie -- but it must not enter the headline: added to the sellers' actuals it
+	# read as 404% of their targets.
+	attributed = [r for r in data if r["dimension_value"] != UNASSIGNED]
+	total_t = sum(r["total_target"] for r in attributed)
+	total_a = sum(r["total_actual"] for r in attributed)
 	pct = (total_a / total_t * 100) if total_t else 0
 	summary = [
 		{"label": _("Target"), "value": total_t, "datatype": "Currency", "currency": currency},
