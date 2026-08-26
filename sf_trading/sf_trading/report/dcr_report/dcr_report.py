@@ -71,7 +71,7 @@ def get_report_link(label, report_type, from_date_str, to_date_str, company, cos
 # Sales lines follow the money actually received ON/BEFORE the invoice date:
 #   Cash-type mode          → CASH SALES
 #   Cheque mode (for_pdc)   → CHEQUE SALES (even though MoP type is Bank)
-#   any other mode          → BANK SALES
+#   any other mode          → CARD/BPAY SALES (card swipe, Benefit Pay, bank transfer)
 # The unsettled remainder → CREDIT SALES, or Home Credit when a driver is set.
 # Split payments land proportionally in each line.
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -231,7 +231,7 @@ RETURN_REFUNDED_CONDITION = """(
 def _return_refunded_condition(kind):
 	"""SQL condition: the return was refunded via a Pay-type Payment Entry (or a
 	POS refund row) of the given kind (cash/bank/cheque) on/before its own
-	posting date. Mirrors the sales-side mode split (CASH/BANK/CHEQUE SALES) so
+	posting date. Mirrors the sales-side mode split (CASH/CARD-BPAY/CHEQUE) so
 	a return's expense lands in the same kind of row as the account the refund
 	actually left — a bank/cheque refund must not be counted as a cash return."""
 	pe_cheque = _mode_is_cheque("rf_pe")
@@ -474,7 +474,7 @@ def get_data(filters):
 	data.append(_row("<b>" + _link(_("Opening Cash Balance"), "Opening Cash Balance") + "</b>", opening_balance, 0, 0, 0))
 	data.append(_row("<b>" + _link(_("Total Sales"), "Total Sales") + "</b>", total_sales_income, 0, -total_sales_discount, total_sales_margin))
 	data.append(_row(_link("CASH SALES", "Cash Sales"), bucket_income(cash_b), 0, bucket_discount_adj(cash_b), bucket_margin(cash_b)))
-	data.append(_row(_link("BANK SALES", "Bank Sales"), bucket_income(bank_b), 0, bucket_discount_adj(bank_b), bucket_margin(bank_b)))
+	data.append(_row(_link("CARD/BPAY SALES", "Bank Sales"), bucket_income(bank_b), 0, bucket_discount_adj(bank_b), bucket_margin(bank_b)))
 	data.append(_row(_link("CHEQUE SALES", "Cheque Sales"), bucket_income(cheque_b), 0, bucket_discount_adj(cheque_b), bucket_margin(cheque_b)))
 	data.append(_row(_link("CREDIT SALES", "Credit Sales"), bucket_income(credit_b), credit_return_total, bucket_discount_adj(credit_b), bucket_margin(credit_b)))
 	data.append(_row(_link("Home Credit (Delivery)", "Home Credit (Delivery)"), bucket_income(home_b), 0, bucket_discount_adj(home_b), bucket_margin(home_b)))
@@ -483,11 +483,11 @@ def get_data(filters):
 	# run actually has a value, to keep the common case uncluttered.
 	data.append(_row(_link("Sales Return - Cash", "Sales Return - Cash"), 0, sales_return_cash, 0, 0))
 	if abs(sales_return_bank) > 0.0001:
-		data.append(_row(_link("Sales Return - Bank", "Sales Return - Bank"), 0, sales_return_bank, 0, 0))
+		data.append(_row(_link("Sales Return - Card/BPAY", "Sales Return - Bank"), 0, sales_return_bank, 0, 0))
 	if abs(sales_return_cheque) > 0.0001:
 		data.append(_row(_link("Sales Return - Cheque", "Sales Return - Cheque"), 0, sales_return_cheque, 0, 0))
 	data.append(_row(_link("VAT Collected on Cash Sales", "VAT Collected on Cash Sales"), cash_b["vat_amount"], 0, 0, 0))
-	data.append(_row(_link("VAT Collected on Bank Sales", "VAT Collected on Bank Sales"), bank_b["vat_amount"], 0, 0, 0))
+	data.append(_row(_link("VAT Collected on Card/BPAY", "VAT Collected on Bank Sales"), bank_b["vat_amount"], 0, 0, 0))
 	data.append(_row(_link("VAT Collected on Cheque Sales", "VAT Collected on Cheque Sales"), cheque_b["vat_amount"], 0, 0, 0))
 	data.append(_row(_link("VAT Applied on Credit Sales", "VAT Applied on Credit Sales"), credit_b["vat_amount"], credit_return_data["vat_amount"], 0, 0))
 	data.append(_row(_link("VAT Applied on Home Credit", "VAT Applied on Home Credit"), home_b["vat_amount"], 0, 0, 0))
