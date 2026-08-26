@@ -1,4 +1,4 @@
-// apps/sf_trading/sf_trading/page/sales_performance/sales_performance.js
+// apps/sf_trading/sf_trading/page/sales_performance_board/sales_performance_board.js
 //
 // Targets against actuals, drawn rather than tabulated. One call fills the page
 // (sf_trading.sales_target.performance_snapshot) and every panel is read from that one payload,
