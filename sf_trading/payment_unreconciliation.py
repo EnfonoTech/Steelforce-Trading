@@ -35,7 +35,15 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, cstr, flt, getdate, nowdate
 
+# What erpnext's Unreconcile Payment will actually accept -- its validate() hard-codes
+# supported_types = ["Payment Entry", "Journal Entry"] and throws on anything else.
 PAYMENT_TYPES = ("Payment Entry", "Journal Entry")
+# What the screen LISTS. A credit note netted straight onto its own invoice writes a Payment
+# Ledger Entry whose voucher_type is the invoice doctype; 16 such allocations worth 492.767 BHD
+# exist on this site and the screen used to claim they did not exist. A tool whose premise is
+# "here is everything live against this party" must not silently omit rows -- so they are listed,
+# marked, and locked instead.
+LISTED_TYPES = PAYMENT_TYPES + ("Sales Invoice", "Purchase Invoice")
 
 
 _HAS_OUTSTANDING = {}
@@ -193,7 +201,7 @@ def reconciled_entries(company, party_type, party, account=None, voucher_type=No
 	]
 	values = {
 		"company": company, "party_type": party_type, "party": party,
-		"payment_types": list(PAYMENT_TYPES),
+		"payment_types": list(LISTED_TYPES),
 	}
 	if voucher_type:
 		conditions.append("ple.voucher_type = %(voucher_type)s")
@@ -304,6 +312,7 @@ LATE_DAYS = 180          # a settlement this far after the invoice is usually a 
 RECONCILED_WINDOWS = {"Today": 0, "Last 7 days": 7, "Last 30 days": 30}
 
 RISK = "risk"
+LEAD = "lead"          # not a fault -- a row that is probably why the user came
 FRESH = "fresh"
 PLAIN = "plain"
 
@@ -354,6 +363,40 @@ def _payment_context(rows):
 		                          fields=fields, limit_page_length=0):
 			context[(doctype, doc["name"])] = doc
 	return context
+
+
+def _return_intent(rows):
+	"""What the returns on this page say they reverse, and whether that invoice is still open.
+
+	`return_against` is the only field in this whole picture that records INTENT: the return
+	itself names the invoice it reverses. So a return netted somewhere else is a contradiction in
+	the data rather than a correlation with how the business happens to work -- the one
+	evidence-grade test available here. It is also nearly blind: only 59 of this site's 1,893
+	returns record an origin at all, so a clean screen is not proof of a clean ledger.
+	"""
+	names = {}
+	for row in rows:
+		for doctype, name in ((row["voucher_type"], row["voucher_no"]),
+		                      (row["against_voucher_type"], row["against_voucher_no"])):
+			if doctype in ("Sales Invoice", "Purchase Invoice"):
+				names.setdefault(doctype, set()).add(name)
+
+	intent, origins = {}, {}
+	for doctype, group in names.items():
+		returns = frappe.get_all(doctype, filters={"name": ("in", list(group)), "is_return": 1},
+		                         fields=["name", "return_against"], limit_page_length=0)
+		wanted = [r.return_against for r in returns if r.return_against]
+		if wanted:
+			# one read for every origin invoice on the page, not one per return
+			for doc in frappe.get_all(doctype, filters={"name": ("in", wanted)},
+			                          fields=["name", "outstanding_amount"], limit_page_length=0):
+				origins[doc.name] = flt(doc.outstanding_amount)
+		for r in returns:
+			if not r.return_against:
+				continue
+			r["origin_outstanding"] = origins.get(r.return_against, 0.0)
+			intent[r.name] = r
+	return intent
 
 
 def _floating_credit_notes(rows):
@@ -513,6 +556,7 @@ def annotate(rows, company, party_type, party):
 	context = _target_context(rows)
 	paid_by = _payment_context(rows)
 	floating = _floating_credit_notes(rows)
+	intent = _return_intent(rows)
 	applied = _applied_totals(rows)
 	fresh_after = add_days(getdate(nowdate()), -RECENT_DAYS)
 
@@ -545,7 +589,13 @@ def annotate(rows, company, party_type, party):
 		else:
 			row["outstanding_amount"] = flt(target.get("target_outstanding"))
 
-		notes, worth_a_look = [], False
+		notes, worth_a_look, lead = [], False, False
+
+		# listed for completeness, but core cannot undo it: erpnext's Unreconcile Payment accepts
+		# only a Payment Entry or a Journal Entry
+		row["undoable"] = row["voucher_type"] in PAYMENT_TYPES
+		if not row["undoable"]:
+			notes.append(_("Netted credit note — undo this on the credit note, not here"))
 
 		if row["in_closed_period"]:
 			notes.append(_("Closed period"))
@@ -561,21 +611,41 @@ def annotate(rows, company, party_type, party):
 			notes.append(_("Different branch"))
 			worth_a_look = True
 
-		# the client's own defect, seen from the invoice end: relieved once by cash and once by a
-		# return that was never netted against it
+		# Not a fault, and usually the reason somebody opened this screen: the invoice was
+		# settled in cash and the party still holds an open credit note against it. Netting that
+		# note is only possible once this allocation is undone -- so the row is a lead, and it
+		# sorts high, but it is never accused of anything. (Checked: on this site all four such
+		# invoices have zero outstanding, so nothing is double-relieved.)
 		note = floating.get(row["against_voucher_no"])
 		if note:
-			notes.append(_("Its credit note {0} is unapplied").format(note.example))
-			worth_a_look = True
+			notes.append(_("Its credit note {0} for {1} is unapplied").format(
+				note.example, frappe.utils.fmt_money(flt(note.amount), currency=row["currency"])))
+			lead = True
 
 		if cint(target.get("target_is_return")):
-			# money applied ONTO a credit note. Paying one out is a refund and normal; receiving
-			# money onto one is the wrong document almost every time.
-			if payment.get("payment_type") == "Receive":
-				notes.append(_("Money received onto a credit note"))
-				worth_a_look = True
-			else:
-				notes.append(_("Applied to a credit note"))
+			# A label, not a suspicion. 40 rows point at a return while claiming to be an
+			# "Invoice Allocation", and the outstanding figure they show has the opposite sign to
+			# what a reader assumes. No direction test: a receipt that nets a credit note against
+			# the same party's invoices is the most ordinary use of a credit note there is -- all
+			# five such receipts here balance to the fils against their own paid amount.
+			origin = (intent.get(row["against_voucher_no"]) or {}).get("return_against")
+			notes.append(_("Applied to credit note {0}{1}").format(
+				row["against_voucher_no"],
+				_(" (a return of {0})").format(origin) if origin else ""))
+
+		# The evidence-grade one: the return names the invoice it reverses, and this is not it.
+		mine = intent.get(row["voucher_no"])
+		if mine and mine.return_against != row["against_voucher_no"]:
+			notes.append(_("This return says it reverses {0}, but it was netted against {1}").format(
+				mine.return_against, row["against_voucher_no"]))
+			worth_a_look = True
+		# and the harm-gated variant: a return refunded in cash while its own invoice still owes
+		if (mine and row["voucher_type"] in ("Sales Invoice", "Purchase Invoice")
+				and abs(flt(mine.get("origin_outstanding"))) > 0.05):
+			notes.append(_("{0} is still open for {1}").format(
+				mine.return_against,
+				frappe.utils.fmt_money(flt(mine["origin_outstanding"]), currency=row["currency"])))
+			worth_a_look = True
 		# Not an alarm: a payment older than the invoice it settles is usually an advance being
 		# consumed, and one such receipt lights up sixteen rows at once. Say it, do not shout it.
 		if (row["entry_type"] == INVOICE_ALLOCATION and row["target_date"]
@@ -588,8 +658,6 @@ def annotate(rows, company, party_type, party):
 			worth_a_look = True
 		if row["days_gap"] > LATE_DAYS:
 			notes.append(_("Settled {0} days later").format(row["days_gap"]))
-		if row["is_amendment"]:
-			notes.append(_("Payment is an amendment"))
 		if (row["entry_type"] == INVOICE_ALLOCATION
 				and abs(flt(row["outstanding_amount"])) > 0.005
 				and not cint(target.get("target_is_return"))):
@@ -601,8 +669,6 @@ def annotate(rows, company, party_type, party):
 			worth_a_look = True
 		if row["payers"] > 1:
 			notes.append(_("Also settled by {0} other payment(s)").format(row["payers"] - 1))
-		if cint(applied_here.get("had_undo")):
-			notes.append(_("An allocation here was undone before"))
 		if row["allocated_amount"] < DUST_AMOUNT:
 			notes.append(_("Rounding-size"))
 
@@ -614,11 +680,14 @@ def annotate(rows, company, party_type, party):
 		if row["entry_type"] == ORDER_ADVANCE:
 			notes.append(_("Order advance"))
 
-		row["severity"] = RISK if worth_a_look else (FRESH if recent else PLAIN)
+		row["severity"] = (RISK if worth_a_look else LEAD if lead
+		                   else FRESH if recent else PLAIN)
+		# the glyph lives in the text on purpose: a CSS tint only exists for the rows the grid has
+		# actually rendered, so on page 2 of a big party the text is all that is left
 		row["insight"] = ("\u26a0 " if worth_a_look else "") + " · ".join(notes)
 		row["allocated_by"] = _short_user(row.get("allocated_by"))
 
-	order = {RISK: 0, FRESH: 1, PLAIN: 2}
+	order = {RISK: 0, LEAD: 1, FRESH: 2, PLAIN: 3}
 	rows.sort(key=lambda r: (order.get(r["severity"], 3),
 	                         -(getdate(r["allocated_on"]).toordinal() if r.get("allocated_on") else 0),
 	                         -flt(r["allocated_amount"])))
@@ -646,7 +715,10 @@ def _validate_row(row, closed):
 			return _("{0} is missing").format(field)
 
 	if row["voucher_type"] not in PAYMENT_TYPES:
-		return _("Only {0} can be unreconciled").format(" and ".join(PAYMENT_TYPES))
+		# the server-side backstop for the rows the screen deliberately lists but locks
+		return _("{0} is a {1}; ERPNext can only unreconcile a {2}. Cancel or amend the credit "
+		         "note instead.").format(row["voucher_no"], _(row["voucher_type"]),
+		                                 _(" or a ").join(PAYMENT_TYPES))
 
 	if frappe.db.get_value(row["voucher_type"], row["voucher_no"], "docstatus") != 1:
 		return _("{0} is not submitted").format(row["voucher_no"])

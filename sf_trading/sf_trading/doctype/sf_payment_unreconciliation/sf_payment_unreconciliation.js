@@ -121,7 +121,22 @@ frappe.ui.form.on("SF Payment Unreconciliation", {
 });
 
 frappe.ui.form.on("SF Unreconciliation Row", {
-	select_row: (frm) => frm.trigger("refresh"),
+	select_row(frm, cdt, cdn) {
+		const row = frappe.get_doc(cdt, cdn);
+		if (row.select_row && !sf_can_undo(row)) {
+			row.select_row = 0;
+			frm.refresh_field("allocations");
+			frappe.show_alert({
+				message: row.in_closed_period
+					? __("{0} sits in a closed accounting period.", [row.voucher_no])
+					: __("{0} is a credit note netted onto its own invoice. ERPNext can only "
+					     + "unreconcile a Payment Entry or a Journal Entry — cancel or amend the "
+					     + "credit note instead.", [row.voucher_no]),
+				indicator: "orange",
+			}, 7);
+		}
+		frm.trigger("refresh");
+	},
 	allocations_add: (frm) => sf_summary(frm),
 });
 
@@ -140,10 +155,16 @@ function sf_dimension_queries(frm) {
 	});
 }
 
+function sf_can_undo(row) {
+	// a credit note netted onto its own invoice is listed for completeness but ERPNext cannot
+	// unreconcile it, and a closed period will refuse it
+	return !row.in_closed_period && cint(row.undoable !== undefined ? row.undoable : 1);
+}
+
 function sf_tick(frm, value) {
 	(frm.doc.allocations || []).forEach((row) => {
 		// never tick a row the server is going to refuse
-		row.select_row = value && !row.in_closed_period ? 1 : 0;
+		row.select_row = value && sf_can_undo(row) ? 1 : 0;
 	});
 	frm.refresh_field("allocations");
 	frm.trigger("refresh");
@@ -220,7 +241,7 @@ function sf_summary(frm) {
 function sf_confirm(frm, ticked) {
 	const currency = ticked[0].currency || frappe.boot.sysdefaults.currency;
 	const total = ticked.reduce((sum, r) => sum + flt(r.allocated_amount), 0);
-	const blocked = ticked.filter((r) => r.in_closed_period);
+	const blocked = ticked.filter((r) => !sf_can_undo(r));
 	const advances = ticked.filter((r) => r.entry_type === "Order Advance");
 	const lines = ticked.slice(0, 12).map((r) =>
 		`<tr><td>${frappe.utils.escape_html(r.voucher_no)}</td>
@@ -236,7 +257,7 @@ function sf_confirm(frm, ticked) {
 		 </tr></thead><tbody>${lines}</tbody></table>
 		 ${ticked.length > 12 ? `<p class="text-muted small">${__("…and {0} more", [ticked.length - 12])}</p>` : ""}
 		 ${blocked.length ? `<p style="color:var(--red-500)">${
-			__("{0} of these sit in a closed period and will be refused.", [blocked.length])}</p>` : ""}
+			__("{0} of these cannot be undone here and will be refused.", [blocked.length])}</p>` : ""}
 		 ${advances.length ? `<p class="text-muted small">${
 			__("{0} of these are order advances: the order's Advance Paid drops by that amount and the payment is free to be applied elsewhere.", [advances.length])}</p>` : ""}
 		 <p class="text-muted small">${__("Each invoice's outstanding is recalculated and an Unreconcile Payment record is left behind. The payment itself keeps its amount and stays submitted.")}</p>`,
@@ -328,6 +349,7 @@ function sf_is_new(row) {
 const SF_VIEWS = [
 	{ key: "all", label: __("All"), test: () => true },
 	{ key: "risk", label: __("Worth a look"), test: (r) => r.severity === "risk" },
+	{ key: "lead", label: __("Has an open credit note"), test: (r) => r.severity === "lead" },
 	{ key: "new", label: __("Allocated recently"), test: (r) => sf_is_new(r) },
 	{ key: "human", label: __("Entered by a person"), test: (r) => !cint(r.imported) },
 	{ key: "single", label: __("One-off payments"), test: (r) => cint(r.leg_count) <= 1 },
@@ -379,12 +401,17 @@ function sf_tint(frm) {
 	grid.grid_rows.forEach((gr) => {
 		if (!gr.doc || !gr.wrapper) return;
 		const risk = gr.doc.severity === "risk";
-		const fresh = !risk && sf_is_new(gr.doc);
+		const lead = gr.doc.severity === "lead";
+		const locked = !sf_can_undo(gr.doc);
+		const fresh = !risk && !lead && sf_is_new(gr.doc);
 		gr.wrapper.css({
 			"background-color": risk ? "rgba(255, 170, 0, 0.10)"
+				: lead ? "rgba(120, 80, 200, 0.07)"
 				: fresh ? "rgba(0, 120, 255, 0.06)" : "",
 			"border-left": risk ? "3px solid rgba(230, 130, 0, 0.9)"
+				: lead ? "3px solid rgba(120, 80, 200, 0.7)"
 				: fresh ? "3px solid rgba(0, 120, 255, 0.6)" : "",
+			opacity: locked ? 0.72 : "",
 		});
 	});
 }

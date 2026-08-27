@@ -43,7 +43,8 @@
   "days_gap",
   "leg_rows",
   "payers",
-  "remarks"
+  "remarks",
+  "undoable"
  ],
  "fields": [
   {
@@ -301,6 +302,13 @@
    "fieldname": "remarks",
    "fieldtype": "Small Text",
    "label": "Ledger Remarks",
+   "read_only": 1
+  },
+  {
+   "fieldname": "undoable",
+   "fieldtype": "Check",
+   "label": "Can Be Undone Here",
+   "default": "1",
    "read_only": 1
   }
  ],
