@@ -69,10 +69,13 @@ def closed_period_date(company: str):
 	return row[0][0] if row and row[0] else None
 
 
+DIMENSION_FIELDS = ("cost_center", "project", "branch", "finance_book")
+
+
 @frappe.whitelist()
 def reconciled_entries(company, party_type, party, account=None, voucher_type=None,
                        from_date=None, to_date=None, minimum_amount=None, maximum_amount=None,
-                       against_voucher_no=None, limit=500):
+                       against_voucher_no=None, limit=500, dimensions=None):
 	"""Every live allocation of this party's payments against its invoices.
 
 	Read from the Payment Ledger Entry rather than from Payment Entry Reference rows, because the
@@ -111,6 +114,19 @@ def reconciled_entries(company, party_type, party, account=None, voucher_type=No
 	if against_voucher_no:
 		conditions.append("ple.against_voucher_no = %(against_voucher_no)s")
 		values["against_voucher_no"] = against_voucher_no
+
+	# The Payment Ledger Entry carries the dimensions itself (cost_center, project, branch,
+	# finance_book are all real columns and populated on this site), so a dimension filter needs
+	# no join -- and it filters the ALLOCATION, which is what the user is choosing between.
+	if isinstance(dimensions, str):
+		dimensions = json.loads(dimensions or "{}")
+	for field, value in (dimensions or {}).items():
+		if not value or field not in DIMENSION_FIELDS:
+			continue
+		if not frappe.db.has_column("Payment Ledger Entry", field):
+			continue
+		conditions.append(f"ple.{field} = %({field})s")
+		values[field] = value
 
 	having = ["allocated_amount > 0.005"]
 	if minimum_amount:
@@ -228,9 +244,18 @@ def unreconcile(rows):
 				"against_voucher_type": row["against_voucher_type"],
 				"against_voucher_no": row["against_voucher_no"],
 			}]))
+			# hand back the audit record so the user can open what was created, not just be
+			# told something happened
+			audit = frappe.db.get_value(
+				"Unreconcile Payment",
+				{"voucher_no": row["voucher_no"], "docstatus": 1},
+				"name",
+				order_by="creation desc",
+			)
 			done.append({"voucher_no": row["voucher_no"],
 			             "against_voucher_no": row["against_voucher_no"],
-			             "allocated_amount": flt(row.get("allocated_amount"))})
+			             "allocated_amount": flt(row.get("allocated_amount")),
+			             "audit": audit})
 		except Exception as e:
 			frappe.db.rollback(save_point=savepoint)
 			failed.append({"voucher_no": row.get("voucher_no"),

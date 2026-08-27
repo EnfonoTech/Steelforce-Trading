@@ -11,7 +11,11 @@ from frappe import _
 from frappe.model.document import Document
 from frappe.utils import flt
 
-from sf_trading.payment_unreconciliation import reconciled_entries, unreconcile
+from sf_trading.payment_unreconciliation import (
+	DIMENSION_FIELDS,
+	reconciled_entries,
+	unreconcile,
+)
 
 ROW_FIELDS = ("company", "voucher_type", "voucher_no", "posting_date", "against_voucher_type",
               "against_voucher_no", "allocated_amount", "outstanding_amount", "currency",
@@ -28,6 +32,7 @@ class SFPaymentUnreconciliation(Document):
 			from_date=self.from_date, to_date=self.to_date,
 			minimum_amount=self.minimum_amount, maximum_amount=self.maximum_amount,
 			against_voucher_no=self.against_voucher_no, limit=self.limit or 500,
+			dimensions={f: self.get(f) for f in DIMENSION_FIELDS},
 		)
 
 	@frappe.whitelist()

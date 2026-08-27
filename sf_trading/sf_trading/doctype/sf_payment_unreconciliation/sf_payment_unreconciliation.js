@@ -7,19 +7,27 @@
 
 frappe.ui.form.on("SF Payment Unreconciliation", {
 	setup(frm) {
+		// the same party types frappe itself considers to have a party account, rather than a
+		// hardcoded three
 		frm.set_query("party_type", () => ({
-			filters: { name: ["in", ["Customer", "Supplier", "Employee"]] },
+			filters: { name: ["in", Object.keys(frappe.boot.party_account_types)] },
 		}));
 		frm.set_query("receivable_payable_account", () => ({
 			filters: {
 				company: frm.doc.company,
-				account_type: ["in", ["Receivable", "Payable"]],
 				is_group: 0,
+				account_type: frappe.boot.party_account_types[frm.doc.party_type],
+				root_type: frm.doc.party_type === "Customer" ? "Asset" : "Liability",
 			},
 		}));
+		frm.set_query("cost_center", () => ({
+			filters: { company: frm.doc.company, is_group: 0 },
+		}));
+		frm.set_query("branch", () => ({ filters: {} }));
 	},
 
 	onload(frm) {
+		sf_dimension_queries(frm);
 		if (!frm.doc.company) {
 			frm.set_value("company", frappe.defaults.get_user_default("Company"));
 		}
@@ -41,6 +49,13 @@ frappe.ui.form.on("SF Payment Unreconciliation", {
 
 		// bulk ticking is the whole point when a party has been mis-applied across dozens of
 		// invoices — the case this tool exists for
+		// straight back to the forward tool, party already chosen
+		frm.add_custom_button(__("Reconcile Again"), () => {
+			frappe.route_options = {
+				company: frm.doc.company, party_type: frm.doc.party_type, party: frm.doc.party,
+			};
+			frappe.set_route("Form", "Payment Reconciliation");
+		}, __("Actions"));
 		frm.add_custom_button(__("Tick All"), () => sf_tick(frm, 1));
 		frm.add_custom_button(__("Untick All"), () => sf_tick(frm, 0));
 		frm.add_custom_button(__("Get Allocations"), () => sf_fetch(frm));
@@ -57,18 +72,63 @@ frappe.ui.form.on("SF Payment Unreconciliation", {
 		sf_summary(frm);
 	},
 
-	company: (frm) => sf_clear(frm),
+	company(frm) {
+		frm.set_value("party", null);
+		frm.set_value("receivable_payable_account", null);
+		sf_clear(frm);
+		sf_dimension_queries(frm);
+	},
+
 	party_type(frm) {
 		frm.set_value("party", null);
+		frm.set_value("receivable_payable_account", null);
 		sf_clear(frm);
 	},
-	party: (frm) => sf_clear(frm),
+
+	party(frm) {
+		sf_clear(frm);
+		// the party account is the one filter nobody should have to look up: ask erpnext for the
+		// same answer Payment Reconciliation gets, including the advance account variant
+		frm.set_value("receivable_payable_account", null);
+		if (!(frm.doc.party_type && frm.doc.party)) return;
+		frappe.call({
+			method: "erpnext.accounts.party.get_party_account",
+			args: {
+				company: frm.doc.company,
+				party_type: frm.doc.party_type,
+				party: frm.doc.party,
+				include_advance: 1,
+			},
+			callback: (r) => {
+				if (r.exc || !r.message) return;
+				const account = Array.isArray(r.message) ? r.message[0] : r.message;
+				if (account) frm.set_value("receivable_payable_account", account);
+			},
+		});
+	},
+
+	receivable_payable_account: (frm) => sf_clear(frm),
 });
 
 frappe.ui.form.on("SF Unreconciliation Row", {
 	select_row: (frm) => frm.trigger("refresh"),
 	allocations_add: (frm) => sf_summary(frm),
 });
+
+function sf_dimension_queries(frm) {
+	// erpnext's own helper: it knows which dimensions exist on this site and how each should be
+	// filtered (company-scoped, non-group for trees), so a site that adds one gets it for free
+	frappe.call({
+		method: "erpnext.accounts.doctype.payment_reconciliation.payment_reconciliation.get_queries_for_dimension_filters",
+		args: { company: frm.doc.company },
+		callback: (r) => {
+			(r.message || []).forEach((dim) => {
+				if (!frm.fields_dict[dim.fieldname]) return;
+				frm.set_query(dim.fieldname, () => ({ filters: dim.filters }));
+			});
+		},
+	});
+}
 
 function sf_tick(frm, value) {
 	(frm.doc.allocations || []).forEach((row) => {
@@ -182,6 +242,19 @@ function sf_run(frm) {
 							|| frappe.boot.sysdefaults.currency)]),
 					indicator: "green",
 				}, 7);
+				// name the audit records, so the trail is one click away rather than a claim
+				const audits = res.done.filter((d) => d.audit);
+				if (audits.length) {
+					frappe.msgprint({
+						title: __("Undone"),
+						message: audits.map((d) =>
+							`<b>${frappe.utils.escape_html(d.voucher_no)}</b> → ${
+								frappe.utils.escape_html(d.against_voucher_no)} · ${
+								frappe.utils.escape_html(String(d.allocated_amount))} · <a href="/app/unreconcile-payment/${
+								encodeURIComponent(d.audit)}">${__("audit record")}</a>`).join("<br>"),
+						indicator: "green",
+					});
+				}
 			}
 			if ((res.failed || []).length) {
 				// every refusal names its reason: a closed period, a cancelled payment, or an

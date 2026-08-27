@@ -5,56 +5,198 @@
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
- "field_order": ["company", "party_type", "party", "receivable_payable_account",
-                 "col_break1", "voucher_type", "from_date", "to_date",
-                 "minimum_amount", "maximum_amount",
-                 "sec_break_filters", "against_voucher_no", "limit",
-                 "sec_break_rows", "help_html", "allocations"],
+ "field_order": [
+  "company",
+  "party_type",
+  "party",
+  "receivable_payable_account",
+  "col_break1",
+  "voucher_type",
+  "from_date",
+  "to_date",
+  "minimum_amount",
+  "maximum_amount",
+  "accounting_dimensions_section",
+  "cost_center",
+  "branch",
+  "dimension_col_break",
+  "project",
+  "finance_book",
+  "sec_break_filters",
+  "against_voucher_no",
+  "limit",
+  "sec_break_rows",
+  "help_html",
+  "allocations"
+ ],
  "fields": [
-  {"fieldname": "company", "fieldtype": "Link", "in_standard_filter": 1, "label": "Company",
-   "options": "Company", "reqd": 1},
-  {"fieldname": "party_type", "fieldtype": "Link", "label": "Party Type", "options": "DocType",
-   "reqd": 1},
-  {"fieldname": "party", "fieldtype": "Dynamic Link", "label": "Party", "options": "party_type",
-   "reqd": 1},
-  {"fieldname": "receivable_payable_account", "fieldtype": "Link", "label": "Party Account",
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "fieldname": "party_type",
+   "fieldtype": "Link",
+   "label": "Party Type",
+   "options": "DocType",
+   "reqd": 1
+  },
+  {
+   "fieldname": "party",
+   "fieldtype": "Dynamic Link",
+   "label": "Party",
+   "options": "party_type",
+   "reqd": 1
+  },
+  {
+   "fieldname": "receivable_payable_account",
+   "fieldtype": "Link",
+   "label": "Party Account",
    "options": "Account",
-   "description": "Optional. Leave blank to cover every account this party is posted to."},
-  {"fieldname": "col_break1", "fieldtype": "Column Break"},
-  {"fieldname": "voucher_type", "fieldtype": "Select", "label": "Payment Type",
+   "description": "Optional. Leave blank to cover every account this party is posted to."
+  },
+  {
+   "fieldname": "col_break1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "voucher_type",
+   "fieldtype": "Select",
+   "label": "Payment Type",
    "options": "\nPayment Entry\nJournal Entry",
-   "description": "Optional. Blank covers both."},
-  {"fieldname": "from_date", "fieldtype": "Date", "label": "From Payment Date"},
-  {"fieldname": "to_date", "fieldtype": "Date", "label": "To Payment Date"},
-  {"fieldname": "minimum_amount", "fieldtype": "Currency", "label": "Minimum Allocated Amount"},
-  {"fieldname": "maximum_amount", "fieldtype": "Currency", "label": "Maximum Allocated Amount"},
-  {"fieldname": "sec_break_filters", "fieldtype": "Section Break", "label": "Narrow Further",
-   "collapsible": 1},
-  {"fieldname": "against_voucher_no", "fieldtype": "Data", "label": "Applied To (invoice no)",
-   "description": "Optional. Only allocations against this one document."},
-  {"default": "500", "fieldname": "limit", "fieldtype": "Int", "label": "Row Limit"},
-  {"fieldname": "sec_break_rows", "fieldtype": "Section Break", "label": "Allocations"},
-  {"fieldname": "help_html", "fieldtype": "HTML",
-   "options": "<p class=\"text-muted small\">Tick <b>Undo</b> on the allocations to break, then use <b>Unreconcile</b>. Each one is undone through ERPNext's own Unreconcile Payment, so the invoice's outstanding is recalculated and an audit record is left behind. Rows inside a closed accounting period are refused.</p>"},
-  {"fieldname": "allocations", "fieldtype": "Table", "label": "Allocations",
-   "options": "SF Unreconciliation Row"}
+   "description": "Optional. Blank covers both."
+  },
+  {
+   "fieldname": "from_date",
+   "fieldtype": "Date",
+   "label": "From Payment Date"
+  },
+  {
+   "fieldname": "to_date",
+   "fieldtype": "Date",
+   "label": "To Payment Date"
+  },
+  {
+   "fieldname": "minimum_amount",
+   "fieldtype": "Currency",
+   "label": "Minimum Allocated Amount"
+  },
+  {
+   "fieldname": "maximum_amount",
+   "fieldtype": "Currency",
+   "label": "Maximum Allocated Amount"
+  },
+  {
+   "fieldname": "accounting_dimensions_section",
+   "fieldtype": "Section Break",
+   "label": "Accounting Dimensions",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "cost_center",
+   "fieldtype": "Link",
+   "label": "Cost Center",
+   "options": "Cost Center"
+  },
+  {
+   "fieldname": "branch",
+   "fieldtype": "Link",
+   "label": "Branch",
+   "options": "Branch"
+  },
+  {
+   "fieldname": "dimension_col_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "project",
+   "fieldtype": "Link",
+   "label": "Project",
+   "options": "Project"
+  },
+  {
+   "fieldname": "finance_book",
+   "fieldtype": "Link",
+   "label": "Finance Book",
+   "options": "Finance Book"
+  },
+  {
+   "fieldname": "sec_break_filters",
+   "fieldtype": "Section Break",
+   "label": "Narrow Further",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "against_voucher_no",
+   "fieldtype": "Data",
+   "label": "Applied To (invoice no)",
+   "description": "Optional. Only allocations against this one document."
+  },
+  {
+   "default": "500",
+   "fieldname": "limit",
+   "fieldtype": "Int",
+   "label": "Row Limit"
+  },
+  {
+   "fieldname": "sec_break_rows",
+   "fieldtype": "Section Break",
+   "label": "Allocations"
+  },
+  {
+   "fieldname": "help_html",
+   "fieldtype": "HTML",
+   "options": "<p class=\"text-muted small\">Tick <b>Undo</b> on the allocations to break, then use <b>Unreconcile</b>. Each one is undone through ERPNext's own Unreconcile Payment, so the invoice's outstanding is recalculated and an audit record is left behind. Rows inside a closed accounting period are refused.</p>"
+  },
+  {
+   "fieldname": "allocations",
+   "fieldtype": "Table",
+   "label": "Allocations",
+   "options": "SF Unreconciliation Row"
+  }
  ],
  "hide_toolbar": 1,
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-08-27 09:00:00.000000",
+ "modified": "2026-08-27 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Payment Unreconciliation",
  "owner": "Administrator",
  "permissions": [
-  {"create": 1, "email": 1, "print": 1, "read": 1, "role": "Accounts Manager", "share": 1,
-   "write": 1},
-  {"create": 1, "email": 1, "print": 1, "read": 1, "role": "Accounts User", "share": 1,
-   "write": 1},
-  {"create": 1, "delete": 1, "email": 1, "print": 1, "read": 1, "role": "System Manager",
-   "share": 1, "write": 1}
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Accounts Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "Accounts User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
  ],
  "sort_field": "modified",
  "sort_order": "DESC",
