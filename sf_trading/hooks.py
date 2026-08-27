@@ -167,6 +167,8 @@ after_migrate = [
 	"sf_trading.payment_entry_reference_date.ensure_custom_fields",
 	# Sales Performance: number cards, charts, dashboard and the workspace that holds them
 	"sf_trading.sales_performance.setup",
+	# put Payment Unreconciliation beside Payment Reconciliation, where people look for it
+	"sf_trading.payment_unreconciliation.ensure_workspace_links",
 	# the invoice's Sales Person, Payment Mode and Delivery Person, on the order
 	"sf_trading.sales_order_fields.ensure_custom_fields",
 	# the refund a return will pay once it is approved

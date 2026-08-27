@@ -265,3 +265,32 @@ def unreconcile(rows):
 			                 f"SF unreconcile failed: {row.get('voucher_no')}")
 
 	return {"done": done, "failed": failed}
+
+
+# ─── Discoverability ──────────────────────────────────────────────────────────
+
+TOOL = "SF Payment Unreconciliation"
+HOSTS = ("Supplier Payments", "Receivables", "Payables")
+
+
+def ensure_workspace_links():
+	"""Put the tool where an accountant already looks: beside Payment Reconciliation.
+
+	Added to this app's own Supplier Payments workspace and to erpnext's Receivables and
+	Payables, because that is where the forward tool lives. Run from after_migrate rather than
+	shipped as a fixture: erpnext re-syncs its own workspaces on migrate and would drop a
+	hand-added link, so this re-adds it every time and skips whatever is already there.
+	"""
+	for name in HOSTS:
+		if not frappe.db.exists("Workspace", name):
+			continue
+		try:
+			ws = frappe.get_doc("Workspace", name)
+			if any(s.link_to == TOOL for s in ws.shortcuts):
+				continue
+			ws.append("shortcuts", {"label": "Payment Unreconciliation", "type": "DocType",
+			                        "link_to": TOOL})
+			ws.save(ignore_permissions=True)
+		except Exception:
+			frappe.log_error(frappe.get_traceback(),
+			                 f"sf_trading: could not add the unreconciliation link to {name}")
