@@ -19,16 +19,21 @@ ROW_FIELDS = ("company", "voucher_type", "voucher_no", "posting_date", "against_
 
 
 class SFPaymentUnreconciliation(Document):
-	@frappe.whitelist()
-	def get_allocations(self):
-		"""Fill the grid with every live allocation matching the filters."""
-		rows = reconciled_entries(
+	def _fetch(self):
+		"""The current filters, applied. Kept separate so the refresh after unreconciling can
+		reuse them without touching the stored document."""
+		return reconciled_entries(
 			company=self.company, party_type=self.party_type, party=self.party,
 			account=self.receivable_payable_account, voucher_type=self.voucher_type,
 			from_date=self.from_date, to_date=self.to_date,
 			minimum_amount=self.minimum_amount, maximum_amount=self.maximum_amount,
 			against_voucher_no=self.against_voucher_no, limit=self.limit or 500,
 		)
+
+	@frappe.whitelist()
+	def get_allocations(self):
+		"""Fill the grid with every live allocation matching the filters."""
+		rows = self._fetch()
 		self.set("allocations", [])
 		for row in rows:
 			self.append("allocations", {f: row.get(f) for f in ROW_FIELDS})
@@ -45,14 +50,18 @@ class SFPaymentUnreconciliation(Document):
 			frappe.throw(_("Tick the allocations to undo first."))
 
 		result = unreconcile(selected)
-		frappe.db.commit()  # the grid is refetched below; keep what succeeded
+		frappe.db.commit()  # keep what succeeded, whatever the refresh below does
 
-		self.reload()
-		self.get_allocations()
-		self.save(ignore_permissions=True)
+		# The filters live only in the browser: this is a Single that is never saved, exactly like
+		# Payment Reconciliation. reload() therefore wiped company/party_type/party and the
+		# refresh threw "Company, Party Type and Party are all needed" AFTER the work was already
+		# committed -- an error message for a job that had in fact succeeded. Refetch in memory
+		# and hand the rows back for the grid instead.
+		rows = self._fetch()
 
 		return {
 			"done": result["done"],
 			"failed": result["failed"],
 			"total": flt(sum(flt(r.get("allocated_amount")) for r in result["done"])),
+			"rows": [{f: row.get(f) for f in ROW_FIELDS} for row in rows],
 		}

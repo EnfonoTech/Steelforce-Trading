@@ -165,6 +165,12 @@ function sf_run(frm) {
 		freeze_message: __("Unreconciling…"),
 		callback: (r) => {
 			const res = r.message || {};
+			// the server hands back what is still allocated; replacing the grid in place keeps
+			// the filters the user typed, which a reload would throw away
+			frm.doc.allocations = (res.rows || []).map((row, i) =>
+				Object.assign({ doctype: "SF Unreconciliation Row", parent: frm.doc.name,
+					parentfield: "allocations", parenttype: frm.doc.doctype,
+					idx: i + 1, name: `new-row-${i + 1}` }, row));
 			frm.refresh_field("allocations");
 			frm.trigger("refresh");
 
