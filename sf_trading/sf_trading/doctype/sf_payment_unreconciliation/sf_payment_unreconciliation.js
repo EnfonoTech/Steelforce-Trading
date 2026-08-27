@@ -27,6 +27,7 @@ frappe.ui.form.on("SF Payment Unreconciliation", {
 	},
 
 	onload(frm) {
+		sf_pill_formatter(frm);
 		sf_dimension_queries(frm);
 		if (!frm.doc.company) {
 			frm.set_value("company", frappe.defaults.get_user_default("Company"));
@@ -393,6 +394,25 @@ function sf_apply_view(frm) {
 	frm.doc.allocations = shown;
 	frm.refresh_field("allocations");
 	sf_tint(frm);
+}
+
+function sf_pill_formatter(frm) {
+	// A cell formatter, not a CSS class, because only the rows the grid has actually rendered
+	// exist as objects: on a 384-row party the tint reaches 50 rows and the other 334 render
+	// bare. update_docfield_property mutates the docfield frappe.format reads `formatter` from,
+	// so the pill follows the user through paging and filtering.
+	const grid = frm.get_field("allocations") && frm.get_field("allocations").grid;
+	if (!grid || !grid.update_docfield_property) return;
+	grid.update_docfield_property("insight", "formatter", (value, df, options, doc) => {
+		if (!value) return "";
+		const text = frappe.utils.escape_html(String(value).replace("\u26a0 ", ""));
+		const colour = !doc ? "gray"
+			: doc.severity === "risk" ? "orange"
+			: doc.severity === "lead" ? "purple"
+			: !cint(doc.undoable === undefined ? 1 : doc.undoable) ? "gray"
+			: sf_is_new(doc) ? "blue" : "gray";
+		return `<span class="indicator-pill ${colour}" style="white-space:normal">${text}</span>`;
+	});
 }
 
 function sf_tint(frm) {

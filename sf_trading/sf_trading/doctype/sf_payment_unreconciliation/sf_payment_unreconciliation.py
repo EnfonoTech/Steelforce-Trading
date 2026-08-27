@@ -25,7 +25,7 @@ ROW_FIELDS = ("company", "voucher_type", "voucher_no", "posting_date", "against_
               "payment_branch", "payment_cost_center", "target_date", "target_total",
               "applied_total", "target_branch", "target_status", "unallocated_amount",
               "is_amendment", "imported", "days_gap", "leg_rows", "payers", "remarks",
-              "undoable")
+              "undoable", "other_parties")
 
 
 class SFPaymentUnreconciliation(Document):

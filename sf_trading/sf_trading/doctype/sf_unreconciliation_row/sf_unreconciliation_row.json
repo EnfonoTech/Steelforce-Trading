@@ -44,7 +44,8 @@
   "leg_rows",
   "payers",
   "remarks",
-  "undoable"
+  "undoable",
+  "other_parties"
  ],
  "fields": [
   {
@@ -107,7 +108,7 @@
   {
    "fieldname": "insight",
    "fieldtype": "Data",
-   "label": "Insight",
+   "label": "Observations",
    "in_list_view": 1,
    "columns": 2,
    "read_only": 1
@@ -309,6 +310,12 @@
    "fieldtype": "Check",
    "label": "Can Be Undone Here",
    "default": "1",
+   "read_only": 1
+  },
+  {
+   "fieldname": "other_parties",
+   "fieldtype": "Int",
+   "label": "Other Parties On This Voucher",
    "read_only": 1
   }
  ],

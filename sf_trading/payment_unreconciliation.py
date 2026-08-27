@@ -137,7 +137,9 @@ def advance_entries(company, party_type, party, account=None, from_date=None, to
 		conditions.append(f"pe.{field} = %({field})s")
 		values[field] = value
 
-	having = ["allocated_amount > 0.005"]
+	# >= not >: 32 legs sit at exactly 0.005 and were invisible, which is not the same thing as
+	# being immaterial
+	having = ["allocated_amount >= 0.005"]
 	if minimum_amount:
 		having.append("allocated_amount >= %(minimum_amount)s")
 		values["minimum_amount"] = flt(minimum_amount)
@@ -235,7 +237,7 @@ def reconciled_entries(company, party_type, party, account=None, voucher_type=No
 		conditions.append(f"ple.{field} = %({field})s")
 		values[field] = value
 
-	having = ["allocated_amount > 0.005"]
+	having = ["allocated_amount >= 0.005"]
 	if minimum_amount:
 		having.append("allocated_amount >= %(minimum_amount)s")
 		values["minimum_amount"] = flt(minimum_amount)
@@ -317,32 +319,43 @@ FRESH = "fresh"
 PLAIN = "plain"
 
 
-def _leg_counts(company, party_type, party):
-	"""How many invoices each payment is spread across, counted across the WHOLE ledger.
+def _leg_counts(rows):
+	"""How many documents each payment on this page is spread across, and whether it reaches
+	beyond the party on screen.
 
-	Two purposes. It is the difference between one accounting event and eleven rows that look
-	like eleven events -- on this data 21 vouchers generate 646 of 3,209 allocations. And because
-	the count is not scoped to the party on screen, a voucher whose legs outnumber the legs
-	listed is one that also allocates to somebody else: undoing what is visible leaves the rest
-	of that voucher untouched. Two set-based queries for the whole page, whatever its size.
+	Keyed on the page's own vouchers, not on the company. The company-wide version of this query
+	was measured at 241ms of annotate's 299ms on UAT -- an index scan of 59,431 ledger rows that
+	grows with the ledger, so on a production ledger it would be seconds. Keyed on the page it is
+	a range scan of about a dozen values.
+
+	Not party-scoped on purpose: when a voucher's legs outnumber the legs listed, that voucher
+	also allocates to somebody else, and undoing what is visible leaves the rest of it standing.
 	"""
-	values = {"company": company}
-	counts = {}
-	for r in frappe.db.sql("""
-		select voucher_no, count(distinct against_voucher_no) as legs
-		from `tabPayment Ledger Entry`
-		where delinked = 0 and company = %(company)s and voucher_no != against_voucher_no
-		group by voucher_no
-	""", values, as_dict=True):
-		counts[r.voucher_no] = cint(r.legs)
+	vouchers = list({row["voucher_no"] for row in rows})
+	if not vouchers:
+		return {}
 
-	for r in frappe.db.sql("""
-		select voucher_no, count(distinct against_voucher_no) as legs
-		from `tabAdvance Payment Ledger Entry`
-		where delinked = 0 and event = 'Submit' and company = %(company)s
-		group by voucher_no
-	""", values, as_dict=True):
-		counts[r.voucher_no] = counts.get(r.voucher_no, 0) + cint(r.legs)
+	counts = {}
+	for chunk_start in range(0, len(vouchers), 900):
+		chunk = vouchers[chunk_start:chunk_start + 900]
+		for r in frappe.db.sql("""
+			select voucher_no, count(distinct against_voucher_no) as legs,
+			       count(distinct party) as parties
+			from `tabPayment Ledger Entry`
+			where delinked = 0 and voucher_no != against_voucher_no
+			  and voucher_no in %(vouchers)s
+			group by voucher_no
+		""", {"vouchers": chunk}, as_dict=True):
+			counts[r.voucher_no] = {"legs": cint(r.legs), "parties": cint(r.parties)}
+
+		for r in frappe.db.sql("""
+			select voucher_no, count(distinct against_voucher_no) as legs
+			from `tabAdvance Payment Ledger Entry`
+			where delinked = 0 and event = 'Submit' and voucher_no in %(vouchers)s
+			group by voucher_no
+		""", {"vouchers": chunk}, as_dict=True):
+			seen = counts.setdefault(r.voucher_no, {"legs": 0, "parties": 1})
+			seen["legs"] += cint(r.legs)
 	return counts
 
 
@@ -544,6 +557,30 @@ def _applied_totals(rows):
 	return totals
 
 
+def _bulk_day(rows):
+	"""The day a data load wrote most of this page, if there was one.
+
+	Derived from the page rather than hardcoded, and not from the owner alone: 13 of the 15 most
+	recent allocations on this site are Administrator-owned too, so "owner is Administrator" would
+	dismiss this week's live work as machine noise. A single day that carries most of the page and
+	is entirely Administrator-written is a load; anything else is somebody's work.
+	"""
+	by_day = {}
+	for row in rows:
+		if not row.get("allocated_on"):
+			continue
+		day = getdate(row["allocated_on"])
+		seen = by_day.setdefault(day, {"count": 0, "system": 0})
+		seen["count"] += 1
+		if row.get("allocated_by") == "Administrator":
+			seen["system"] += 1
+
+	for day, seen in by_day.items():
+		if seen["count"] >= max(3, 0.3 * len(rows)) and seen["count"] == seen["system"]:
+			return day
+	return None
+
+
 def annotate(rows, company, party_type, party):
 	"""Fill in provenance, the target's own figures, and the observation flags; then order the
 	page so the rows worth a second look are the ones the eye lands on first."""
@@ -552,13 +589,14 @@ def annotate(rows, company, party_type, party):
 
 	advance_doctypes = set(frappe.get_hooks("advance_payment_doctypes") or [])
 	closed = closed_period_date(company)
-	legs = _leg_counts(company, party_type, party)
+	legs = _leg_counts(rows)
 	context = _target_context(rows)
 	paid_by = _payment_context(rows)
 	floating = _floating_credit_notes(rows)
 	intent = _return_intent(rows)
 	applied = _applied_totals(rows)
 	fresh_after = add_days(getdate(nowdate()), -RECENT_DAYS)
+	bulk_day = _bulk_day(rows)
 
 	for row in rows:
 		row["entry_type"] = (ORDER_ADVANCE if row["against_voucher_type"] in advance_doctypes
@@ -566,7 +604,9 @@ def annotate(rows, company, party_type, party):
 		target = context.get((row["against_voucher_type"], row["against_voucher_no"])) or {}
 		payment = paid_by.get((row["voucher_type"], row["voucher_no"])) or {}
 
-		row["leg_count"] = cint(legs.get(row["voucher_no"])) or 1
+		spread = legs.get(row["voucher_no"]) or {}
+		row["leg_count"] = cint(spread.get("legs")) or 1
+		row["other_parties"] = max(cint(spread.get("parties")) - 1, 0)
 		row["target_date"] = target.get("target_date")
 		row["target_total"] = flt(target.get("target_total"))
 		row["target_status"] = target.get("target_status")
@@ -576,7 +616,9 @@ def annotate(rows, company, party_type, party):
 		row["payers"] = cint(applied_here.get("payers")) or 1
 		row["unallocated_amount"] = flt(payment.get("unallocated_amount"))
 		row["is_amendment"] = bool(payment.get("amended_from"))
-		row["imported"] = row.get("allocated_by") == "Administrator"
+		row["imported"] = bool(bulk_day and row.get("allocated_on")
+		                       and getdate(row["allocated_on"]) == bulk_day
+		                       and row.get("allocated_by") == "Administrator")
 		row["days_gap"] = (
 			(getdate(row["posting_date"]) - getdate(row["target_date"])).days
 			if row["target_date"] else 0
@@ -597,9 +639,11 @@ def annotate(rows, company, party_type, party):
 		if not row["undoable"]:
 			notes.append(_("Netted credit note — undo this on the credit note, not here"))
 
+		# A closed period does not make a row suspicious, it makes it un-undoable. Mixing "you may
+		# not do this" into "this might be wrong" devalues both.
 		if row["in_closed_period"]:
-			notes.append(_("Closed period"))
-			worth_a_look = True
+			row["undoable"] = False
+			notes.append(_("Inside a closed accounting period"))
 		if cint(target.get("docstatus")) == 2:
 			notes.append(_("Applied to a cancelled document"))
 			worth_a_look = True
@@ -658,10 +702,14 @@ def annotate(rows, company, party_type, party):
 			worth_a_look = True
 		if row["days_gap"] > LATE_DAYS:
 			notes.append(_("Settled {0} days later").format(row["days_gap"]))
+		# 85 of 3,177 allocations site-wide, 14 of Steel Art's 384 -- a 27x narrowing, and the
+		# literal sentence a customer says. A lead, not an alarm: part-settlement is ordinary.
 		if (row["entry_type"] == INVOICE_ALLOCATION
 				and abs(flt(row["outstanding_amount"])) > 0.005
 				and not cint(target.get("target_is_return"))):
-			notes.append(_("Part-settled, still open"))
+			notes.append(_("Still open for {0}").format(frappe.utils.fmt_money(
+				flt(row["outstanding_amount"]), currency=row["currency"])))
+			lead = True
 		if cint(row.get("leg_rows")) > 1:
 			# the grouped total hides them: three legs of -35.255, -35.255 and -21.670 read as one
 			# tidy 92.180 against the invoice
@@ -669,6 +717,10 @@ def annotate(rows, company, party_type, party):
 			worth_a_look = True
 		if row["payers"] > 1:
 			notes.append(_("Also settled by {0} other payment(s)").format(row["payers"] - 1))
+		if row.get("other_parties"):
+			# undoing what is on screen would leave the rest of this voucher standing
+			notes.append(_("This voucher also allocates to {0} other part(y/ies)").format(
+				row["other_parties"]))
 		if row["allocated_amount"] < DUST_AMOUNT:
 			notes.append(_("Rounding-size"))
 
