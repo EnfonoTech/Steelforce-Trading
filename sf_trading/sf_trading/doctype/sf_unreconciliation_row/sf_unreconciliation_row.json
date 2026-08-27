@@ -13,6 +13,7 @@
   "against_voucher_type",
   "against_voucher_no",
   "allocated_amount",
+  "insight",
   "entry_type",
   "outstanding_amount",
   "currency",
@@ -20,7 +21,22 @@
   "party_type",
   "party",
   "in_closed_period",
-  "company"
+  "company",
+  "severity",
+  "sec_break_provenance",
+  "allocated_by",
+  "allocated_on",
+  "leg_count",
+  "prov_col_break",
+  "payment_branch",
+  "payment_cost_center",
+  "sec_break_target",
+  "target_date",
+  "target_total",
+  "applied_total",
+  "target_col_break",
+  "target_branch",
+  "target_status"
  ],
  "fields": [
   {
@@ -81,12 +97,19 @@
    "read_only": 1
   },
   {
+   "fieldname": "insight",
+   "fieldtype": "Data",
+   "label": "Insight",
+   "in_list_view": 1,
+   "columns": 2,
+   "read_only": 1
+  },
+  {
    "fieldname": "entry_type",
    "fieldtype": "Select",
    "label": "Allocation Type",
    "options": "Invoice Allocation\nOrder Advance",
-   "in_list_view": 1,
-   "columns": 2,
+   "in_list_view": 0,
    "read_only": 1
   },
   {
@@ -139,6 +162,94 @@
    "options": "Company",
    "read_only": 1,
    "hidden": 1
+  },
+  {
+   "fieldname": "severity",
+   "fieldtype": "Data",
+   "label": "Severity",
+   "hidden": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_break_provenance",
+   "fieldtype": "Section Break",
+   "label": "Where This Allocation Came From"
+  },
+  {
+   "fieldname": "allocated_by",
+   "fieldtype": "Data",
+   "label": "Allocated By",
+   "read_only": 1
+  },
+  {
+   "fieldname": "allocated_on",
+   "fieldtype": "Datetime",
+   "label": "Allocated On",
+   "read_only": 1
+  },
+  {
+   "fieldname": "leg_count",
+   "fieldtype": "Int",
+   "label": "Invoices In This Voucher",
+   "read_only": 1
+  },
+  {
+   "fieldname": "prov_col_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "payment_branch",
+   "fieldtype": "Data",
+   "label": "Payment Branch",
+   "read_only": 1
+  },
+  {
+   "fieldname": "payment_cost_center",
+   "fieldtype": "Data",
+   "label": "Payment Cost Center",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sec_break_target",
+   "fieldtype": "Section Break",
+   "label": "The Document It Was Applied To"
+  },
+  {
+   "fieldname": "target_date",
+   "fieldtype": "Date",
+   "label": "Its Date",
+   "read_only": 1
+  },
+  {
+   "fieldname": "target_total",
+   "fieldtype": "Currency",
+   "label": "Its Total",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "applied_total",
+   "fieldtype": "Currency",
+   "label": "Total Applied To It",
+   "options": "currency",
+   "read_only": 1,
+   "description": "Every live allocation against it, from every payment"
+  },
+  {
+   "fieldname": "target_col_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "target_branch",
+   "fieldtype": "Data",
+   "label": "Its Branch",
+   "read_only": 1
+  },
+  {
+   "fieldname": "target_status",
+   "fieldtype": "Data",
+   "label": "Its Status",
+   "read_only": 1
   }
  ],
  "index_web_pages_for_search": 1,

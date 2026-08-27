@@ -27,6 +27,7 @@
   "limit",
   "sec_break_rows",
   "help_html",
+  "insight_html",
   "allocations"
  ],
  "fields": [
@@ -151,6 +152,11 @@
    "fieldname": "help_html",
    "fieldtype": "HTML",
    "options": "<p class=\"text-muted small\">Tick <b>Undo</b> on the allocations to break, then use <b>Unreconcile</b>. Each one is undone through ERPNext's own Unreconcile Payment, so the invoice's outstanding is recalculated and an audit record is left behind. Rows inside a closed accounting period are refused.</p><p class=\"text-muted small\">The grid lists both kinds of allocation: an <b>Invoice Allocation</b> (payment applied to an invoice) and an <b>Order Advance</b> (payment held against a Sales or Purchase Order). Undoing an advance drops the order's Advance Paid instead of an invoice outstanding.</p>"
+  },
+  {
+   "fieldname": "insight_html",
+   "fieldtype": "HTML",
+   "label": "What To Look At"
   },
   {
    "fieldname": "allocations",

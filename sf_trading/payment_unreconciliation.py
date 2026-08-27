@@ -33,7 +33,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import flt, getdate
+from frappe.utils import add_days, cint, flt, getdate, nowdate
 
 PAYMENT_TYPES = ("Payment Entry", "Journal Entry")
 
@@ -142,7 +142,11 @@ def advance_entries(company, party_type, party, account=None, from_date=None, to
 			adv.against_voucher_type, adv.against_voucher_no,
 			adv.currency, pe.posting_date, pe.party_type, pe.party,
 			(case when pe.payment_type = 'Receive' then pe.paid_from else pe.paid_to end) as account,
-			abs(sum(adv.amount)) as allocated_amount
+			abs(sum(adv.amount)) as allocated_amount,
+			min(adv.creation) as allocated_on,
+			max(adv.owner) as allocated_by,
+			max(pe.branch) as payment_branch,
+			max(pe.cost_center) as payment_cost_center
 		from `tabAdvance Payment Ledger Entry` adv
 		join `tabPayment Entry` pe on pe.name = adv.voucher_no
 		where {" and ".join(conditions)}
@@ -229,7 +233,11 @@ def reconciled_entries(company, party_type, party, account=None, voucher_type=No
 			ple.against_voucher_type, ple.against_voucher_no,
 			ple.account, ple.party_type, ple.party, ple.account_currency as currency,
 			max(ple.posting_date) as posting_date,
-			abs(sum(ple.amount)) as allocated_amount
+			abs(sum(ple.amount)) as allocated_amount,
+			min(ple.creation) as allocated_on,
+			max(ple.owner) as allocated_by,
+			max(ple.branch) as payment_branch,
+			max(ple.cost_center) as payment_cost_center
 		from `tabPayment Ledger Entry` ple
 		where {" and ".join(conditions)}
 		group by ple.voucher_type, ple.voucher_no, ple.against_voucher_type, ple.against_voucher_no,
@@ -250,23 +258,209 @@ def reconciled_entries(company, party_type, party, account=None, voucher_type=No
 			against_voucher_no=against_voucher_no, dimensions=dimensions, limit=limit,
 		)
 
+	annotate(rows, company, party_type, party)
+	return rows
+
+
+# ---------------------------------------------------------------------------------------------
+# The insight layer
+#
+# A flat list of live allocations is unreadable: one bulk journal shows up as eleven rows that
+# look like eleven separate events, and nothing on screen says which row a human touched
+# yesterday versus which arrived with a data load. Everything below exists to answer, at a
+# glance, "which of these did somebody get wrong".
+#
+# Two rules govern the flags. They are OBSERVATIONS, never accusations -- acting on this screen
+# breaks a real ledger link, so a flag that shouts at a legitimate allocation is worse than no
+# flag at all. And they must stay cheap: every one is computed set-based for the whole page, so
+# the cost does not grow with the number of rows.
+# ---------------------------------------------------------------------------------------------
+
+BULK_LEGS = 5            # a voucher spread over this many invoices reads as one bulk event
+RECENT_DAYS = 7          # "somebody did this lately" window
+DUST_AMOUNT = 0.05       # rounding-size allocation, in the account currency
+
+RISK = "risk"
+FRESH = "fresh"
+PLAIN = "plain"
+
+
+def _leg_counts(company, party_type, party):
+	"""How many invoices each payment is spread across.
+
+	This is the difference between one accounting event and eleven rows that look like eleven
+	events. Two set-based queries for the whole page, whatever its size.
+	"""
+	values = {"company": company, "party_type": party_type, "party": party}
+	counts = {}
+	for r in frappe.db.sql("""
+		select voucher_no, count(distinct against_voucher_no) as legs
+		from `tabPayment Ledger Entry`
+		where delinked = 0 and company = %(company)s and party_type = %(party_type)s
+		  and party = %(party)s and voucher_no != against_voucher_no
+		group by voucher_no
+	""", values, as_dict=True):
+		counts[r.voucher_no] = cint(r.legs)
+
+	for r in frappe.db.sql("""
+		select adv.voucher_no, count(distinct adv.against_voucher_no) as legs
+		from `tabAdvance Payment Ledger Entry` adv
+		join `tabPayment Entry` pe on pe.name = adv.voucher_no
+		where adv.delinked = 0 and adv.event = 'Submit' and adv.company = %(company)s
+		  and pe.party_type = %(party_type)s and pe.party = %(party)s
+		group by adv.voucher_no
+	""", values, as_dict=True):
+		counts[r.voucher_no] = counts.get(r.voucher_no, 0) + cint(r.legs)
+	return counts
+
+
+def _target_context(rows):
+	"""The invoice/order side of every row on the page: one read per target doctype.
+
+	This also replaces what used to be a get_value per row -- the old loop cost one query per
+	line, which a 500-row page could not afford.
+	"""
+	by_doctype = {}
+	for row in rows:
+		by_doctype.setdefault(row["against_voucher_type"], set()).add(row["against_voucher_no"])
+
+	optional = (
+		("grand_total", "target_total"),
+		("outstanding_amount", "target_outstanding"),
+		("advance_paid", "target_advance_paid"),
+		("branch", "target_branch"),
+		("cost_center", "target_cost_center"),
+		("status", "target_status"),
+		("is_return", "target_is_return"),
+		("return_against", "target_return_against"),
+	)
+
+	context = {}
+	for doctype, names in by_doctype.items():
+		fields = ["name", "docstatus"]
+		for field in ("posting_date", "transaction_date"):
+			if frappe.db.has_column(doctype, field):
+				fields.append(f"{field} as target_date")
+				break
+		fields += [f"{f} as {alias}" for f, alias in optional
+		           if frappe.db.has_column(doctype, f)]
+		# get_all deliberately: the rows are already scoped to a party the user filtered on, and
+		# a permission-filtered read here would silently blank the context of some rows
+		for doc in frappe.get_all(doctype, filters={"name": ("in", list(names))},
+		                          fields=fields, limit_page_length=0):
+			context[(doctype, doc["name"])] = doc
+	return context
+
+
+def _applied_totals(rows):
+	"""Everything currently applied to each target, from every payment and party.
+
+	Needed to say "more is applied to this invoice than the invoice is worth", which is the one
+	arithmetic fact a clerk cannot work out by eye from a list of legs.
+	"""
+	targets = list({row["against_voucher_no"] for row in rows})
+	if not targets:
+		return {}
+	totals = {}
+	for chunk_start in range(0, len(targets), 900):
+		chunk = targets[chunk_start:chunk_start + 900]
+		for r in frappe.db.sql("""
+			select against_voucher_no, abs(sum(amount)) as applied
+			from `tabPayment Ledger Entry`
+			where delinked = 0 and voucher_no != against_voucher_no
+			  and against_voucher_no in %(targets)s
+			group by against_voucher_no
+		""", {"targets": chunk}, as_dict=True):
+			totals[r.against_voucher_no] = flt(r.applied)
+	return totals
+
+
+def annotate(rows, company, party_type, party):
+	"""Fill in provenance, the target's own figures, and the observation flags; then order the
+	page so the rows worth a second look are the ones the eye lands on first."""
+	if not rows:
+		return rows
+
 	advance_doctypes = set(frappe.get_hooks("advance_payment_doctypes") or [])
 	closed = closed_period_date(company)
+	legs = _leg_counts(company, party_type, party)
+	context = _target_context(rows)
+	applied = _applied_totals(rows)
+	fresh_after = add_days(getdate(nowdate()), -RECENT_DAYS)
+
 	for row in rows:
 		row["entry_type"] = (ORDER_ADVANCE if row["against_voucher_type"] in advance_doctypes
 		                     else INVOICE_ALLOCATION)
+		target = context.get((row["against_voucher_type"], row["against_voucher_no"])) or {}
+
+		row["leg_count"] = cint(legs.get(row["voucher_no"])) or 1
+		row["target_date"] = target.get("target_date")
+		row["target_total"] = flt(target.get("target_total"))
+		row["target_status"] = target.get("target_status")
+		row["target_branch"] = target.get("target_branch")
+		row["applied_total"] = flt(applied.get(row["against_voucher_no"]))
+		row["in_closed_period"] = bool(closed and getdate(row["posting_date"]) <= getdate(closed))
+
 		# an order has no outstanding; what matters there is how much advance it is carrying
 		if row["entry_type"] == ORDER_ADVANCE:
-			row["outstanding_amount"] = flt(frappe.db.get_value(
-				row["against_voucher_type"], row["against_voucher_no"], "advance_paid"))
+			row["outstanding_amount"] = flt(target.get("target_advance_paid"))
 		else:
-			row["outstanding_amount"] = (
-				flt(frappe.db.get_value(row["against_voucher_type"], row["against_voucher_no"],
-				                        "outstanding_amount"))
-				if _has_outstanding(row["against_voucher_type"]) else 0.0
-			)
-		row["in_closed_period"] = bool(closed and getdate(row["posting_date"]) <= getdate(closed))
+			row["outstanding_amount"] = flt(target.get("target_outstanding"))
+
+		notes, worth_a_look = [], False
+
+		if row["in_closed_period"]:
+			notes.append(_("Closed period"))
+			worth_a_look = True
+		if cint(target.get("docstatus")) == 2:
+			notes.append(_("Applied to a cancelled document"))
+			worth_a_look = True
+		if row.get("payment_branch") and row["target_branch"] \
+				and row["payment_branch"] != row["target_branch"]:
+			notes.append(_("Different branch"))
+			worth_a_look = True
+		if (row["entry_type"] == INVOICE_ALLOCATION and row["target_date"]
+				and getdate(row["posting_date"]) < getdate(row["target_date"])):
+			notes.append(_("Paid before the invoice date"))
+			worth_a_look = True
+		if row["target_total"] and row["applied_total"] > row["target_total"] + 0.005:
+			notes.append(_("More applied than the document is worth"))
+			worth_a_look = True
+		if row["allocated_amount"] < DUST_AMOUNT:
+			notes.append(_("Rounding-size"))
+
+		# provenance: the single most useful thing on the row. "Somebody did this on Tuesday" is
+		# what separates a mistake from four months of settled history.
+		recent = bool(row.get("allocated_on") and getdate(row["allocated_on"]) >= fresh_after)
+		if recent:
+			notes.append(_("New"))
+		if row["leg_count"] >= BULK_LEGS:
+			notes.append(_("1 of {0} in this voucher").format(row["leg_count"]))
+		if row["entry_type"] == ORDER_ADVANCE:
+			notes.append(_("Order advance"))
+
+		row["severity"] = RISK if worth_a_look else (FRESH if recent else PLAIN)
+		row["insight"] = " · ".join(notes)
+		row["allocated_by"] = _short_user(row.get("allocated_by"))
+
+	order = {RISK: 0, FRESH: 1, PLAIN: 2}
+	rows.sort(key=lambda r: (order.get(r["severity"], 3),
+	                         -(getdate(r["allocated_on"]).toordinal() if r.get("allocated_on") else 0),
+	                         -flt(r["allocated_amount"])))
 	return rows
+
+
+def _short_user(user):
+	"""'rahul@steelforceco.com' reads as 'Rahul' in a grid cell one inch wide.
+
+	frappe's own document cache, not lru_cache: a worker lives for days and a renamed user must
+	not stay wrong until the next restart.
+	"""
+	if not user:
+		return ""
+	if user == "Administrator":
+		return _("System")
+	return frappe.get_cached_value("User", user, "full_name") or user.split("@")[0]
 
 
 def _validate_row(row, closed):

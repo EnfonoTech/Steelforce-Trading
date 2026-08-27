@@ -70,6 +70,8 @@ frappe.ui.form.on("SF Payment Unreconciliation", {
 			frm.page.set_primary_action(__("Get Allocations"), () => sf_fetch(frm));
 		}
 		sf_summary(frm);
+		sf_render_insight(frm);
+		sf_tint(frm);
 	},
 
 	company(frm) {
@@ -143,8 +145,12 @@ function sf_clear(frm) {
 	// assigned rather than set_value: set_value marks the form dirty, and a dirty form puts the
 	// Save button back over the action the user actually needs
 	frm.doc.allocations = [];
+	frm.__all_rows = [];
+	frm.__view = "all";
+	frm.__voucher = null;
 	frm.refresh_field("allocations");
 	sf_summary(frm);
+	sf_render_insight(frm);
 }
 
 function sf_fetch(frm) {
@@ -162,7 +168,7 @@ function sf_fetch(frm) {
 		freeze: true,
 		freeze_message: __("Reading the ledger…"),
 		callback: (r) => {
-			frm.refresh_field("allocations");
+			sf_capture(frm);
 			frm.trigger("refresh");
 			if (!r.message) {
 				frappe.msgprint({
@@ -176,13 +182,17 @@ function sf_fetch(frm) {
 }
 
 function sf_summary(frm) {
-	const rows = frm.doc.allocations || [];
+	const rows = (frm.__all_rows && frm.__all_rows.length) ? frm.__all_rows : (frm.doc.allocations || []);
+	const shown = frm.doc.allocations || [];
 	const ticked = rows.filter((r) => r.select_row);
 	const closed = rows.filter((r) => r.in_closed_period).length;
 	const total = ticked.reduce((sum, r) => sum + flt(r.allocated_amount), 0);
 	const currency = (rows[0] && rows[0].currency) || frappe.boot.sysdefaults.currency;
 
 	let html = `<div class="text-muted">${__("{0} allocation(s) found", [rows.length])}`;
+	if (shown.length !== rows.length) {
+		html += ` · ${__("{0} shown by the current filter", [shown.length])}`;
+	}
 	if (ticked.length) {
 		html += ` · <b>${__("{0} ticked", [ticked.length])}</b> · ${format_currency(total, currency)}`;
 	}
@@ -240,7 +250,7 @@ function sf_run(frm) {
 				Object.assign({ doctype: "SF Unreconciliation Row", parent: frm.doc.name,
 					parentfield: "allocations", parenttype: frm.doc.doctype,
 					idx: i + 1, name: `new-row-${i + 1}` }, row));
-			frm.refresh_field("allocations");
+			sf_capture(frm);
 			frm.trigger("refresh");
 
 			if ((res.done || []).length) {
@@ -278,5 +288,166 @@ function sf_run(frm) {
 				});
 			}
 		},
+	});
+}
+
+
+// =================================================================================
+// The insight layer
+//
+// A party with real history returns dozens of rows, and most of them are one bulk journal
+// wearing a different invoice number on each line. Left as a flat list there is nothing to
+// tell a clerk which row somebody got wrong. So: the server marks each row with what it
+// observed, and everything below turns those marks into somewhere to look first --
+// a rollup per payment, chips that narrow the grid, and a tint on the rows worth a second
+// glance. Nothing here changes what can be undone; it only changes what is easy to find.
+// =================================================================================
+
+const SF_NEW_DAYS = 7;
+
+function sf_date_part(value) {
+	if (!value) return "";
+	return typeof value === "string" ? value.slice(0, 10)
+		: (frappe.datetime.obj_to_str(value) || "").slice(0, 10);
+}
+
+function sf_is_new(row) {
+	const day = sf_date_part(row.allocated_on);
+	if (!day) return false;
+	return frappe.datetime.get_day_diff(frappe.datetime.now_date(), day) <= SF_NEW_DAYS;
+}
+
+const SF_VIEWS = [
+	{ key: "all", label: __("All"), test: () => true },
+	{ key: "risk", label: __("Worth a look"), test: (r) => r.severity === "risk" },
+	{ key: "new", label: __("Allocated recently"), test: (r) => sf_is_new(r) },
+	{ key: "single", label: __("One-off payments"), test: (r) => cint(r.leg_count) <= 1 },
+	{ key: "bulk", label: __("Bulk vouchers"), test: (r) => cint(r.leg_count) >= 5 },
+];
+
+function sf_capture(frm) {
+	// hold the whole result set: the chips below show subsets of it, and re-reading the ledger
+	// for every chip click would be both slow and a different answer each time
+	frm.__all_rows = (frm.doc.allocations || []).slice();
+	if (!frm.__view) frm.__view = "all";
+	frm.__voucher = null;
+	sf_apply_view(frm);
+}
+
+function sf_apply_view(frm) {
+	const all = frm.__all_rows || [];
+	const view = SF_VIEWS.find((v) => v.key === (frm.__view || "all")) || SF_VIEWS[0];
+	// the row objects are the same ones the grid ticked, so a tick survives a chip click
+	const shown = all.filter((r) => view.test(r) && (!frm.__voucher || r.voucher_no === frm.__voucher));
+	shown.forEach((r, i) => { r.idx = i + 1; });
+	frm.doc.allocations = shown;
+	frm.refresh_field("allocations");
+	sf_tint(frm);
+}
+
+function sf_tint(frm) {
+	const grid = frm.get_field("allocations") && frm.get_field("allocations").grid;
+	if (!grid || !grid.grid_rows) return;
+	grid.grid_rows.forEach((gr) => {
+		if (!gr.doc || !gr.wrapper) return;
+		const risk = gr.doc.severity === "risk";
+		const fresh = !risk && sf_is_new(gr.doc);
+		gr.wrapper.css({
+			"background-color": risk ? "rgba(255, 170, 0, 0.10)"
+				: fresh ? "rgba(0, 120, 255, 0.06)" : "",
+			"border-left": risk ? "3px solid rgba(230, 130, 0, 0.9)"
+				: fresh ? "3px solid rgba(0, 120, 255, 0.6)" : "",
+		});
+	});
+}
+
+function sf_render_insight(frm) {
+	const field = frm.get_field("insight_html");
+	if (!field || !field.$wrapper) return;
+	const all = frm.__all_rows || [];
+	if (!all.length) { field.$wrapper.empty(); return; }
+
+	const currency = all[0].currency || frappe.boot.sysdefaults.currency;
+	const esc = frappe.utils.escape_html;
+
+	// --- chips: how many rows each way of looking at this party would show ---------
+	const chips = SF_VIEWS.map((v) => {
+		const n = all.filter(v.test).length;
+		if (!n && v.key !== "all") return "";
+		const active = (frm.__view || "all") === v.key;
+		return `<button class="btn btn-xs sf-chip ${active ? "btn-primary" : "btn-default"}"
+			data-view="${v.key}" style="margin-right:4px">${esc(v.label)} (${n})</button>`;
+	}).join("");
+
+	// --- one line per payment: eleven legs of a journal are ONE accounting event ----
+	const byVoucher = {};
+	all.forEach((r) => {
+		const v = byVoucher[r.voucher_no] || (byVoucher[r.voucher_no] = {
+			voucher_no: r.voucher_no, voucher_type: r.voucher_type, posting_date: r.posting_date,
+			allocated_by: r.allocated_by, allocated_on: r.allocated_on, leg_count: cint(r.leg_count),
+			shown: 0, total: 0, risk: 0, currency: r.currency,
+		});
+		v.shown += 1;
+		v.total += flt(r.allocated_amount);
+		if (r.severity === "risk") v.risk += 1;
+	});
+	const vouchers = Object.values(byVoucher).sort((a, b) => (b.risk - a.risk) || (b.total - a.total));
+
+	const rows = vouchers.map((v) => `
+		<tr data-voucher="${esc(v.voucher_no)}" class="sf-voucher" style="cursor:pointer">
+			<td>${esc(v.voucher_no)}${v.risk ? ` <span style="color:rgb(200,110,0)">&#9888;</span>` : ""}</td>
+			<td>${frappe.datetime.str_to_user(v.posting_date) || ""}</td>
+			<td class="text-right">${v.shown}${v.leg_count > v.shown ? ` / ${v.leg_count}` : ""}</td>
+			<td class="text-right">${format_currency(v.total, v.currency)}</td>
+			<td>${esc(v.allocated_by || "")}</td>
+			<td>${sf_date_part(v.allocated_on)
+				? frappe.datetime.str_to_user(sf_date_part(v.allocated_on)) : ""}</td>
+		</tr>`).join("");
+
+	const flagged = all.filter((r) => r.severity === "risk").length;
+	const counts = {};
+	all.forEach((r) => (r.insight || "").split(" · ").filter(Boolean)
+		.forEach((n) => { counts[n] = (counts[n] || 0) + 1; }));
+	const legend = Object.keys(counts).sort((a, b) => counts[b] - counts[a])
+		.map((n) => `${esc(n)} (${counts[n]})`).join(" · ");
+
+	field.$wrapper.html(`
+		<div class="sf-insight" style="margin-bottom:12px">
+			<div style="margin-bottom:8px">${chips}
+				${frm.__voucher ? `<button class="btn btn-xs btn-default sf-chip" data-view="${
+					frm.__view || "all"}" style="margin-left:8px">&times; ${
+					__("Payment filter: {0}", [esc(frm.__voucher)])}</button>` : ""}
+			</div>
+			<div class="text-muted small" style="margin-bottom:8px">
+				${__("{0} allocation(s) across {1} payment(s)", [all.length, vouchers.length])}${
+					flagged ? ` · <b style="color:rgb(200,110,0)">${
+						__("{0} worth a look", [flagged])}</b>` : ""}${legend ? ` · ${legend}` : ""}
+			</div>
+			<table class="table table-bordered table-condensed small" style="margin-bottom:0">
+				<thead><tr>
+					<th>${__("Payment")}</th><th>${__("Date")}</th>
+					<th class="text-right">${__("Legs")}</th>
+					<th class="text-right">${__("Allocated")}</th>
+					<th>${__("Allocated By")}</th><th>${__("Allocated On")}</th>
+				</tr></thead>
+				<tbody>${rows}</tbody>
+			</table>
+			<div class="text-muted small" style="margin-top:6px">${__(
+				"Click a payment to see only its legs. A tinted row is one the ledger flagged; the Insight column says why.")}</div>
+		</div>`);
+
+	field.$wrapper.find(".sf-chip").on("click", (e) => {
+		frm.__view = $(e.currentTarget).attr("data-view") || "all";
+		if ($(e.currentTarget).text().indexOf("\u00d7") === 0) frm.__voucher = null;
+		sf_apply_view(frm);
+		sf_render_insight(frm);
+		sf_summary(frm);
+	});
+	field.$wrapper.find(".sf-voucher").on("click", (e) => {
+		const picked = $(e.currentTarget).attr("data-voucher");
+		frm.__voucher = frm.__voucher === picked ? null : picked;
+		sf_apply_view(frm);
+		sf_render_insight(frm);
+		sf_summary(frm);
 	});
 }
