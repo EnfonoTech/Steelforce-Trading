@@ -170,25 +170,25 @@ def workspace_content():
 	"""The workspace layout: numbers first, then the overview block, then where to go next."""
 	return [
 		{"type": "header", "data": {"text": "<span class=\"h4\"><b>This month</b></span>", "col": 12}},
-		{"type": "number_card", "data": {"number_card_name": "SF MTD Sales", "col": 3}},
-		{"type": "number_card", "data": {"number_card_name": "SF MTD Target", "col": 3}},
-		{"type": "number_card", "data": {"number_card_name": "SF MTD Achievement", "col": 3}},
-		{"type": "number_card", "data": {"number_card_name": "SF Needed Per Day", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "Sales · This Month", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "Target · This Month", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "Achieved · This Month", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "Needed per Day · Rest of Month", "col": 3}},
 		{"type": "header", "data": {"text": "<span class=\"h4\"><b>Year to date</b></span>", "col": 12}},
-		{"type": "number_card", "data": {"number_card_name": "SF YTD Sales", "col": 3}},
-		{"type": "number_card", "data": {"number_card_name": "SF YTD Target", "col": 3}},
-		{"type": "number_card", "data": {"number_card_name": "SF YTD Achievement", "col": 3}},
-		{"type": "number_card", "data": {"number_card_name": "SF YTD Shortfall", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "Sales · Year to Date", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "Target · Year to Date", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "Achieved · Year to Date", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "Ahead / Behind · Year to Date", "col": 3}},
 		{"type": "header", "data": {"text": "<span class=\"h4\"><b>People</b></span>", "col": 12}},
-		{"type": "number_card", "data": {"number_card_name": "SF Top Seller", "col": 3}},
+		{"type": "number_card", "data": {"number_card_name": "Top Sales Person", "col": 3}},
 		{"type": "spacer", "data": {"col": 12}},
 		{"type": "custom_block", "data": {"custom_block_name": BLOCK, "col": 12}},
 		{"type": "spacer", "data": {"col": 12}},
 		{"type": "header", "data": {"text": "<span class=\"h4\"><b>Where the money came from</b></span>", "col": 12}},
-		{"type": "chart", "data": {"chart_name": "SF Target vs Actual by Month", "col": 6}},
-		{"type": "chart", "data": {"chart_name": "SF Achievement by Branch", "col": 6}},
-		{"type": "chart", "data": {"chart_name": "SF Sales by Branch", "col": 6}},
-		{"type": "chart", "data": {"chart_name": "SF Sales by Sales Person", "col": 6}},
+		{"type": "chart", "data": {"chart_name": "Target vs Actual by Month", "col": 6}},
+		{"type": "chart", "data": {"chart_name": "Achievement by Branch", "col": 6}},
+		{"type": "chart", "data": {"chart_name": "Sales by Branch", "col": 6}},
+		{"type": "chart", "data": {"chart_name": "Sales by Sales Person", "col": 6}},
 		{"type": "spacer", "data": {"col": 12}},
 		{"type": "header", "data": {"text": "<span class=\"h4\"><b>Targets &amp; Reports</b></span>", "col": 12}},
 		{"type": "shortcut", "data": {"shortcut_name": "Performance Board", "col": 3}},
@@ -222,13 +222,15 @@ def _fill_workspace(doc):
 		                         "report_ref_doctype": "Sales Invoice"})
 	doc.append("shortcuts", {"label": DASHBOARD, "type": "Dashboard", "link_to": DASHBOARD})
 
-	for card in CARDS:
-		# the workspace block matches on label, so this label must stay the RECORD name; the
-		# friendly wording lives on the card itself and is what gets displayed
-		doc.append("number_cards", {"number_card_name": card[0], "label": card[0]})
-	for chart in ("SF Target vs Actual by Month", "SF Achievement by Branch",
-	              "SF Sales by Branch", "SF Sales by Sales Person"):
-		doc.append("charts", {"chart_name": chart, "label": chart})
+	for name, label, *_rest in CARDS:
+		# label is both what the workspace prints AND the key block.js matches against, so it
+		# carries the friendly wording while the link still points at the record
+		doc.append("number_cards", {"number_card_name": name, "label": label})
+	for chart, label in (("SF Target vs Actual by Month", "Target vs Actual by Month"),
+	                     ("SF Achievement by Branch", "Achievement by Branch"),
+	                     ("SF Sales by Branch", "Sales by Branch"),
+	                     ("SF Sales by Sales Person", "Sales by Sales Person")):
+		doc.append("charts", {"chart_name": chart, "label": label})
 	doc.append("custom_blocks", {"custom_block_name": BLOCK, "label": BLOCK})
 	doc.append("quick_lists", {"document_type": "Sales Target", "label": "Sales Target",
 	                           "quick_list_filter": json.dumps({})})
