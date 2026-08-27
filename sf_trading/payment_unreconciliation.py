@@ -39,12 +39,17 @@ PAYMENT_TYPES = ("Payment Entry", "Journal Entry")
 
 
 def closed_period_date(company: str):
-	"""The latest date closed by a submitted Period Closing Voucher, or None."""
-	return frappe.db.get_value(
-		"Period Closing Voucher",
-		{"company": company, "docstatus": 1},
-		"max(posting_date)",
+	"""The latest date closed by a submitted Period Closing Voucher, or None.
+
+	The field is `period_end_date` -- this doctype has no posting_date at all, and asking for one
+	fails with "Unknown column 'posting_date'" rather than quietly returning nothing.
+	"""
+	row = frappe.db.sql(
+		"""select max(period_end_date) from `tabPeriod Closing Voucher`
+		   where company = %s and docstatus = 1""",
+		(company,),
 	)
+	return row[0][0] if row and row[0] else None
 
 
 @frappe.whitelist()
