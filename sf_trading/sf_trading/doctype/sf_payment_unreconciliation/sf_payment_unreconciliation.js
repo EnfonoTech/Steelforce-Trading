@@ -31,6 +31,20 @@ frappe.ui.form.on("SF Payment Unreconciliation", {
 		frm.disable_save();
 		frm.page.set_title(__("Payment Unreconciliation"));
 
+		// the grid is a result set, not something to type into: a hand-added blank row would be
+		// refused server-side anyway, so do not offer it
+		const grid = frm.get_field("allocations") && frm.get_field("allocations").grid;
+		if (grid) {
+			grid.cannot_add_rows = true;
+			grid.only_sortable && grid.only_sortable(false);
+		}
+
+		// bulk ticking is the whole point when a party has been mis-applied across dozens of
+		// invoices — the case this tool exists for
+		frm.add_custom_button(__("Tick All"), () => sf_tick(frm, 1));
+		frm.add_custom_button(__("Untick All"), () => sf_tick(frm, 0));
+		frm.add_custom_button(__("Get Allocations"), () => sf_fetch(frm));
+
 		// The primary action is never left empty: clearing it lets frappe put Save back, and Save
 		// means nothing here -- this is a tool, not a document.
 		const ticked = (frm.doc.allocations || []).filter((r) => r.select_row);
@@ -55,6 +69,15 @@ frappe.ui.form.on("SF Unreconciliation Row", {
 	select_row: (frm) => frm.trigger("refresh"),
 	allocations_add: (frm) => sf_summary(frm),
 });
+
+function sf_tick(frm, value) {
+	(frm.doc.allocations || []).forEach((row) => {
+		// never tick a row the server is going to refuse
+		row.select_row = value && !row.in_closed_period ? 1 : 0;
+	});
+	frm.refresh_field("allocations");
+	frm.trigger("refresh");
+}
 
 function sf_clear(frm) {
 	// assigned rather than set_value: set_value marks the form dirty, and a dirty form puts the
