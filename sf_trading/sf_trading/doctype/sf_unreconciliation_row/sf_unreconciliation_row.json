@@ -5,38 +5,141 @@
  "doctype": "DocType",
  "editable_grid": 1,
  "engine": "InnoDB",
- "field_order": ["select_row", "voucher_type", "voucher_no", "posting_date",
-                 "against_voucher_type", "against_voucher_no", "allocated_amount",
-                 "outstanding_amount", "currency", "account", "party_type", "party",
-                 "in_closed_period", "company"],
+ "field_order": [
+  "select_row",
+  "voucher_type",
+  "voucher_no",
+  "posting_date",
+  "against_voucher_type",
+  "against_voucher_no",
+  "allocated_amount",
+  "entry_type",
+  "outstanding_amount",
+  "currency",
+  "account",
+  "party_type",
+  "party",
+  "in_closed_period",
+  "company"
+ ],
  "fields": [
-  {"default": "0", "fieldname": "select_row", "fieldtype": "Check", "in_list_view": 1,
-   "label": "Undo", "columns": 1},
-  {"fieldname": "voucher_type", "fieldtype": "Link", "label": "Payment Type", "options": "DocType",
-   "read_only": 1},
-  {"fieldname": "voucher_no", "fieldtype": "Dynamic Link", "in_list_view": 1, "columns": 2,
-   "label": "Payment", "options": "voucher_type", "read_only": 1},
-  {"fieldname": "posting_date", "fieldtype": "Date", "in_list_view": 1, "columns": 1,
-   "label": "Date", "read_only": 1},
-  {"fieldname": "against_voucher_type", "fieldtype": "Link", "label": "Against Type",
-   "options": "DocType", "read_only": 1},
-  {"fieldname": "against_voucher_no", "fieldtype": "Dynamic Link", "in_list_view": 1, "columns": 2,
-   "label": "Applied To", "options": "against_voucher_type", "read_only": 1},
-  {"fieldname": "allocated_amount", "fieldtype": "Currency", "in_list_view": 1, "columns": 2,
-   "label": "Allocated", "options": "currency", "read_only": 1},
-  {"fieldname": "outstanding_amount", "fieldtype": "Currency", "label": "Outstanding Now",
-   "options": "currency", "read_only": 1},
-  {"fieldname": "currency", "fieldtype": "Link", "label": "Currency", "options": "Currency",
-   "read_only": 1, "hidden": 1},
-  {"fieldname": "account", "fieldtype": "Data", "label": "Party Account", "read_only": 1},
-  {"fieldname": "party_type", "fieldtype": "Data", "label": "Party Type", "read_only": 1,
-   "hidden": 1},
-  {"fieldname": "party", "fieldtype": "Data", "label": "Party", "read_only": 1, "hidden": 1},
-  {"default": "0", "fieldname": "in_closed_period", "fieldtype": "Check",
-   "label": "In Closed Period", "read_only": 1,
-   "description": "Dated on or before a submitted Period Closing Voucher — refused."},
-  {"fieldname": "company", "fieldtype": "Link", "label": "Company", "options": "Company",
-   "read_only": 1, "hidden": 1}
+  {
+   "default": "0",
+   "fieldname": "select_row",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Undo",
+   "columns": 1
+  },
+  {
+   "fieldname": "voucher_type",
+   "fieldtype": "Link",
+   "label": "Payment Type",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "voucher_no",
+   "fieldtype": "Dynamic Link",
+   "in_list_view": 1,
+   "columns": 2,
+   "label": "Payment",
+   "options": "voucher_type",
+   "read_only": 1
+  },
+  {
+   "fieldname": "posting_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "columns": 1,
+   "label": "Date",
+   "read_only": 1
+  },
+  {
+   "fieldname": "against_voucher_type",
+   "fieldtype": "Link",
+   "label": "Against Type",
+   "options": "DocType",
+   "read_only": 1
+  },
+  {
+   "fieldname": "against_voucher_no",
+   "fieldtype": "Dynamic Link",
+   "in_list_view": 1,
+   "columns": 2,
+   "label": "Applied To",
+   "options": "against_voucher_type",
+   "read_only": 1
+  },
+  {
+   "fieldname": "allocated_amount",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "columns": 2,
+   "label": "Allocated",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "entry_type",
+   "fieldtype": "Select",
+   "label": "Allocation Type",
+   "options": "Invoice Allocation\nOrder Advance",
+   "in_list_view": 1,
+   "columns": 2,
+   "read_only": 1
+  },
+  {
+   "fieldname": "outstanding_amount",
+   "fieldtype": "Currency",
+   "label": "Outstanding / Advance Paid",
+   "options": "currency",
+   "read_only": 1
+  },
+  {
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "label": "Currency",
+   "options": "Currency",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "account",
+   "fieldtype": "Data",
+   "label": "Party Account",
+   "read_only": 1
+  },
+  {
+   "fieldname": "party_type",
+   "fieldtype": "Data",
+   "label": "Party Type",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "fieldname": "party",
+   "fieldtype": "Data",
+   "label": "Party",
+   "read_only": 1,
+   "hidden": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "in_closed_period",
+   "fieldtype": "Check",
+   "label": "In Closed Period",
+   "read_only": 1,
+   "description": "Dated on or before a submitted Period Closing Voucher \u2014 refused."
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company",
+   "read_only": 1,
+   "hidden": 1
+  }
  ],
  "index_web_pages_for_search": 1,
  "istable": 1,

@@ -186,6 +186,10 @@ function sf_summary(frm) {
 	if (ticked.length) {
 		html += ` · <b>${__("{0} ticked", [ticked.length])}</b> · ${format_currency(total, currency)}`;
 	}
+	const advances = rows.filter((r) => r.entry_type === "Order Advance").length;
+	if (advances) {
+		html += ` · ${__("{0} order advance(s)", [advances])}`;
+	}
 	if (closed) {
 		html += ` · <span style="color:var(--red-500)">${
 			__("{0} inside a closed period and cannot be undone", [closed])}</span>`;
@@ -199,19 +203,24 @@ function sf_confirm(frm, ticked) {
 	const currency = ticked[0].currency || frappe.boot.sysdefaults.currency;
 	const total = ticked.reduce((sum, r) => sum + flt(r.allocated_amount), 0);
 	const blocked = ticked.filter((r) => r.in_closed_period);
+	const advances = ticked.filter((r) => r.entry_type === "Order Advance");
 	const lines = ticked.slice(0, 12).map((r) =>
 		`<tr><td>${frappe.utils.escape_html(r.voucher_no)}</td>
 		 <td>${frappe.utils.escape_html(r.against_voucher_no)}</td>
+		 <td>${frappe.utils.escape_html(r.entry_type || "")}</td>
 		 <td class="text-right">${format_currency(r.allocated_amount, r.currency)}</td></tr>`).join("");
 
 	frappe.confirm(
 		`<p>${__("Break {0} allocation(s) worth {1}?", [ticked.length, format_currency(total, currency)])}</p>
 		 <table class="table table-bordered small"><thead><tr>
-			<th>${__("Payment")}</th><th>${__("Applied To")}</th><th class="text-right">${__("Allocated")}</th>
+			<th>${__("Payment")}</th><th>${__("Applied To")}</th><th>${__("Type")}</th>
+			<th class="text-right">${__("Allocated")}</th>
 		 </tr></thead><tbody>${lines}</tbody></table>
 		 ${ticked.length > 12 ? `<p class="text-muted small">${__("…and {0} more", [ticked.length - 12])}</p>` : ""}
 		 ${blocked.length ? `<p style="color:var(--red-500)">${
 			__("{0} of these sit in a closed period and will be refused.", [blocked.length])}</p>` : ""}
+		 ${advances.length ? `<p class="text-muted small">${
+			__("{0} of these are order advances: the order's Advance Paid drops by that amount and the payment is free to be applied elsewhere.", [advances.length])}</p>` : ""}
 		 <p class="text-muted small">${__("Each invoice's outstanding is recalculated and an Unreconcile Payment record is left behind. The payment itself keeps its amount and stays submitted.")}</p>`,
 		() => sf_run(frm)
 	);

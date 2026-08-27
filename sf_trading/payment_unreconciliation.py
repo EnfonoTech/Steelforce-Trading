@@ -70,6 +70,90 @@ def closed_period_date(company: str):
 
 
 DIMENSION_FIELDS = ("cost_center", "project", "branch", "finance_book")
+INVOICE_ALLOCATION = "Invoice Allocation"
+ORDER_ADVANCE = "Order Advance"
+
+
+def advance_entries(company, party_type, party, account=None, from_date=None, to_date=None,
+                    minimum_amount=None, maximum_amount=None, against_voucher_no=None,
+                    dimensions=None, limit=500):
+	"""Advances a payment holds against an ORDER, from the Advance Payment Ledger Entry.
+
+	An order advance never touches the Payment Ledger Entry -- it lives only here -- so a
+	party-wise screen that reads PLE alone cannot see it. erpnext's own per-voucher dialog unions
+	the two (get_linked_advances), and so does this.
+
+	Three things the ledger does not carry and one that must be filtered:
+	  * no party and no posting date -- both come from the Payment Entry it belongs to
+	  * no account either; the party account is paid_from on a receipt and paid_to on a payment
+	  * event must be "Submit". An "Adjustment" row is the advance being consumed as the order
+	    gets billed, not an allocation somebody chose, and unreconciling one means nothing.
+	"""
+	conditions = [
+		"adv.delinked = 0",
+		"adv.company = %(company)s",
+		"adv.event = 'Submit'",
+		"adv.voucher_type = 'Payment Entry'",
+		"pe.docstatus = 1",
+		"pe.party_type = %(party_type)s",
+		"pe.party = %(party)s",
+	]
+	values = {"company": company, "party_type": party_type, "party": party}
+
+	if from_date:
+		conditions.append("pe.posting_date >= %(from_date)s")
+		values["from_date"] = getdate(from_date)
+	if to_date:
+		conditions.append("pe.posting_date <= %(to_date)s")
+		values["to_date"] = getdate(to_date)
+	if against_voucher_no:
+		conditions.append("adv.against_voucher_no = %(against_voucher_no)s")
+		values["against_voucher_no"] = against_voucher_no
+	if account:
+		conditions.append(
+			"(case when pe.payment_type = 'Receive' then pe.paid_from else pe.paid_to end)"
+			" = %(account)s")
+		values["account"] = account
+
+	if isinstance(dimensions, str):
+		dimensions = json.loads(dimensions or "{}")
+	for field, value in (dimensions or {}).items():
+		# the advance's dimensions are the payment's; finance_book is not on Payment Entry
+		if not value or field not in DIMENSION_FIELDS:
+			continue
+		if not frappe.db.has_column("Payment Entry", field):
+			continue
+		conditions.append(f"pe.{field} = %({field})s")
+		values[field] = value
+
+	having = ["allocated_amount > 0.005"]
+	if minimum_amount:
+		having.append("allocated_amount >= %(minimum_amount)s")
+		values["minimum_amount"] = flt(minimum_amount)
+	if maximum_amount:
+		having.append("allocated_amount <= %(maximum_amount)s")
+		values["maximum_amount"] = flt(maximum_amount)
+	values["limit"] = min(int(limit or 500), 2000)
+
+	return frappe.db.sql(
+		f"""
+		select
+			adv.company, adv.voucher_type, adv.voucher_no,
+			adv.against_voucher_type, adv.against_voucher_no,
+			adv.currency, pe.posting_date, pe.party_type, pe.party,
+			(case when pe.payment_type = 'Receive' then pe.paid_from else pe.paid_to end) as account,
+			abs(sum(adv.amount)) as allocated_amount
+		from `tabAdvance Payment Ledger Entry` adv
+		join `tabPayment Entry` pe on pe.name = adv.voucher_no
+		where {" and ".join(conditions)}
+		group by adv.voucher_no, adv.against_voucher_type, adv.against_voucher_no, adv.currency
+		having {" and ".join(having)}
+		order by pe.posting_date desc, adv.voucher_no
+		limit %(limit)s
+		""",
+		values,
+		as_dict=True,
+	)
 
 
 @frappe.whitelist()
@@ -158,13 +242,29 @@ def reconciled_entries(company, party_type, party, account=None, voucher_type=No
 		as_dict=True,
 	)
 
+	# order advances live in a different ledger; the screen shows both, marked
+	if not voucher_type or voucher_type == "Payment Entry":
+		rows += advance_entries(
+			company, party_type, party, account=account, from_date=from_date, to_date=to_date,
+			minimum_amount=minimum_amount, maximum_amount=maximum_amount,
+			against_voucher_no=against_voucher_no, dimensions=dimensions, limit=limit,
+		)
+
+	advance_doctypes = set(frappe.get_hooks("advance_payment_doctypes") or [])
 	closed = closed_period_date(company)
 	for row in rows:
-		row["outstanding_amount"] = (
-			flt(frappe.db.get_value(row["against_voucher_type"], row["against_voucher_no"],
-			                        "outstanding_amount"))
-			if _has_outstanding(row["against_voucher_type"]) else 0.0
-		)
+		row["entry_type"] = (ORDER_ADVANCE if row["against_voucher_type"] in advance_doctypes
+		                     else INVOICE_ALLOCATION)
+		# an order has no outstanding; what matters there is how much advance it is carrying
+		if row["entry_type"] == ORDER_ADVANCE:
+			row["outstanding_amount"] = flt(frappe.db.get_value(
+				row["against_voucher_type"], row["against_voucher_no"], "advance_paid"))
+		else:
+			row["outstanding_amount"] = (
+				flt(frappe.db.get_value(row["against_voucher_type"], row["against_voucher_no"],
+				                        "outstanding_amount"))
+				if _has_outstanding(row["against_voucher_type"]) else 0.0
+			)
 		row["in_closed_period"] = bool(closed and getdate(row["posting_date"]) <= getdate(closed))
 	return rows
 
@@ -182,12 +282,23 @@ def _validate_row(row, closed):
 	if frappe.db.get_value(row["voucher_type"], row["voucher_no"], "docstatus") != 1:
 		return _("{0} is not submitted").format(row["voucher_no"])
 
-	live = frappe.db.count("Payment Ledger Entry", {
-		"delinked": 0,
-		"company": row["company"],
-		"voucher_no": row["voucher_no"],
-		"against_voucher_no": row["against_voucher_no"],
-	})
+	# an order advance never wrote a Payment Ledger Entry, so its liveness must be read
+	# from the ledger it actually lives in, or every advance row is refused below
+	if row.get("entry_type") == ORDER_ADVANCE:
+		live = frappe.db.count("Advance Payment Ledger Entry", {
+			"delinked": 0,
+			"event": "Submit",
+			"company": row["company"],
+			"voucher_no": row["voucher_no"],
+			"against_voucher_no": row["against_voucher_no"],
+		})
+	else:
+		live = frappe.db.count("Payment Ledger Entry", {
+			"delinked": 0,
+			"company": row["company"],
+			"voucher_no": row["voucher_no"],
+			"against_voucher_no": row["against_voucher_no"],
+		})
 	if not live:
 		# somebody else got there first, or it was never allocated to begin with
 		return _("{0} is no longer allocated to {1}").format(

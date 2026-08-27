@@ -19,7 +19,7 @@ from sf_trading.payment_unreconciliation import (
 
 ROW_FIELDS = ("company", "voucher_type", "voucher_no", "posting_date", "against_voucher_type",
               "against_voucher_no", "allocated_amount", "outstanding_amount", "currency",
-              "account", "party_type", "party", "in_closed_period")
+              "account", "party_type", "party", "in_closed_period", "entry_type")
 
 
 class SFPaymentUnreconciliation(Document):
