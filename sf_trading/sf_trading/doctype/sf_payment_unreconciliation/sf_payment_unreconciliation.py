@@ -1,0 +1,58 @@
+# sf_trading/sf_trading/doctype/sf_payment_unreconciliation/sf_payment_unreconciliation.py
+"""The screen: Payment Reconciliation's shape, running backwards.
+
+Single doctype with no submit, exactly like Payment Reconciliation — it is a tool, not a
+document. The work lives in sf_trading/payment_unreconciliation.py; this only moves rows
+between the form and that module.
+"""
+
+import frappe
+from frappe import _
+from frappe.model.document import Document
+from frappe.utils import flt
+
+from sf_trading.payment_unreconciliation import reconciled_entries, unreconcile
+
+ROW_FIELDS = ("company", "voucher_type", "voucher_no", "posting_date", "against_voucher_type",
+              "against_voucher_no", "allocated_amount", "outstanding_amount", "currency",
+              "account", "party_type", "party", "in_closed_period")
+
+
+class SFPaymentUnreconciliation(Document):
+	@frappe.whitelist()
+	def get_allocations(self):
+		"""Fill the grid with every live allocation matching the filters."""
+		rows = reconciled_entries(
+			company=self.company, party_type=self.party_type, party=self.party,
+			account=self.receivable_payable_account, voucher_type=self.voucher_type,
+			from_date=self.from_date, to_date=self.to_date,
+			minimum_amount=self.minimum_amount, maximum_amount=self.maximum_amount,
+			against_voucher_no=self.against_voucher_no, limit=self.limit or 500,
+		)
+		self.set("allocations", [])
+		for row in rows:
+			self.append("allocations", {f: row.get(f) for f in ROW_FIELDS})
+		return len(rows)
+
+	@frappe.whitelist()
+	def unreconcile_selected(self):
+		"""Undo the ticked rows, then re-read the grid so it shows what is left."""
+		selected = [
+			{f: row.get(f) for f in ROW_FIELDS}
+			for row in self.allocations if row.select_row
+		]
+		if not selected:
+			frappe.throw(_("Tick the allocations to undo first."))
+
+		result = unreconcile(selected)
+		frappe.db.commit()  # the grid is refetched below; keep what succeeded
+
+		self.reload()
+		self.get_allocations()
+		self.save(ignore_permissions=True)
+
+		return {
+			"done": result["done"],
+			"failed": result["failed"],
+			"total": flt(sum(flt(r.get("allocated_amount")) for r in result["done"])),
+		}

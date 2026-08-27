@@ -1,0 +1,217 @@
+# sf_trading/payment_unreconciliation.py
+"""Undo a payment allocation, party by party — the mirror image of Payment Reconciliation.
+
+WHY THIS EXISTS
+---------------
+ERPNext v15 can already unreconcile, but only one document at a time: open the Payment Entry,
+press Unreconcile, tick its rows. When a party's ledger has been mis-applied across a dozen
+invoices — which is exactly what happened here in August, where returns were netted against the
+wrong invoices — that is a dozen trips through a form. Payment Reconciliation lets you work a
+whole party in one screen; this gives the reverse the same shape.
+
+WHAT IT DOES NOT DO
+-------------------
+It does not touch the ledger itself. Finding the allocations is this module's job; undoing one is
+handed to erpnext's own `create_unreconcile_doc_for_selection`, which builds an Unreconcile
+Payment document per pair and runs the tested path:
+
+    unlink_ref_doc_from_payment_entries → cancel_exchange_gain_loss_journal → update_voucher_outstanding
+
+Reimplementing that is how you end up with an invoice whose outstanding no longer matches its
+Payment Ledger Entries. Every row that unreconciles here leaves the same audit trail as one done
+from the Payment Entry — a submitted Unreconcile Payment naming the pair.
+
+THE ONE RULE WORTH SPELLING OUT
+-------------------------------
+Unreconciling re-opens an invoice and may cancel an exchange gain/loss journal, so it writes to
+the past. Rows dated on or before a submitted Period Closing Voucher are refused: re-opening a
+closed period silently is how a trial balance stops tying, and this site has already lived
+through one repost that moved money it should not have.
+"""
+
+import json
+
+import frappe
+from frappe import _
+from frappe.utils import flt, getdate
+
+PAYMENT_TYPES = ("Payment Entry", "Journal Entry")
+
+
+def closed_period_date(company: str):
+	"""The latest date closed by a submitted Period Closing Voucher, or None."""
+	return frappe.db.get_value(
+		"Period Closing Voucher",
+		{"company": company, "docstatus": 1},
+		"max(posting_date)",
+	)
+
+
+@frappe.whitelist()
+def reconciled_entries(company, party_type, party, account=None, voucher_type=None,
+                       from_date=None, to_date=None, minimum_amount=None, maximum_amount=None,
+                       against_voucher_no=None, limit=500):
+	"""Every live allocation of this party's payments against its invoices.
+
+	Read from the Payment Ledger Entry rather than from Payment Entry Reference rows, because the
+	ledger is what `outstanding_amount` is derived from and it covers Journal Entries in the same
+	shape. A row where voucher_no equals against_voucher_no is the invoice's own entry, not an
+	allocation, so it is excluded.
+	"""
+	if not (company and party_type and party):
+		frappe.throw(_("Company, Party Type and Party are all needed"))
+	frappe.has_permission("Payment Ledger Entry", "read", throw=True)
+
+	conditions = [
+		"ple.delinked = 0",
+		"ple.company = %(company)s",
+		"ple.party_type = %(party_type)s",
+		"ple.party = %(party)s",
+		"ple.voucher_no != ple.against_voucher_no",
+		"ple.voucher_type in %(payment_types)s",
+	]
+	values = {
+		"company": company, "party_type": party_type, "party": party,
+		"payment_types": list(PAYMENT_TYPES),
+	}
+	if voucher_type:
+		conditions.append("ple.voucher_type = %(voucher_type)s")
+		values["voucher_type"] = voucher_type
+	if account:
+		conditions.append("ple.account = %(account)s")
+		values["account"] = account
+	if from_date:
+		conditions.append("ple.posting_date >= %(from_date)s")
+		values["from_date"] = getdate(from_date)
+	if to_date:
+		conditions.append("ple.posting_date <= %(to_date)s")
+		values["to_date"] = getdate(to_date)
+	if against_voucher_no:
+		conditions.append("ple.against_voucher_no = %(against_voucher_no)s")
+		values["against_voucher_no"] = against_voucher_no
+
+	having = ["allocated_amount > 0.005"]
+	if minimum_amount:
+		having.append("allocated_amount >= %(minimum_amount)s")
+		values["minimum_amount"] = flt(minimum_amount)
+	if maximum_amount:
+		having.append("allocated_amount <= %(maximum_amount)s")
+		values["maximum_amount"] = flt(maximum_amount)
+
+	values["limit"] = min(int(limit or 500), 2000)
+
+	rows = frappe.db.sql(
+		f"""
+		select
+			ple.company, ple.voucher_type, ple.voucher_no,
+			ple.against_voucher_type, ple.against_voucher_no,
+			ple.account, ple.party_type, ple.party, ple.account_currency as currency,
+			max(ple.posting_date) as posting_date,
+			abs(sum(ple.amount)) as allocated_amount
+		from `tabPayment Ledger Entry` ple
+		where {" and ".join(conditions)}
+		group by ple.voucher_type, ple.voucher_no, ple.against_voucher_type, ple.against_voucher_no,
+		         ple.account, ple.account_currency
+		having {" and ".join(having)}
+		order by max(ple.posting_date) desc, ple.voucher_no
+		limit %(limit)s
+		""",
+		values,
+		as_dict=True,
+	)
+
+	closed = closed_period_date(company)
+	for row in rows:
+		row["outstanding_amount"] = flt(frappe.db.get_value(
+			row["against_voucher_type"], row["against_voucher_no"], "outstanding_amount"))
+		row["in_closed_period"] = bool(closed and getdate(row["posting_date"]) <= getdate(closed))
+	return rows
+
+
+def _validate_row(row, closed):
+	"""Everything that must be true before erpnext is asked to unlink a pair."""
+	for field in ("company", "voucher_type", "voucher_no", "against_voucher_type",
+	              "against_voucher_no"):
+		if not row.get(field):
+			return _("{0} is missing").format(field)
+
+	if row["voucher_type"] not in PAYMENT_TYPES:
+		return _("Only {0} can be unreconciled").format(" and ".join(PAYMENT_TYPES))
+
+	if frappe.db.get_value(row["voucher_type"], row["voucher_no"], "docstatus") != 1:
+		return _("{0} is not submitted").format(row["voucher_no"])
+
+	live = frappe.db.count("Payment Ledger Entry", {
+		"delinked": 0,
+		"company": row["company"],
+		"voucher_no": row["voucher_no"],
+		"against_voucher_no": row["against_voucher_no"],
+	})
+	if not live:
+		# somebody else got there first, or it was never allocated to begin with
+		return _("{0} is no longer allocated to {1}").format(
+			row["voucher_no"], row["against_voucher_no"])
+
+	posting_date = frappe.db.get_value(row["voucher_type"], row["voucher_no"], "posting_date")
+	if closed and posting_date and getdate(posting_date) <= getdate(closed):
+		return _("{0} is dated {1}, on or before the period closed on {2}").format(
+			row["voucher_no"], frappe.utils.formatdate(posting_date),
+			frappe.utils.formatdate(closed))
+	return None
+
+
+@frappe.whitelist()
+def unreconcile(rows):
+	"""Unlink each selected pair, one savepoint at a time.
+
+	erpnext's own helper loops over the whole selection inside one transaction, so a single bad
+	row takes the entire batch down with it. Here each pair gets its own savepoint: what can be
+	undone is undone, and what cannot is reported with the reason.
+	"""
+	from erpnext.accounts.doctype.unreconcile_payment.unreconcile_payment import (
+		create_unreconcile_doc_for_selection,
+	)
+
+	if isinstance(rows, str):
+		rows = json.loads(rows)
+	if not rows:
+		frappe.throw(_("Nothing selected"))
+
+	frappe.has_permission("Unreconcile Payment", "create", throw=True)
+
+	done, failed = [], []
+	closed_cache = {}
+	for row in rows:
+		company = row.get("company")
+		if company not in closed_cache:
+			closed_cache[company] = closed_period_date(company)
+
+		problem = _validate_row(row, closed_cache[company])
+		if problem:
+			failed.append({"voucher_no": row.get("voucher_no"),
+			               "against_voucher_no": row.get("against_voucher_no"),
+			               "error": problem})
+			continue
+
+		savepoint = "sf_unreconcile"
+		try:
+			frappe.db.savepoint(savepoint)
+			create_unreconcile_doc_for_selection(json.dumps([{
+				"company": company,
+				"voucher_type": row["voucher_type"],
+				"voucher_no": row["voucher_no"],
+				"against_voucher_type": row["against_voucher_type"],
+				"against_voucher_no": row["against_voucher_no"],
+			}]))
+			done.append({"voucher_no": row["voucher_no"],
+			             "against_voucher_no": row["against_voucher_no"],
+			             "allocated_amount": flt(row.get("allocated_amount"))})
+		except Exception as e:
+			frappe.db.rollback(save_point=savepoint)
+			failed.append({"voucher_no": row.get("voucher_no"),
+			               "against_voucher_no": row.get("against_voucher_no"),
+			               "error": str(e)[:200]})
+			frappe.log_error(frappe.get_traceback(),
+			                 f"SF unreconcile failed: {row.get('voucher_no')}")
+
+	return {"done": done, "failed": failed}
