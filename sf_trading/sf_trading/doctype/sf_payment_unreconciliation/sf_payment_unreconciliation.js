@@ -58,7 +58,6 @@ frappe.ui.form.on("SF Payment Unreconciliation", {
 		}, __("Actions"));
 		frm.add_custom_button(__("Tick All"), () => sf_tick(frm, 1));
 		frm.add_custom_button(__("Untick All"), () => sf_tick(frm, 0));
-		frm.add_custom_button(__("Get Allocations"), () => sf_fetch(frm));
 
 		// The primary action is never left empty: clearing it lets frappe put Save back, and Save
 		// means nothing here -- this is a tool, not a document.
@@ -66,6 +65,7 @@ frappe.ui.form.on("SF Payment Unreconciliation", {
 		if (ticked.length) {
 			frm.page.set_primary_action(__("Unreconcile ({0})", [ticked.length]),
 				() => sf_confirm(frm, ticked));
+			frm.add_custom_button(__("Get Allocations"), () => sf_fetch(frm));
 		} else {
 			frm.page.set_primary_action(__("Get Allocations"), () => sf_fetch(frm));
 		}
