@@ -477,10 +477,15 @@ def party_alerts(company, party_type, party):
 				"reference": biggest.name,
 			})
 
-	netted = frappe.db.count("Payment Ledger Entry", {
-		"delinked": 0, "company": company, "party_type": party_type, "party": party,
-		"voucher_type": ("in", ("Sales Invoice", "Purchase Invoice")),
-	})
+	# voucher_no != against_voucher_no is not optional here: every invoice writes its OWN row to
+	# this ledger with voucher_type = the invoice doctype, so without the guard this counts the
+	# party's invoices. It read 443 for Steel Art WLL, where the true answer is 0.
+	netted = frappe.db.sql("""
+		select count(*) from `tabPayment Ledger Entry`
+		where delinked = 0 and company = %(company)s and party_type = %(party_type)s
+		  and party = %(party)s and voucher_no != against_voucher_no
+		  and voucher_type in ('Sales Invoice', 'Purchase Invoice')
+	""", {"company": company, "party_type": party_type, "party": party})[0][0]
 	if netted:
 		alerts.append({
 			"kind": "not_undoable",
