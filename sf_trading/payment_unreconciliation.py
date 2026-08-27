@@ -38,6 +38,23 @@ from frappe.utils import flt, getdate
 PAYMENT_TYPES = ("Payment Entry", "Journal Entry")
 
 
+_HAS_OUTSTANDING = {}
+
+
+def _has_outstanding(doctype: str) -> bool:
+	"""Whether this doctype even carries outstanding_amount.
+
+	An allocation does not have to point at an invoice. This site has 2,619 against Sales
+	Invoice and 593 against Purchase Invoice — both of which have the column — but also 20
+	against Journal Entry and one against another Payment Entry, and neither of those has it.
+	Reading it blindly failed with "Unknown column 'outstanding_amount'" and took the whole
+	screen down for a party that happened to own one such row.
+	"""
+	if doctype not in _HAS_OUTSTANDING:
+		_HAS_OUTSTANDING[doctype] = bool(frappe.db.has_column(doctype, "outstanding_amount"))
+	return _HAS_OUTSTANDING[doctype]
+
+
 def closed_period_date(company: str):
 	"""The latest date closed by a submitted Period Closing Voucher, or None.
 
@@ -127,8 +144,11 @@ def reconciled_entries(company, party_type, party, account=None, voucher_type=No
 
 	closed = closed_period_date(company)
 	for row in rows:
-		row["outstanding_amount"] = flt(frappe.db.get_value(
-			row["against_voucher_type"], row["against_voucher_no"], "outstanding_amount"))
+		row["outstanding_amount"] = (
+			flt(frappe.db.get_value(row["against_voucher_type"], row["against_voucher_no"],
+			                        "outstanding_amount"))
+			if _has_outstanding(row["against_voucher_type"]) else 0.0
+		)
 		row["in_closed_period"] = bool(closed and getdate(row["posting_date"]) <= getdate(closed))
 	return rows
 
