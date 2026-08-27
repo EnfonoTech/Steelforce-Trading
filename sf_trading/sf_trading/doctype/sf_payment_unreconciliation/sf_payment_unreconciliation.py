@@ -24,7 +24,7 @@ ROW_FIELDS = ("company", "voucher_type", "voucher_no", "posting_date", "against_
               "insight", "severity", "allocated_by", "allocated_on", "leg_count",
               "payment_branch", "payment_cost_center", "target_date", "target_total",
               "applied_total", "target_branch", "target_status", "unallocated_amount",
-              "is_amendment", "imported", "days_gap")
+              "is_amendment", "imported", "days_gap", "leg_rows", "payers", "remarks")
 
 
 class SFPaymentUnreconciliation(Document):
@@ -35,6 +35,7 @@ class SFPaymentUnreconciliation(Document):
 			company=self.company, party_type=self.party_type, party=self.party,
 			account=self.receivable_payable_account, voucher_type=self.voucher_type,
 			from_date=self.from_date, to_date=self.to_date,
+			payment_no=self.payment_no, reconciled_within=self.reconciled_within,
 			minimum_amount=self.minimum_amount, maximum_amount=self.maximum_amount,
 			against_voucher_no=self.against_voucher_no, limit=self.limit or 500,
 			dimensions={f: self.get(f) for f in DIMENSION_FIELDS},

@@ -24,6 +24,8 @@
   "finance_book",
   "sec_break_filters",
   "against_voucher_no",
+  "payment_no",
+  "reconciled_within",
   "limit",
   "sec_break_rows",
   "help_html",
@@ -136,6 +138,19 @@
    "fieldtype": "Data",
    "label": "Applied To (invoice no)",
    "description": "Optional. Only allocations against this one document."
+  },
+  {
+   "fieldname": "payment_no",
+   "fieldtype": "Data",
+   "label": "Payment (Voucher No)",
+   "description": "Optional. Only the allocations this one payment or journal made."
+  },
+  {
+   "fieldname": "reconciled_within",
+   "fieldtype": "Select",
+   "label": "Allocated Within",
+   "options": "\nToday\nLast 7 days\nLast 30 days",
+   "description": "When the allocation itself was made \u2014 not when the payment was posted."
   },
   {
    "default": "500",

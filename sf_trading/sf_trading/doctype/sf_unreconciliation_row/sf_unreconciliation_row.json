@@ -40,7 +40,10 @@
   "unallocated_amount",
   "is_amendment",
   "imported",
-  "days_gap"
+  "days_gap",
+  "leg_rows",
+  "payers",
+  "remarks"
  ],
  "fields": [
   {
@@ -279,6 +282,25 @@
    "fieldname": "days_gap",
    "fieldtype": "Int",
    "label": "Days After Its Date",
+   "read_only": 1
+  },
+  {
+   "fieldname": "leg_rows",
+   "fieldtype": "Int",
+   "label": "Ledger Legs For This Pair",
+   "read_only": 1,
+   "description": "More than one means the grouped total is hiding separate legs"
+  },
+  {
+   "fieldname": "payers",
+   "fieldtype": "Int",
+   "label": "Payments Settling It",
+   "read_only": 1
+  },
+  {
+   "fieldname": "remarks",
+   "fieldtype": "Small Text",
+   "label": "Ledger Remarks",
    "read_only": 1
   }
  ],

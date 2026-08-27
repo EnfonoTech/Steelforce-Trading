@@ -33,7 +33,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, flt, getdate, nowdate
+from frappe.utils import add_days, cint, cstr, flt, getdate, nowdate
 
 PAYMENT_TYPES = ("Payment Entry", "Journal Entry")
 
@@ -76,7 +76,7 @@ ORDER_ADVANCE = "Order Advance"
 
 def advance_entries(company, party_type, party, account=None, from_date=None, to_date=None,
                     minimum_amount=None, maximum_amount=None, against_voucher_no=None,
-                    dimensions=None, limit=500):
+                    dimensions=None, limit=500, payment_no=None, reconciled_within=None):
 	"""Advances a payment holds against an ORDER, from the Advance Payment Ledger Entry.
 
 	An order advance never touches the Payment Ledger Entry -- it lives only here -- so a
@@ -109,6 +109,9 @@ def advance_entries(company, party_type, party, account=None, from_date=None, to
 	if against_voucher_no:
 		conditions.append("adv.against_voucher_no = %(against_voucher_no)s")
 		values["against_voucher_no"] = against_voucher_no
+	if payment_no:
+		conditions.append("adv.voucher_no = %(payment_no)s")
+		values["payment_no"] = payment_no
 	if account:
 		conditions.append(
 			"(case when pe.payment_type = 'Receive' then pe.paid_from else pe.paid_to end)"
@@ -133,6 +136,10 @@ def advance_entries(company, party_type, party, account=None, from_date=None, to
 	if maximum_amount:
 		having.append("allocated_amount <= %(maximum_amount)s")
 		values["maximum_amount"] = flt(maximum_amount)
+	within = RECONCILED_WINDOWS.get(cstr(reconciled_within))
+	if within:
+		having.append("min(adv.creation) >= %(reconciled_since)s")
+		values["reconciled_since"] = add_days(getdate(nowdate()), -within)
 	values["limit"] = min(int(limit or 500), 2000)
 
 	return frappe.db.sql(
@@ -163,7 +170,8 @@ def advance_entries(company, party_type, party, account=None, from_date=None, to
 @frappe.whitelist()
 def reconciled_entries(company, party_type, party, account=None, voucher_type=None,
                        from_date=None, to_date=None, minimum_amount=None, maximum_amount=None,
-                       against_voucher_no=None, limit=500, dimensions=None):
+                       against_voucher_no=None, limit=500, dimensions=None, payment_no=None,
+                       reconciled_within=None):
 	"""Every live allocation of this party's payments against its invoices.
 
 	Read from the Payment Ledger Entry rather than from Payment Entry Reference rows, because the
@@ -202,6 +210,9 @@ def reconciled_entries(company, party_type, party, account=None, voucher_type=No
 	if against_voucher_no:
 		conditions.append("ple.against_voucher_no = %(against_voucher_no)s")
 		values["against_voucher_no"] = against_voucher_no
+	if payment_no:
+		conditions.append("ple.voucher_no = %(payment_no)s")
+		values["payment_no"] = payment_no
 
 	# The Payment Ledger Entry carries the dimensions itself (cost_center, project, branch,
 	# finance_book are all real columns and populated on this site), so a dimension filter needs
@@ -223,6 +234,13 @@ def reconciled_entries(company, party_type, party, account=None, voucher_type=No
 	if maximum_amount:
 		having.append("allocated_amount <= %(maximum_amount)s")
 		values["maximum_amount"] = flt(maximum_amount)
+	# when the allocation was MADE, which is a different question from when the payment was
+	# posted -- and the only one that answers "somebody reconciled something yesterday". It has
+	# to be a HAVING: creation is aggregated, not grouped on.
+	within = RECONCILED_WINDOWS.get(cstr(reconciled_within))
+	if within:
+		having.append("min(ple.creation) >= %(reconciled_since)s")
+		values["reconciled_since"] = add_days(getdate(nowdate()), -within)
 
 	values["limit"] = min(int(limit or 500), 2000)
 
@@ -234,6 +252,8 @@ def reconciled_entries(company, party_type, party, account=None, voucher_type=No
 			ple.account, ple.party_type, ple.party, ple.account_currency as currency,
 			max(ple.posting_date) as posting_date,
 			abs(sum(ple.amount)) as allocated_amount,
+			count(*) as leg_rows,
+			max(ple.remarks) as remarks,
 			min(ple.creation) as allocated_on,
 			max(ple.owner) as allocated_by,
 			max(ple.branch) as payment_branch,
@@ -256,6 +276,7 @@ def reconciled_entries(company, party_type, party, account=None, voucher_type=No
 			company, party_type, party, account=account, from_date=from_date, to_date=to_date,
 			minimum_amount=minimum_amount, maximum_amount=maximum_amount,
 			against_voucher_no=against_voucher_no, dimensions=dimensions, limit=limit,
+			payment_no=payment_no, reconciled_within=reconciled_within,
 		)
 
 	annotate(rows, company, party_type, party)
@@ -280,6 +301,7 @@ BULK_LEGS = 5            # a voucher spread over this many invoices reads as one
 RECENT_DAYS = 7          # "somebody did this lately" window
 DUST_AMOUNT = 0.05       # rounding-size allocation, in the account currency
 LATE_DAYS = 180          # a settlement this far after the invoice is usually a clean-up sweep
+RECONCILED_WINDOWS = {"Today": 0, "Last 7 days": 7, "Last 30 days": 30}
 
 RISK = "risk"
 FRESH = "fresh"
@@ -452,10 +474,13 @@ def _target_context(rows):
 
 
 def _applied_totals(rows):
-	"""Everything currently applied to each target, from every payment and party.
+	"""Everything applied to each target, from every payment and party, live and undone.
 
-	Needed to say "more is applied to this invoice than the invoice is worth", which is the one
-	arithmetic fact a clerk cannot work out by eye from a list of legs.
+	Three facts a clerk cannot work out by eye from a list of legs: whether more is applied to a
+	document than it is worth, how many other payments are also settling it (so undoing this row
+	will not fully re-open it), and whether an allocation here was already stripped once --
+	usually because the paying voucher was cancelled and re-amended, which is exactly when the
+	wrong invoice gets picked.
 	"""
 	targets = list({row["against_voucher_no"] for row in rows})
 	if not targets:
@@ -464,13 +489,15 @@ def _applied_totals(rows):
 	for chunk_start in range(0, len(targets), 900):
 		chunk = targets[chunk_start:chunk_start + 900]
 		for r in frappe.db.sql("""
-			select against_voucher_no, abs(sum(amount)) as applied
+			select against_voucher_no,
+			       abs(sum(case when delinked = 0 then amount else 0 end)) as applied,
+			       count(distinct case when delinked = 0 then voucher_no end) as payers,
+			       max(case when delinked = 1 then 1 else 0 end) as had_undo
 			from `tabPayment Ledger Entry`
-			where delinked = 0 and voucher_no != against_voucher_no
-			  and against_voucher_no in %(targets)s
+			where voucher_no != against_voucher_no and against_voucher_no in %(targets)s
 			group by against_voucher_no
 		""", {"targets": chunk}, as_dict=True):
-			totals[r.against_voucher_no] = flt(r.applied)
+			totals[r.against_voucher_no] = r
 	return totals
 
 
@@ -500,7 +527,9 @@ def annotate(rows, company, party_type, party):
 		row["target_total"] = flt(target.get("target_total"))
 		row["target_status"] = target.get("target_status")
 		row["target_branch"] = target.get("target_branch")
-		row["applied_total"] = flt(applied.get(row["against_voucher_no"]))
+		applied_here = applied.get(row["against_voucher_no"]) or {}
+		row["applied_total"] = flt(applied_here.get("applied"))
+		row["payers"] = cint(applied_here.get("payers")) or 1
 		row["unallocated_amount"] = flt(payment.get("unallocated_amount"))
 		row["is_amendment"] = bool(payment.get("amended_from"))
 		row["imported"] = row.get("allocated_by") == "Administrator"
@@ -547,11 +576,14 @@ def annotate(rows, company, party_type, party):
 				worth_a_look = True
 			else:
 				notes.append(_("Applied to a credit note"))
+		# Not an alarm: a payment older than the invoice it settles is usually an advance being
+		# consumed, and one such receipt lights up sixteen rows at once. Say it, do not shout it.
 		if (row["entry_type"] == INVOICE_ALLOCATION and row["target_date"]
 				and getdate(row["posting_date"]) < getdate(row["target_date"])):
 			notes.append(_("Paid before the invoice date"))
-			worth_a_look = True
-		if row["target_total"] and row["applied_total"] > row["target_total"] + 0.005:
+		# abs(): a credit note's grand_total is NEGATIVE, and a plain > comparison called every
+		# one of the 40 credit-note targets on this site over-applied
+		if row["target_total"] and row["applied_total"] > abs(row["target_total"]) + 0.005:
 			notes.append(_("More applied than the document is worth"))
 			worth_a_look = True
 		if row["days_gap"] > LATE_DAYS:
@@ -562,6 +594,15 @@ def annotate(rows, company, party_type, party):
 				and abs(flt(row["outstanding_amount"])) > 0.005
 				and not cint(target.get("target_is_return"))):
 			notes.append(_("Part-settled, still open"))
+		if cint(row.get("leg_rows")) > 1:
+			# the grouped total hides them: three legs of -35.255, -35.255 and -21.670 read as one
+			# tidy 92.180 against the invoice
+			notes.append(_("{0} ledger legs for this one pair").format(cint(row["leg_rows"])))
+			worth_a_look = True
+		if row["payers"] > 1:
+			notes.append(_("Also settled by {0} other payment(s)").format(row["payers"] - 1))
+		if cint(applied_here.get("had_undo")):
+			notes.append(_("An allocation here was undone before"))
 		if row["allocated_amount"] < DUST_AMOUNT:
 			notes.append(_("Rounding-size"))
 
@@ -574,7 +615,7 @@ def annotate(rows, company, party_type, party):
 			notes.append(_("Order advance"))
 
 		row["severity"] = RISK if worth_a_look else (FRESH if recent else PLAIN)
-		row["insight"] = " · ".join(notes)
+		row["insight"] = ("\u26a0 " if worth_a_look else "") + " · ".join(notes)
 		row["allocated_by"] = _short_user(row.get("allocated_by"))
 
 	order = {RISK: 0, FRESH: 1, PLAIN: 2}

@@ -110,6 +110,14 @@ frappe.ui.form.on("SF Payment Unreconciliation", {
 	},
 
 	receivable_payable_account: (frm) => sf_clear(frm),
+	payment_no: (frm) => sf_clear(frm),
+	reconciled_within: (frm) => sf_clear(frm),
+
+	// pasting a payment number is the other way people arrive here -- "this receipt should not
+	// have touched that invoice" -- so offer the same completion the invoice field has
+	setup_payment_query(frm) {
+		frm.set_query("payment_no", () => ({ filters: { company: frm.doc.company, docstatus: 1 } }));
+	},
 });
 
 frappe.ui.form.on("SF Unreconciliation Row", {
