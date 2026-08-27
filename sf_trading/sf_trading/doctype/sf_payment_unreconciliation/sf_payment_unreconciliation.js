@@ -24,37 +24,45 @@ frappe.ui.form.on("SF Payment Unreconciliation", {
 			frm.set_value("company", frappe.defaults.get_user_default("Company"));
 		}
 		if (!frm.doc.party_type) frm.set_value("party_type", "Customer");
-		frm.set_value("allocations", []);
+		sf_clear(frm);
 	},
 
 	refresh(frm) {
 		frm.disable_save();
 		frm.page.set_title(__("Payment Unreconciliation"));
 
-		frm.add_custom_button(__("Get Allocations"), () => sf_fetch(frm)).addClass("btn-primary");
-
+		// The primary action is never left empty: clearing it lets frappe put Save back, and Save
+		// means nothing here -- this is a tool, not a document.
 		const ticked = (frm.doc.allocations || []).filter((r) => r.select_row);
 		if (ticked.length) {
 			frm.page.set_primary_action(__("Unreconcile ({0})", [ticked.length]),
 				() => sf_confirm(frm, ticked));
 		} else {
-			frm.page.clear_primary_action();
+			frm.page.set_primary_action(__("Get Allocations"), () => sf_fetch(frm));
 		}
 		sf_summary(frm);
 	},
 
-	company: (frm) => frm.set_value("allocations", []),
+	company: (frm) => sf_clear(frm),
 	party_type(frm) {
 		frm.set_value("party", null);
-		frm.set_value("allocations", []);
+		sf_clear(frm);
 	},
-	party: (frm) => frm.set_value("allocations", []),
+	party: (frm) => sf_clear(frm),
 });
 
 frappe.ui.form.on("SF Unreconciliation Row", {
 	select_row: (frm) => frm.trigger("refresh"),
 	allocations_add: (frm) => sf_summary(frm),
 });
+
+function sf_clear(frm) {
+	// assigned rather than set_value: set_value marks the form dirty, and a dirty form puts the
+	// Save button back over the action the user actually needs
+	frm.doc.allocations = [];
+	frm.refresh_field("allocations");
+	sf_summary(frm);
+}
 
 function sf_fetch(frm) {
 	if (!(frm.doc.company && frm.doc.party_type && frm.doc.party)) {
