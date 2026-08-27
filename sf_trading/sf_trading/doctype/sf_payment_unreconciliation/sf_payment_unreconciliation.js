@@ -321,9 +321,28 @@ const SF_VIEWS = [
 	{ key: "all", label: __("All"), test: () => true },
 	{ key: "risk", label: __("Worth a look"), test: (r) => r.severity === "risk" },
 	{ key: "new", label: __("Allocated recently"), test: (r) => sf_is_new(r) },
+	{ key: "human", label: __("Entered by a person"), test: (r) => !cint(r.imported) },
 	{ key: "single", label: __("One-off payments"), test: (r) => cint(r.leg_count) <= 1 },
 	{ key: "bulk", label: __("Bulk vouchers"), test: (r) => cint(r.leg_count) >= 5 },
+	{ key: "import", label: __("From the data import"), test: (r) => !!cint(r.imported) },
 ];
+
+function sf_alerts(frm) {
+	// what is true about this party before a single row is read: two times out of three the reason
+	// somebody opened this screen is a credit note nobody applied
+	if (!(frm.doc.company && frm.doc.party_type && frm.doc.party)) {
+		frm.__alerts = [];
+		return;
+	}
+	frappe.call({
+		method: "sf_trading.payment_unreconciliation.party_alerts",
+		args: { company: frm.doc.company, party_type: frm.doc.party_type, party: frm.doc.party },
+		callback: (r) => {
+			frm.__alerts = r.message || [];
+			sf_render_insight(frm);
+		},
+	});
+}
 
 function sf_capture(frm) {
 	// hold the whole result set: the chips below show subsets of it, and re-reading the ledger
@@ -332,6 +351,7 @@ function sf_capture(frm) {
 	if (!frm.__view) frm.__view = "all";
 	frm.__voucher = null;
 	sf_apply_view(frm);
+	sf_alerts(frm);
 }
 
 function sf_apply_view(frm) {
@@ -411,8 +431,16 @@ function sf_render_insight(frm) {
 	const legend = Object.keys(counts).sort((a, b) => counts[b] - counts[a])
 		.map((n) => `${esc(n)} (${counts[n]})`).join(" · ");
 
+	const alerts = (frm.__alerts || []).map((a) => `
+		<div style="padding:6px 10px;margin-bottom:6px;border-left:3px solid ${
+			a.kind === "credit_note" ? "rgb(230,130,0)" : "rgb(120,120,120)"};
+			background:${a.kind === "credit_note" ? "rgba(255,170,0,0.10)" : "rgba(120,120,120,0.08)"}">
+			<b>${a.kind === "credit_note" ? __("Unapplied credit note") : __("Cannot be undone here")}</b>
+			— ${esc(a.message)}</div>`).join("");
+
 	field.$wrapper.html(`
 		<div class="sf-insight" style="margin-bottom:12px">
+			${alerts}
 			<div style="margin-bottom:8px">${chips}
 				${frm.__voucher ? `<button class="btn btn-xs btn-default sf-chip" data-view="${
 					frm.__view || "all"}" style="margin-left:8px">&times; ${

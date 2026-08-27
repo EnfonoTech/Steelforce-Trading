@@ -279,6 +279,7 @@ def reconciled_entries(company, party_type, party, account=None, voucher_type=No
 BULK_LEGS = 5            # a voucher spread over this many invoices reads as one bulk event
 RECENT_DAYS = 7          # "somebody did this lately" window
 DUST_AMOUNT = 0.05       # rounding-size allocation, in the account currency
+LATE_DAYS = 180          # a settlement this far after the invoice is usually a clean-up sweep
 
 RISK = "risk"
 FRESH = "fresh"
@@ -286,32 +287,130 @@ PLAIN = "plain"
 
 
 def _leg_counts(company, party_type, party):
-	"""How many invoices each payment is spread across.
+	"""How many invoices each payment is spread across, counted across the WHOLE ledger.
 
-	This is the difference between one accounting event and eleven rows that look like eleven
-	events. Two set-based queries for the whole page, whatever its size.
+	Two purposes. It is the difference between one accounting event and eleven rows that look
+	like eleven events -- on this data 21 vouchers generate 646 of 3,209 allocations. And because
+	the count is not scoped to the party on screen, a voucher whose legs outnumber the legs
+	listed is one that also allocates to somebody else: undoing what is visible leaves the rest
+	of that voucher untouched. Two set-based queries for the whole page, whatever its size.
 	"""
-	values = {"company": company, "party_type": party_type, "party": party}
+	values = {"company": company}
 	counts = {}
 	for r in frappe.db.sql("""
 		select voucher_no, count(distinct against_voucher_no) as legs
 		from `tabPayment Ledger Entry`
-		where delinked = 0 and company = %(company)s and party_type = %(party_type)s
-		  and party = %(party)s and voucher_no != against_voucher_no
+		where delinked = 0 and company = %(company)s and voucher_no != against_voucher_no
 		group by voucher_no
 	""", values, as_dict=True):
 		counts[r.voucher_no] = cint(r.legs)
 
 	for r in frappe.db.sql("""
-		select adv.voucher_no, count(distinct adv.against_voucher_no) as legs
-		from `tabAdvance Payment Ledger Entry` adv
-		join `tabPayment Entry` pe on pe.name = adv.voucher_no
-		where adv.delinked = 0 and adv.event = 'Submit' and adv.company = %(company)s
-		  and pe.party_type = %(party_type)s and pe.party = %(party)s
-		group by adv.voucher_no
+		select voucher_no, count(distinct against_voucher_no) as legs
+		from `tabAdvance Payment Ledger Entry`
+		where delinked = 0 and event = 'Submit' and company = %(company)s
+		group by voucher_no
 	""", values, as_dict=True):
 		counts[r.voucher_no] = counts.get(r.voucher_no, 0) + cint(r.legs)
 	return counts
+
+
+def _payment_context(rows):
+	"""The paying side's own facts: is it an amendment, is it a receipt or a refund, and is there
+	money on it that was never applied. One read per payment doctype."""
+	by_doctype = {}
+	for row in rows:
+		by_doctype.setdefault(row["voucher_type"], set()).add(row["voucher_no"])
+
+	optional = (("payment_type", "payment_type"), ("unallocated_amount", "unallocated_amount"),
+	            ("amended_from", "amended_from"), ("mode_of_payment", "mode_of_payment"))
+	context = {}
+	for doctype, names in by_doctype.items():
+		fields = ["name"] + [f"{f} as {alias}" for f, alias in optional
+		                     if frappe.db.has_column(doctype, f)]
+		for doc in frappe.get_all(doctype, filters={"name": ("in", list(names))},
+		                          fields=fields, limit_page_length=0):
+			context[(doctype, doc["name"])] = doc
+	return context
+
+
+def _floating_credit_notes(rows):
+	"""Live credit notes still pointing at the documents on this page.
+
+	This is the client's actual pathology, seen from the other end: an invoice relieved once by
+	cash and once by a return that was never netted against it. If a row's invoice has a return
+	sitting unapplied, that row is the one to look at. One read per invoice doctype.
+	"""
+	by_doctype = {}
+	for row in rows:
+		if row["against_voucher_type"] in ("Sales Invoice", "Purchase Invoice"):
+			by_doctype.setdefault(row["against_voucher_type"], set()).add(row["against_voucher_no"])
+
+	floating = {}
+	for doctype, names in by_doctype.items():
+		for r in frappe.db.sql(f"""
+			select return_against, count(*) as notes, abs(sum(outstanding_amount)) as amount,
+			       min(name) as example
+			from `tab{doctype}`
+			where docstatus = 1 and is_return = 1 and return_against in %(names)s
+			  and abs(outstanding_amount) > 0.005
+			group by return_against
+		""", {"names": list(names)}, as_dict=True):
+			floating[r.return_against] = r
+	return floating
+
+
+@frappe.whitelist()
+def party_alerts(company, party_type, party):
+	"""What is true about this party before a single row is read.
+
+	Somebody opens this screen because something is off. Twice out of three the thing that is off
+	is an unapplied credit note -- so say so up front, instead of leaving them to infer it from a
+	list of allocations. Also warns about the allocations ERPNext cannot undo at all: a credit
+	note netted straight onto its invoice writes a Payment Ledger Entry whose voucher_type is
+	Sales Invoice, and core's Unreconcile Payment only supports Payment Entry and Journal Entry.
+	"""
+	frappe.has_permission("Unreconcile Payment", "read", throw=True)
+	alerts = []
+	doctype = "Sales Invoice" if party_type == "Customer" else "Purchase Invoice"
+	party_field = "customer" if party_type == "Customer" else "supplier"
+
+	if frappe.db.has_column(doctype, "is_return"):
+		open_notes = frappe.db.sql(f"""
+			select name, posting_date, return_against, abs(outstanding_amount) as amount
+			from `tab{doctype}`
+			where docstatus = 1 and is_return = 1 and company = %(company)s
+			  and `{party_field}` = %(party)s and abs(outstanding_amount) > 0.005
+			order by abs(outstanding_amount) desc
+		""", {"company": company, "party": party}, as_dict=True)
+		if open_notes:
+			biggest = open_notes[0]
+			alerts.append({
+				"kind": "credit_note",
+				"message": _("{0} unapplied credit note(s) worth {1}. The largest is {2}{3}.").format(
+					len(open_notes),
+					frappe.utils.fmt_money(sum(flt(n.amount) for n in open_notes),
+					                       currency=frappe.get_cached_value("Company", company,
+					                                                        "default_currency")),
+					biggest.name,
+					_(" (issued against {0})").format(biggest.return_against)
+					if biggest.return_against else "",
+				),
+				"reference": biggest.name,
+			})
+
+	netted = frappe.db.count("Payment Ledger Entry", {
+		"delinked": 0, "company": company, "party_type": party_type, "party": party,
+		"voucher_type": ("in", ("Sales Invoice", "Purchase Invoice")),
+	})
+	if netted:
+		alerts.append({
+			"kind": "not_undoable",
+			"message": _("{0} ledger entries for this party come from a credit note netted straight "
+			             "onto an invoice. ERPNext cannot unreconcile those -- cancel or amend the "
+			             "credit note instead.").format(netted),
+		})
+	return alerts
 
 
 def _target_context(rows):
@@ -385,6 +484,8 @@ def annotate(rows, company, party_type, party):
 	closed = closed_period_date(company)
 	legs = _leg_counts(company, party_type, party)
 	context = _target_context(rows)
+	paid_by = _payment_context(rows)
+	floating = _floating_credit_notes(rows)
 	applied = _applied_totals(rows)
 	fresh_after = add_days(getdate(nowdate()), -RECENT_DAYS)
 
@@ -392,6 +493,7 @@ def annotate(rows, company, party_type, party):
 		row["entry_type"] = (ORDER_ADVANCE if row["against_voucher_type"] in advance_doctypes
 		                     else INVOICE_ALLOCATION)
 		target = context.get((row["against_voucher_type"], row["against_voucher_no"])) or {}
+		payment = paid_by.get((row["voucher_type"], row["voucher_no"])) or {}
 
 		row["leg_count"] = cint(legs.get(row["voucher_no"])) or 1
 		row["target_date"] = target.get("target_date")
@@ -399,6 +501,13 @@ def annotate(rows, company, party_type, party):
 		row["target_status"] = target.get("target_status")
 		row["target_branch"] = target.get("target_branch")
 		row["applied_total"] = flt(applied.get(row["against_voucher_no"]))
+		row["unallocated_amount"] = flt(payment.get("unallocated_amount"))
+		row["is_amendment"] = bool(payment.get("amended_from"))
+		row["imported"] = row.get("allocated_by") == "Administrator"
+		row["days_gap"] = (
+			(getdate(row["posting_date"]) - getdate(row["target_date"])).days
+			if row["target_date"] else 0
+		)
 		row["in_closed_period"] = bool(closed and getdate(row["posting_date"]) <= getdate(closed))
 
 		# an order has no outstanding; what matters there is how much advance it is carrying
@@ -415,10 +524,29 @@ def annotate(rows, company, party_type, party):
 		if cint(target.get("docstatus")) == 2:
 			notes.append(_("Applied to a cancelled document"))
 			worth_a_look = True
+		# Both branches must be filled in before a difference means anything. On this data a
+		# naive comparison "finds" 800 mismatches, every one of them a blank payment branch
+		# against a populated invoice branch; requiring both leaves the 5 that are real.
 		if row.get("payment_branch") and row["target_branch"] \
 				and row["payment_branch"] != row["target_branch"]:
 			notes.append(_("Different branch"))
 			worth_a_look = True
+
+		# the client's own defect, seen from the invoice end: relieved once by cash and once by a
+		# return that was never netted against it
+		note = floating.get(row["against_voucher_no"])
+		if note:
+			notes.append(_("Its credit note {0} is unapplied").format(note.example))
+			worth_a_look = True
+
+		if cint(target.get("target_is_return")):
+			# money applied ONTO a credit note. Paying one out is a refund and normal; receiving
+			# money onto one is the wrong document almost every time.
+			if payment.get("payment_type") == "Receive":
+				notes.append(_("Money received onto a credit note"))
+				worth_a_look = True
+			else:
+				notes.append(_("Applied to a credit note"))
 		if (row["entry_type"] == INVOICE_ALLOCATION and row["target_date"]
 				and getdate(row["posting_date"]) < getdate(row["target_date"])):
 			notes.append(_("Paid before the invoice date"))
@@ -426,6 +554,14 @@ def annotate(rows, company, party_type, party):
 		if row["target_total"] and row["applied_total"] > row["target_total"] + 0.005:
 			notes.append(_("More applied than the document is worth"))
 			worth_a_look = True
+		if row["days_gap"] > LATE_DAYS:
+			notes.append(_("Settled {0} days later").format(row["days_gap"]))
+		if row["is_amendment"]:
+			notes.append(_("Payment is an amendment"))
+		if (row["entry_type"] == INVOICE_ALLOCATION
+				and abs(flt(row["outstanding_amount"])) > 0.005
+				and not cint(target.get("target_is_return"))):
+			notes.append(_("Part-settled, still open"))
 		if row["allocated_amount"] < DUST_AMOUNT:
 			notes.append(_("Rounding-size"))
 
@@ -434,8 +570,6 @@ def annotate(rows, company, party_type, party):
 		recent = bool(row.get("allocated_on") and getdate(row["allocated_on"]) >= fresh_after)
 		if recent:
 			notes.append(_("New"))
-		if row["leg_count"] >= BULK_LEGS:
-			notes.append(_("1 of {0} in this voucher").format(row["leg_count"]))
 		if row["entry_type"] == ORDER_ADVANCE:
 			notes.append(_("Order advance"))
 

@@ -36,7 +36,11 @@
   "applied_total",
   "target_col_break",
   "target_branch",
-  "target_status"
+  "target_status",
+  "unallocated_amount",
+  "is_amendment",
+  "imported",
+  "days_gap"
  ],
  "fields": [
   {
@@ -249,6 +253,32 @@
    "fieldname": "target_status",
    "fieldtype": "Data",
    "label": "Its Status",
+   "read_only": 1
+  },
+  {
+   "fieldname": "unallocated_amount",
+   "fieldtype": "Currency",
+   "label": "Unapplied On The Payment",
+   "options": "currency",
+   "read_only": 1,
+   "description": "Money on this payment that was never applied to anything"
+  },
+  {
+   "fieldname": "is_amendment",
+   "fieldtype": "Check",
+   "label": "Payment Is An Amendment",
+   "read_only": 1
+  },
+  {
+   "fieldname": "imported",
+   "fieldtype": "Check",
+   "label": "Came From The Data Import",
+   "read_only": 1
+  },
+  {
+   "fieldname": "days_gap",
+   "fieldtype": "Int",
+   "label": "Days After Its Date",
    "read_only": 1
   }
  ],

@@ -23,7 +23,8 @@ ROW_FIELDS = ("company", "voucher_type", "voucher_no", "posting_date", "against_
               # the insight layer
               "insight", "severity", "allocated_by", "allocated_on", "leg_count",
               "payment_branch", "payment_cost_center", "target_date", "target_total",
-              "applied_total", "target_branch", "target_status")
+              "applied_total", "target_branch", "target_status", "unallocated_amount",
+              "is_amendment", "imported", "days_gap")
 
 
 class SFPaymentUnreconciliation(Document):
