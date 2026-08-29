@@ -2256,7 +2256,7 @@
   "length": 0,
   "link_filters": "[[\"Sales Invoice\", \"company\", \"=\", \"eval:parent.company\"], [\"Sales Invoice\", \"docstatus\", \"=\", 1]]",
   "mandatory_depends_on": "eval:parent.from_template==\"Loyalty Reward Entry\" && (doc.debit || doc.debit_in_account_currency)",
-  "modified": "2026-07-30 19:30:00",
+  "modified": "2026-08-29 12:00:00.000000",
   "module": "Sf Trading",
   "name": "Journal Entry Account-custom_loyalty_sales_invoice",
   "no_copy": 0,
