@@ -890,16 +890,33 @@ def ensure_workspace_links():
 	shipped as a fixture: erpnext re-syncs its own workspaces on migrate and would drop a
 	hand-added link, so this re-adds it every time and skips whatever is already there.
 	"""
+	label = "Payment Unreconciliation"
 	for name in HOSTS:
 		if not frappe.db.exists("Workspace", name):
 			continue
 		try:
 			ws = frappe.get_doc("Workspace", name)
-			if any(s.link_to == TOOL for s in ws.shortcuts):
-				continue
-			ws.append("shortcuts", {"label": "Payment Unreconciliation", "type": "DocType",
-			                        "link_to": TOOL})
-			ws.save(ignore_permissions=True)
+			changed = False
+			if not any(s.link_to == TOOL for s in ws.shortcuts):
+				ws.append("shortcuts", {"label": label, "type": "DocType", "link_to": TOOL})
+				changed = True
+
+			# A shortcut row alone renders NOTHING. The desk lays a workspace out from `content`,
+			# a JSON list of blocks, and a shortcut only appears if a block names it -- matched on
+			# the child row's LABEL, not its link. Three workspaces carried the row for a week and
+			# showed no shortcut, so the tool was reachable only by typing its URL.
+			blocks = json.loads(ws.content or "[]")
+			if not any(b.get("type") == "shortcut"
+			           and (b.get("data") or {}).get("shortcut_name") == label for b in blocks):
+				last = max((i for i, b in enumerate(blocks) if b.get("type") == "shortcut"),
+				           default=-1)
+				blocks.insert(last + 1, {"id": frappe.generate_hash(length=10), "type": "shortcut",
+				                         "data": {"shortcut_name": label, "col": 3}})
+				ws.content = json.dumps(blocks)
+				changed = True
+
+			if changed:
+				ws.save(ignore_permissions=True)
 		except Exception:
 			frappe.log_error(frappe.get_traceback(),
 			                 f"sf_trading: could not add the unreconciliation link to {name}")
