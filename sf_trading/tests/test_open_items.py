@@ -838,6 +838,185 @@ class TestOpenItems(FrappeTestCase):
 		self.assertIsNotNone(row)
 		self.assertAlmostEqual(row["net_amount"], 1600, places=2)
 
+	# ------------------------------------------------------------------
+	# Purchase Register Extended: local vs import, and the two currencies
+	# ------------------------------------------------------------------
+
+	def customs_account(self):
+		"""An expense account whose name says customs — how an import is recognised."""
+		name = "Customs Duty - " + ABBR
+		if not frappe.db.exists("Account", name):
+			parent = frappe.db.get_value(
+				"Account", {"company": COMPANY, "is_group": 1, "root_type": "Expense"}, "name"
+			)
+			frappe.get_doc(
+				{
+					"doctype": "Account",
+					"account_name": "Customs Duty",
+					"company": COMPANY,
+					"parent_account": parent,
+					"root_type": "Expense",
+					"is_group": 0,
+				}
+			).insert()
+		return name
+
+	def allow_multi_currency_party_account(self):
+		"""A foreign invoice against an INR payable needs this switch on."""
+		field = "allow_multi_currency_invoices_against_single_party_account"
+		before = frappe.db.get_single_value("Accounts Settings", field)
+		frappe.db.set_single_value("Accounts Settings", field, 1)
+		frappe.clear_cache(doctype="Accounts Settings")
+		self.addCleanup(frappe.db.set_single_value, "Accounts Settings", field, before)
+		return before
+
+	def make_foreign_pi(self, qty=2, rate=10, conversion_rate=80, currency="USD"):
+		self.allow_multi_currency_party_account()
+		pi = frappe.get_doc(
+			{
+				"doctype": "Purchase Invoice",
+				"company": COMPANY,
+				"supplier": SUPPLIER,
+				"update_stock": 0,
+				"currency": currency,
+				"conversion_rate": conversion_rate,
+				"cost_center": self.cost_center,
+				"items": [
+					{
+						"item_code": self.item_code,
+						"qty": qty,
+						"rate": rate,
+						"warehouse": self.warehouse,
+						"cost_center": self.cost_center,
+					}
+				],
+			}
+		)
+		pi.insert()
+		pi.submit()
+		return pi
+
+	def test_register_marks_a_company_currency_bill_local(self):
+		pi = self.make_pi(qty=2, rate=100)
+		row = self.register_row(self.run_register(), pi.name)
+
+		self.assertEqual(row["origin"], "Local")
+		# nothing to convert, so both currencies read the same number
+		self.assertAlmostEqual(row["net_amount"], 200, places=2)
+		self.assertAlmostEqual(row["net_amount_txn"], 200, places=2)
+		self.assertAlmostEqual(row["conversion_rate"], 1, places=6)
+
+	def test_register_reports_an_invoice_in_both_currencies(self):
+		pi = self.make_foreign_pi(qty=2, rate=10, conversion_rate=80)
+		row = self.register_row(self.run_register(), pi.name)
+
+		self.assertIsNotNone(row)
+		self.assertEqual(row["origin"], "Import")
+		self.assertEqual(row["currency"], "USD")
+		self.assertAlmostEqual(row["conversion_rate"], 80, places=6)
+		self.assertAlmostEqual(row["net_amount_txn"], 20, places=2)   # 20 USD billed
+		self.assertAlmostEqual(row["net_amount"], 1600, places=2)     # 1,600 in the ledger
+
+	def test_register_origin_filter_keeps_one_half(self):
+		local = self.make_pi(qty=1, rate=50)
+		imported = self.make_foreign_pi(qty=1, rate=5, conversion_rate=80)
+
+		local_only = self.run_register(purchase_origin="Local Only")
+		self.assertIsNotNone(self.register_row(local_only, local.name))
+		self.assertIsNone(self.register_row(local_only, imported.name))
+
+		import_only = self.run_register(purchase_origin="Import Only")
+		self.assertIsNone(self.register_row(import_only, local.name))
+		self.assertIsNotNone(self.register_row(import_only, imported.name))
+
+		both = self.run_register(purchase_origin="Local and Import")
+		self.assertIsNotNone(self.register_row(both, local.name))
+		self.assertIsNotNone(self.register_row(both, imported.name))
+
+	def test_register_reads_a_customs_charge_as_an_import(self):
+		"""The migrated years: company currency, rate 1, customs charges on the bill."""
+		pi = frappe.get_doc(
+			{
+				"doctype": "Purchase Invoice",
+				"company": COMPANY,
+				"supplier": SUPPLIER,
+				"update_stock": 0,
+				"cost_center": self.cost_center,
+				"items": [
+					{
+						"item_code": self.item_code,
+						"qty": 2,
+						"rate": 100,
+						"warehouse": self.warehouse,
+						"cost_center": self.cost_center,
+					}
+				],
+				"taxes": [
+					{
+						"charge_type": "Actual",
+						"account_head": self.customs_account(),
+						"description": "Customs Duty",
+						"tax_amount": 30,
+						"category": "Total",
+						"cost_center": self.cost_center,
+					}
+				],
+			}
+		)
+		pi.insert()
+		pi.submit()
+
+		row = self.register_row(self.run_register(), pi.name)
+		self.assertEqual(row["origin"], "Import", "a customs charge is what identifies these")
+		self.assertIsNone(self.register_row(self.run_register(purchase_origin="Local Only"), pi.name))
+
+	def test_register_prints_the_landed_cost_hidden_in_the_item_rate(self):
+		"""What the ePromise import did: item rows above the bill the supplier raised.
+
+		Written straight to the header here because that is how it happened — the
+		importer wrote those totals by SQL and the form cannot produce them.
+		"""
+		pi = self.make_pi(qty=2, rate=100)          # item rows total 200
+		frappe.db.set_value(
+			"Purchase Invoice", pi.name, {"net_total": 150, "base_net_total": 150}, update_modified=False
+		)
+		frappe.clear_document_cache("Purchase Invoice", pi.name)
+
+		row = self.register_row(self.run_register(), pi.name)
+		self.assertAlmostEqual(row["net_amount"], 200, places=2)     # goods value, item rows
+		self.assertAlmostEqual(row["embedded_landed_cost"], 50, places=2)
+
+	def test_register_reports_an_unbilled_receipt_in_both_currencies(self):
+		pr = frappe.get_doc(
+			{
+				"doctype": "Purchase Receipt",
+				"company": COMPANY,
+				"supplier": SUPPLIER,
+				"currency": "USD",
+				"conversion_rate": 80,
+				"cost_center": self.cost_center,
+				"items": [
+					{
+						"item_code": self.item_code,
+						"qty": 2,
+						"rate": 10,
+						"warehouse": self.warehouse,
+						"cost_center": self.cost_center,
+					}
+				],
+			}
+		)
+		pr.insert()
+		pr.submit()
+
+		row = self.register_row(self.run_register(), pr.name)
+		self.assertIsNotNone(row)
+		self.assertEqual(row["origin"], "Import")
+		self.assertEqual(row["currency"], "USD")
+		self.assertAlmostEqual(row["net_amount"], 1600, places=2)
+		self.assertAlmostEqual(row["net_amount_txn"], 20, places=2)
+		self.assertAlmostEqual(row["embedded_landed_cost"], 0, places=2)
+
 	def test_register_item_type_filters_both_halves(self):
 		from erpnext.stock.doctype.item.test_item import make_item
 

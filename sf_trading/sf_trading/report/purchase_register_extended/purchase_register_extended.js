@@ -68,6 +68,20 @@ frappe.query_reports["Purchase Register Extended"] = {
 			options: "Item Group",
 		},
 		{
+			// Local, imported, or both. A line is Import when its currency is not the
+			// company's, when it carries a customs reference or a customs charge row,
+			// when a Landed Cost Voucher was applied, or when the supplier's own
+			// country is set and is not the company's. The customs-charge test is what
+			// finds the migrated import history, which is all in company currency at
+			// rate 1 — see the report .py docstring.
+			fieldname: "purchase_origin",
+			label: __("Purchase Origin"),
+			fieldtype: "Select",
+			options: ["Local and Import", "Local Only", "Import Only"].join("\n"),
+			default: "Local and Import",
+			reqd: 1,
+		},
+		{
 			// goods by default: purchases in the trading account means stock. All
 			// Items widens BOTH halves together and lines the invoice half back up
 			// with core's Purchase Register, which counts service bills too.
@@ -118,6 +132,12 @@ frappe.query_reports["Purchase Register Extended"] = {
 				.join(", ");
 			return value;
 		}
+		// an import is worth spotting without reading the column, because its Net
+		// Amount can carry landed cost the supplier never billed
+		if (column.fieldname === "origin" && data && data.origin === "Import") {
+			return `<span style="color: var(--blue-600); font-weight: 500">${value}</span>`;
+		}
+
 		// the receipt lines are the ones core never showed - mark them so the
 		// reader can see at a glance what this report adds
 		if (data && data.voucher_type === "Purchase Receipt") {
