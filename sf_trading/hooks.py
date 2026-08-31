@@ -304,6 +304,11 @@ doc_events = {
 			# company default instead, which put every branch entry on head office
 			"sf_trading.journal_entry_cost_center.set_cost_center_from_branch",
 		],
+		# `cost_center` on Journal Entry Account carries allow_on_submit, so it can still be
+		# edited on a SUBMITTED entry -- and `validate` never runs on that path. Core's
+		# on_update_after_submit reposts the ledger when a row changes, so the same rule has to
+		# hold here or a post-submit edit would quietly re-post the wrong cost centre.
+		"before_update_after_submit": "sf_trading.journal_entry_cost_center.set_cost_center_from_branch",
 	},
 	"Customer": {
 		"validate": [
