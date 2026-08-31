@@ -1466,9 +1466,13 @@ frappe.ui.form.on("Sales Invoice", {
 			// Customer has no sales team → keep the sales person already on the invoice
 			if (!doc.sales_team || !doc.sales_team.length) return;
 			frm.set_value("custom_sales_person", "");
-			frm.clear_table("sales_team");
-			frm.refresh_field("sales_team");
+			// The clear has to come AFTER the set_value below, not before it: setting
+			// custom_sales_person fires its own handler, which puts one row at 100% into the
+			// table. Clearing first meant that row survived and the customer's own rows were
+			// appended on top of it -- 200% for any customer carrying a sales team, and erpnext
+			// throws "Total allocated percentage for sales team should be 100" on save.
 			frm.set_value("custom_sales_person", doc.sales_team[0].sales_person);
+			frm.clear_table("sales_team");
 			doc.sales_team.forEach(function(d) {
 				const row = frm.add_child("sales_team");
 				row.sales_person = d.sales_person;

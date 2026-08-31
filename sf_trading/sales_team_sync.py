@@ -22,8 +22,10 @@ from frappe import _
 from frappe.query_builder.functions import Coalesce
 from frappe.utils import cint, flt
 
-# the selling documents that carry the custom field; one without it simply returns
-MIRRORED = ("Sales Invoice", "Sales Order", "Delivery Note", "POS Invoice")
+# the only two doctypes on this site carrying BOTH custom_sales_person and a sales_team table.
+# Quotation has the custom field but no sales_team to write to; Delivery Note and POS Invoice have
+# the table but not the field.
+MIRRORED = ("Sales Invoice", "Sales Order")
 
 
 def usable_sales_person(person: str | None) -> bool:
@@ -49,8 +51,16 @@ def set_sales_team(doc, method=None):
 	person = (doc.get("custom_sales_person") or "").strip()
 	if not person:
 		return
-	if doc.get("sales_team"):
-		# already decided -- by a person, or by the customer master through get_party_details
+	rows = doc.get("sales_team")
+	if rows:
+		# Already decided -- by a person, or by the customer master through get_party_details. One
+		# repair only: erpnext injects the customer's team as {"allocated_percentage": pct or None},
+		# so a Customer row with a blank percentage lands here as NULL, calculate_contribution then
+		# totals 0 and hard-throws "Total allocated percentage for sales team should be 100" -- the
+		# invoice cannot be saved at all. Filling a single blank percentage cannot change who gets
+		# credited, so it is not overwriting anybody's decision.
+		if len(rows) == 1 and not flt(rows[0].allocated_percentage):
+			rows[0].allocated_percentage = 100
 		return
 	if not usable_sales_person(person):
 		return
@@ -64,7 +74,7 @@ def _pending(doctype: str, company: str | None, from_date: str | None, to_date: 
 	doc = frappe.qb.DocType(doctype)
 	team = frappe.qb.DocType("Sales Team")
 
-	eligible = (doc.amount_eligible_for_commission
+	eligible = (Coalesce(doc.amount_eligible_for_commission, doc.base_net_total)
 	            if frappe.db.has_column(doctype, "amount_eligible_for_commission")
 	            else doc.base_net_total)
 	date_field = (doc.posting_date if frappe.db.has_column(doctype, "posting_date")
@@ -111,6 +121,9 @@ def backfill(doctype: str = "Sales Invoice", company: str | None = None,
 	if not frappe.db.has_column(doctype, "custom_sales_person"):
 		frappe.throw(_("{0} has no custom_sales_person field on this site").format(doctype))
 	frappe.has_permission(doctype, "write", throw=True)
+	# whitelisted, and it inserts with ignore_permissions over thousands of documents: write access
+	# on Sales Invoice is held by every invoicing user here
+	frappe.only_for("System Manager")
 
 	rows = _pending(doctype, company, from_date, to_date, min(cint(limit) or 2000, 20000))
 
@@ -130,11 +143,23 @@ def backfill(doctype: str = "Sales Invoice", company: str | None = None,
 			row.parenttype = doctype
 			row.parentfield = "sales_team"
 			row.idx = 1
+			# frappe.new_doc leaves docstatus 0 and insert() never inherits the parent's, so the
+			# row would sit draft under a submitted invoice. The Sales Person dashboard sums only
+			# docstatus 1 rows, and all 456 rows already on this site mirror their parent exactly.
+			row.docstatus = 1
 			row.sales_person = r.person
 			row.allocated_percentage = 100
 			row.allocated_amount = flt(r.eligible)
 			row.insert(ignore_permissions=True)
+			# The row went in behind the parent's back, so a cached copy of that invoice still
+			# holds an empty sales_team -- and update_child_table DELETES every row that is not in
+			# the in-memory document, so the next save of a stale parent would silently undo this.
+			frappe.clear_document_cache(doctype, r.name)
 			done.append(r.name)
+			if len(done) % 500 == 0:
+				# batched: one transaction over thousands of rows holds locks for the whole run
+				# and loses everything to a single mid-run failure
+				frappe.db.commit()
 		except Exception as e:
 			frappe.db.rollback(save_point="sf_sales_team_row")
 			skipped.append({"name": r.name, "person": r.person, "reason": str(e)[:140]})
