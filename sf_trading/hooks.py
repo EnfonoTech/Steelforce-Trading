@@ -87,6 +87,9 @@ doctype_js = {
 	],
 	# open item census + submit gate companion view
 	"Period Closing Voucher": "public/js/period_closing_voucher.js",
+	# every row's cost centre comes from that row's Branch, and a branch-less user is asked
+	# to choose one rather than handed the company default
+	"Journal Entry": "public/js/journal_entry_cost_center.js",
 }
 
 # include js, css files in header of web template
@@ -295,7 +298,12 @@ doc_events = {
 		# validate, not before_validate: the controller fills `debit` from
 		# debit_in_account_currency * exchange_rate during its own validate, and a hooked
 		# handler runs after it, so the debit rows are already known here
-		"validate": "sf_trading.api.loyalty_reward_rows.validate_loyalty_reward_rows",
+		"validate": [
+			"sf_trading.api.loyalty_reward_rows.validate_loyalty_reward_rows",
+			# a row's cost centre follows the Branch on that row; core seeds it from the
+			# company default instead, which put every branch entry on head office
+			"sf_trading.journal_entry_cost_center.set_cost_center_from_branch",
+		],
 	},
 	"Customer": {
 		"validate": [
