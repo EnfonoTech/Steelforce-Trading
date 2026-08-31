@@ -173,28 +173,8 @@ def actuals(company: str, fiscal_year: str, dimension: str, basis: str = "Net of
 		start = max(start, getdate(from_date))
 	if to_date:
 		end = min(end, getdate(to_date))
-	amount = BASIS_FIELD.get(basis or "Net of VAT", BASIS_FIELD["Net of VAT"])
-	column = DIMENSIONS[dimension]["column"]
-
-	conditions = ["si.docstatus = 1", "si.company = %(company)s",
-	              "si.posting_date between %(start)s and %(end)s"]
-	values = {"company": company, "start": start, "end": end}
-
-	branches = allowed_branches()
-	if branch:
-		conditions.append("si.branch = %(branch)s")
-		values["branch"] = branch
-	elif branches:
-		conditions.append("si.branch in %(branches)s")
-		values["branches"] = branches
-
-	join = ""
-	if dimension == "Sales Person":
-		# a tree node is not a salesman
-		join = "left join `tabSales Person` sp on sp.name = si.custom_sales_person"
-		conditions.append("(sp.name is null or sp.is_group = 0)")
-		if not include_unassigned:
-			conditions.append("si.custom_sales_person is not null and si.custom_sales_person != ''")
+	amount, column, join, conditions, values = _actual_clause(
+		company, dimension, basis, branch, start, end, include_unassigned)
 
 	rows = frappe.db.sql(
 		f"""
@@ -281,6 +261,8 @@ def target_months(tgt: dict, name: str | None = None) -> set:
 def variance_dataset(filters, dimension: str):
 	"""(columns, data) for a target-vs-actual report. Both reports are this function."""
 	filters = frappe._dict(filters or {})
+	if (filters.get("view") or "Summary") == "Invoice-wise":
+		return invoice_dataset(filters, dimension)
 	company = filters.company or frappe.defaults.get_user_default("Company")
 	fiscal_year = filters.fiscal_year or frappe.defaults.get_user_default("fiscal_year")
 	if not company or not fiscal_year:
@@ -392,6 +374,168 @@ def variance_dataset(filters, dimension: str):
 		 "indicator": "Green" if pct >= 100 else "Orange" if pct >= 80 else "Red"},
 	]
 	return columns, data, None, chart, summary
+
+
+def _actual_clause(company, dimension, basis, branch, start, end, include_unassigned=True):
+	"""The one WHERE clause behind every actual figure in this module.
+
+	The monthly totals and the invoice-wise drill-down MUST come from the same predicate. Written
+	twice they drift the first time a filter is added, and a drill-down whose lines do not add up
+	to the summary above it is worse than no drill-down at all.
+	"""
+	amount = BASIS_FIELD.get(basis or "Net of VAT", BASIS_FIELD["Net of VAT"])
+	column = DIMENSIONS[dimension]["column"]
+
+	conditions = ["si.docstatus = 1", "si.company = %(company)s",
+	              "si.posting_date between %(start)s and %(end)s"]
+	values = {"company": company, "start": start, "end": end}
+
+	branches = allowed_branches()
+	if branch:
+		conditions.append("si.branch = %(branch)s")
+		values["branch"] = branch
+	elif branches:
+		conditions.append("si.branch in %(branches)s")
+		values["branches"] = branches
+
+	join = ""
+	if dimension == "Sales Person":
+		# a tree node is not a salesman
+		join = "left join `tabSales Person` sp on sp.name = si.custom_sales_person"
+		conditions.append("(sp.name is null or sp.is_group = 0)")
+		if not include_unassigned:
+			conditions.append("si.custom_sales_person is not null and si.custom_sales_person != ''")
+
+	return amount, column, join, conditions, values
+
+
+def invoices(company: str, fiscal_year: str, dimension: str, basis: str = "Net of VAT",
+             branch: str | None = None, from_date=None, to_date=None,
+             dimension_value: str | None = None, limit: int = 5000) -> list:
+	"""Every invoice behind the actuals, one row each -- the same filter, simply not grouped.
+
+	ERPNext's own Sales Person-wise Transaction Summary is item-wise: an invoice with nine lines
+	is nine rows, and the amount column cannot be read as a sales figure. This is the
+	invoice-level answer to the same question.
+	"""
+	start, end = fiscal_year_bounds(fiscal_year)
+	if from_date:
+		start = max(start, getdate(from_date))
+	if to_date:
+		end = min(end, getdate(to_date))
+
+	amount, column, join, conditions, values = _actual_clause(
+		company, dimension, basis, branch, start, end)
+	if dimension_value:
+		if dimension_value == UNASSIGNED:
+			conditions.append(f"({column} is null or {column} = '')")
+		else:
+			conditions.append(f"{column} = %(dimension_value)s")
+			values["dimension_value"] = dimension_value
+	values["limit"] = cint(limit) or 5000
+
+	return frappe.db.sql(
+		f"""
+		select
+			{column} as dimension_value,
+			si.name as invoice, si.posting_date, si.customer, si.customer_name, si.branch,
+			si.is_return, si.status,
+			{amount} as amount,
+			si.base_net_total as net_total,
+			si.base_grand_total as grand_total,
+			(si.base_grand_total - si.base_net_total) as tax_total
+		from `tabSales Invoice` si {join}
+		where {" and ".join(conditions)}
+		order by si.posting_date desc, si.name desc
+		limit %(limit)s
+		""",
+		values,
+		as_dict=True,
+	)
+
+
+def invoice_dataset(filters, dimension: str):
+	"""The same report, one row per invoice instead of one row per person.
+
+	The headline block is computed exactly as the summary view computes it, so switching the view
+	cannot change the totals a reader has just been looking at.
+	"""
+	company = filters.company or frappe.defaults.get_user_default("Company")
+	fiscal_year = filters.fiscal_year or frappe.defaults.get_user_default("fiscal_year")
+	if not company or not fiscal_year:
+		frappe.throw(_("Company and Fiscal Year are both needed"))
+	basis = filters.basis or "Net of VAT"
+	branch = filters.branch
+	from_date, to_date = filters.get("from_date"), filters.get("to_date")
+	value = filters.get("sales_person") if dimension == "Sales Person" else filters.get("branch")
+
+	currency = frappe.get_cached_value("Company", company, "default_currency")
+	rows = invoices(company, fiscal_year, dimension, basis, branch,
+	                from_date=from_date, to_date=to_date, dimension_value=value,
+	                limit=cint(filters.get("row_limit")) or 5000)
+
+	label = _("Branch") if dimension == "Branch" else _("Sales Person")
+	columns = [
+		{"label": label, "fieldname": "dimension_value", "fieldtype": "Link",
+		 "options": DIMENSIONS[dimension]["doctype"], "width": 150},
+		{"label": _("Invoice"), "fieldname": "invoice", "fieldtype": "Link",
+		 "options": "Sales Invoice", "width": 150},
+		{"label": _("Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 100},
+		{"label": _("Customer"), "fieldname": "customer", "fieldtype": "Link",
+		 "options": "Customer", "width": 220},
+		{"label": _("Branch"), "fieldname": "branch", "fieldtype": "Link", "options": "Branch",
+		 "width": 100},
+		# the basis the summary above was measured on, so these lines add up to that figure
+		{"label": _("Amount ({0})").format(_(basis)), "fieldname": "amount",
+		 "fieldtype": "Currency", "options": "currency", "width": 140},
+		{"label": _("Net of VAT"), "fieldname": "net_total", "fieldtype": "Currency",
+		 "options": "currency", "width": 130},
+		{"label": _("VAT"), "fieldname": "tax_total", "fieldtype": "Currency",
+		 "options": "currency", "width": 110},
+		{"label": _("Gross"), "fieldname": "grand_total", "fieldtype": "Currency",
+		 "options": "currency", "width": 130},
+		{"label": _("Credit Note"), "fieldname": "is_return", "fieldtype": "Check", "width": 90,
+		 "disable_total": 1},
+		{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 100,
+		 "disable_total": 1},
+		{"label": _("Currency"), "fieldname": "currency", "fieldtype": "Link",
+		 "options": "Currency", "hidden": 1, "width": 80},
+	]
+	for r in rows:
+		r["dimension_value"] = r.get("dimension_value") or UNASSIGNED
+		r["currency"] = currency
+
+	act = actuals(company, fiscal_year, dimension, basis, branch,
+	              from_date=from_date, to_date=to_date)
+	tgt = targets(company, fiscal_year, dimension,
+	              branch if dimension == "Sales Person" else None)
+	if from_date or to_date:
+		coverage = month_coverage(fiscal_year, from_date, to_date)
+		tgt = {k: flt(v) * coverage.get(k[1], 0) for k, v in tgt.items()}
+	keep = (lambda k: k[0] == value) if value else (lambda k: k[0] != UNASSIGNED)
+	total_a = sum(flt(v) for k, v in act.items() if keep(k))
+	total_t = sum(flt(v) for k, v in tgt.items() if keep(k))
+	pct = (total_a / total_t * 100) if total_t else 0
+
+	shown = sum(flt(r["amount"]) for r in rows)
+	message = None
+	if abs(shown - total_a) > 0.005:
+		# only ever true when the row limit clipped the list -- say so rather than let a reader
+		# add the column up and quietly get a different answer
+		message = _("Showing {0} invoices worth {1} of {2}. Narrow the dates or raise Row Limit."
+		            ).format(len(rows), frappe.utils.fmt_money(shown, currency=currency),
+		                     frappe.utils.fmt_money(total_a, currency=currency))
+
+	summary = [
+		{"label": _("Invoices"), "value": len(rows), "datatype": "Int"},
+		{"label": _("Target"), "value": total_t, "datatype": "Currency", "currency": currency},
+		{"label": _("Actual"), "value": total_a, "datatype": "Currency", "currency": currency},
+		{"label": _("Variance"), "value": total_a - total_t, "datatype": "Currency",
+		 "currency": currency, "indicator": "Green" if total_a >= total_t else "Red"},
+		{"label": _("Achieved"), "value": pct, "datatype": "Percent",
+		 "indicator": "Green" if pct >= 100 else "Orange" if pct >= 80 else "Red"},
+	]
+	return columns, rows, message, None, summary
 
 
 # ─── Scorecard (month to date / year to date) ─────────────────────────────────

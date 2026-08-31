@@ -15,6 +15,11 @@ frappe.query_reports["Branch Sales Target vs Actual"] = {
 			options: ["Net of VAT", "Gross"].join("\n"), default: "Net of VAT",
 		},
 		{
+			fieldname: "view", label: __("View"), fieldtype: "Select",
+			options: ["Summary", "Invoice-wise"].join("\n"), default: "Summary",
+			description: __("Invoice-wise lists the invoices behind the figures, one row each."),
+		},
+		{
 			fieldname: "from_date", label: __("From Date"), fieldtype: "Date",
 			description: __("Optional. Narrows the fiscal year; a part month's target is prorated."),
 		},
@@ -30,6 +35,10 @@ frappe.query_reports["Branch Sales Target vs Actual"] = {
 			description: __("Targets need not start in January. Untick to see the whole year."),
 		},
 		{ fieldname: "branch", label: __("Branch"), fieldtype: "Link", options: "Branch" },
+		{
+			fieldname: "row_limit", label: __("Row Limit"), fieldtype: "Int", default: 5000,
+			description: __("Invoice-wise only."),
+		},
 	],
 
 	formatter(value, row, column, data, default_formatter) {
@@ -40,6 +49,9 @@ frappe.query_reports["Branch Sales Target vs Actual"] = {
 			const raw = flt(data[column.fieldname]);
 			if (raw < 0) value = `<span style="color:var(--red-500)">${value}</span>`;
 			else if (raw > 0) value = `<span style="color:var(--green-600)">${value}</span>`;
+		}
+		if (data.is_return) {
+			value = `<span style="color:var(--red-500)">${value}</span>`;
 		}
 		if (column.fieldname === "achieved_pct") {
 			const pct = flt(data.achieved_pct);
