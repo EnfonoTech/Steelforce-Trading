@@ -12,11 +12,12 @@ COMPANY = "_SF Test Co"
 COMPANY_DEFAULT = "Main - SFT"
 SFSB_CC = "SFSB - SFT"
 SFSS_CC = "SFSS - SFT"
+SFWH_CC = "SFWH - SFT"
 
 
-def make_row(branch=None, cost_center=None, has_branch_field=True):
+def make_row(branch=None, cost_center=None):
 	row = frappe._dict({"branch": branch, "cost_center": cost_center})
-	row.meta = frappe._dict({"has_field": lambda f: has_branch_field or f != "branch"})
+	row.meta = frappe._dict({"has_field": lambda f: True})
 	row.get = lambda key, default=None: row.__dict__.get(key, default)
 	return row
 
@@ -32,30 +33,33 @@ def make_doc(rows, company=COMPANY, is_system_generated=0):
 class TestJournalEntryCostCenter(FrappeTestCase):
 	def setUp(self):
 		# the module reads three things from the database; each test states them outright rather
-		# than depending on whichever site the suite happens to run against
-		self._branches = {"SFSB": SFSB_CC, "SFSS": SFSS_CC, "SFWH": None}
+		# than depending on whichever site the suite happens to run against.
+		# SFWH lists two cost centres, exactly as production does.
+		self._branches = {"SFSB": [SFSB_CC], "SFSS": [SFSS_CC],
+		                  "SFWH": [SFWH_CC, COMPANY_DEFAULT], "SFXX": []}
 		self._user_branch = None
-		self.addCleanup(self._restore, jecc.branch_cost_center, jecc.user_branch, jecc._permitted)
-		jecc.branch_cost_center = lambda branch: self._branches.get(branch)
+
+		self._real = (jecc.branch_cost_centers, jecc.branch_cost_center, jecc.user_branch,
+		              jecc._permitted, frappe.get_cached_value)
+		self.addCleanup(self._restore)
+
+		jecc.branch_cost_centers = lambda branch: self._branches.get(branch) or []
+		jecc.branch_cost_center = lambda branch: (self._branches.get(branch) or [None])[0]
 		jecc.user_branch = lambda user=None: self._user_branch
 		jecc._permitted = lambda cost_center, user=None: True
-		self._patch_company_default()
 
-	def _restore(self, branch_cost_center, user_branch, permitted):
-		jecc.branch_cost_center = branch_cost_center
-		jecc.user_branch = user_branch
-		jecc._permitted = permitted
-		frappe.get_cached_value = self._real_get_cached_value
-
-	def _patch_company_default(self):
-		self._real_get_cached_value = frappe.get_cached_value
+		real_get_cached_value = frappe.get_cached_value
 
 		def fake(doctype, name, fieldname, *args, **kwargs):
 			if doctype == "Company" and fieldname == "cost_center":
 				return COMPANY_DEFAULT
-			return self._real_get_cached_value(doctype, name, fieldname, *args, **kwargs)
+			return real_get_cached_value(doctype, name, fieldname, *args, **kwargs)
 
 		frappe.get_cached_value = fake
+
+	def _restore(self):
+		(jecc.branch_cost_centers, jecc.branch_cost_center, jecc.user_branch,
+		 jecc._permitted, frappe.get_cached_value) = self._real
 
 	def test_branch_on_the_row_decides(self):
 		rows = [make_row("SFSB", COMPANY_DEFAULT), make_row("SFSS", COMPANY_DEFAULT)]
@@ -68,8 +72,20 @@ class TestJournalEntryCostCenter(FrappeTestCase):
 		jecc.set_cost_center_from_branch(make_doc(rows))
 		self.assertEqual([r.cost_center for r in rows], [SFSB_CC, SFSB_CC])
 
-	def test_branch_with_no_configured_cost_center_is_left_alone(self):
+	def test_a_branch_keeps_the_alternatives_it_declared(self):
+		# SFWH's own configuration lists Main second, so a warehouse row sitting on Main was a
+		# choice the branch itself allows -- and stays
 		rows = [make_row("SFWH", COMPANY_DEFAULT)]
+		jecc.set_cost_center_from_branch(make_doc(rows))
+		self.assertEqual(rows[0].cost_center, COMPANY_DEFAULT)
+
+	def test_a_centre_the_branch_never_declared_is_corrected(self):
+		rows = [make_row("SFWH", SFSS_CC)]
+		jecc.set_cost_center_from_branch(make_doc(rows))
+		self.assertEqual(rows[0].cost_center, SFWH_CC)
+
+	def test_branch_with_no_configured_cost_center_is_left_alone(self):
+		rows = [make_row("SFXX", COMPANY_DEFAULT)]
 		jecc.set_cost_center_from_branch(make_doc(rows))
 		self.assertEqual(rows[0].cost_center, COMPANY_DEFAULT)
 

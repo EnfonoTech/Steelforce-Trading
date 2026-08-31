@@ -35,39 +35,50 @@ def _cache() -> dict:
 	return getattr(frappe.local, _CACHE_KEY)
 
 
-def branch_cost_center(branch: str | None) -> str | None:
-	"""The cost centre a Branch posts to: the first row of its Branch Configuration.
+def branch_cost_centers(branch: str | None) -> list:
+	"""Every cost centre a Branch may post to, in Branch Configuration order.
 
-	Ordered by `idx`, not by name -- SFWH lists `SFWH - SFB` first and `Main - SFB` second, and
-	an alphabetical read would hand back Main for the one branch that has an explicit alternative.
+	Ordered by `idx`, not by name: SFWH lists `SFWH - SFB` first and `Main - SFB` second, and an
+	alphabetical read would hand back Main for the one branch that has an explicit alternative.
+	The first entry is the default; the rest are the branch's own declared alternatives, which is
+	how a warehouse can still book a genuine head-office cost without leaving its branch.
 
-	A group or disabled cost centre is refused: GL posting rejects a group cost centre outright,
+	A group or disabled cost centre is dropped: GL posting rejects a group cost centre outright,
 	so writing one would turn a reporting annoyance into a document that cannot be submitted.
 	"""
 	if not branch:
-		return None
+		return []
 	cache = _cache()
 	if branch in cache:
 		return cache[branch]
 
-	cost_center = None
 	config = frappe.db.get_value("Branch Configuration", {"branch": branch}, "name")
-	if config:
-		cost_center = frappe.db.get_value(
+	names = (
+		frappe.get_all(
 			"Branch Configuration Cost Center",
-			{"parent": config, "parenttype": "Branch Configuration"},
-			"cost_center",
+			filters={"parent": config, "parenttype": "Branch Configuration"},
+			pluck="cost_center",
 			order_by="idx asc",
+			ignore_permissions=True,
 		)
-	if cost_center:
-		row = frappe.get_cached_value(
-			"Cost Center", cost_center, ["is_group", "disabled"], as_dict=True
-		)
-		if not row or cint(row.is_group) or cint(row.disabled):
-			cost_center = None
+		if config
+		else []
+	)
 
-	cache[branch] = cost_center
-	return cost_center
+	usable = []
+	for name in names:
+		row = frappe.get_cached_value("Cost Center", name, ["is_group", "disabled"], as_dict=True)
+		if row and not cint(row.is_group) and not cint(row.disabled) and name not in usable:
+			usable.append(name)
+
+	cache[branch] = usable
+	return usable
+
+
+def branch_cost_center(branch: str | None) -> str | None:
+	"""The cost centre a Branch posts to by default -- the first row of its configuration."""
+	options = branch_cost_centers(branch)
+	return options[0] if options else None
 
 
 def user_branch(user: str | None = None) -> str | None:
@@ -117,8 +128,9 @@ def set_cost_center_from_branch(doc, method=None):
 	controller method -- so writing here is the last word without fighting core.
 
 	Two rules, in order:
-	  1. The row names a branch -> the branch's cost centre wins. The branch is the fact the
-	     user stated; the cost centre is the bookkeeping consequence of it.
+	  1. The row names a branch -> a cost centre that branch declared wins. The branch is the
+	     fact the user stated; the cost centre is the bookkeeping consequence of it. A branch
+	     listing several cost centres keeps all of them as valid choices.
 	  2. The row names no branch -> fill from the user's own branch, but only over a value
 	     nobody chose (blank, or the company default core pre-seeded). A cost centre somebody
 	     actually picked is somebody's decision and is left alone.
@@ -137,10 +149,14 @@ def set_cost_center_from_branch(doc, method=None):
 	)
 
 	for row in rows:
-		target = branch_cost_center(row.get("branch"))
-		if target:
-			if row.cost_center != target and _permitted(target):
-				row.cost_center = target
+		allowed = branch_cost_centers(row.get("branch"))
+		if allowed:
+			# `allowed`, not just the default: a branch that lists more than one cost centre has
+			# declared those alternatives itself, and a row already sitting on one of them was a
+			# choice. Everything else -- blank, the company default, another branch's centre --
+			# is corrected to the branch's own first cost centre.
+			if row.cost_center not in allowed and _permitted(allowed[0]):
+				row.cost_center = allowed[0]
 			continue
 
 		if own_cost_center and (not row.cost_center or row.cost_center == company_default):
