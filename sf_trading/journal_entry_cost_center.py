@@ -187,6 +187,7 @@ def form_defaults() -> dict:
 
 	return {
 		"branch_cost_centers": {k: v for k, v in mapping.items() if v},
+		"user_branch": user_branch(),
 		"user_cost_center": mine,
 		"company_defaults": defaults,
 	}
