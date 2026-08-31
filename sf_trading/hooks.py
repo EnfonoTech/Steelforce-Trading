@@ -320,6 +320,9 @@ doc_events = {
 			# advance switches and calls set_advances()
 			"sf_trading.overrides.sales_invoice_advance.set_advance_allocation",
 			_BPL_HOOK,
+			# the salesman on the header belongs in ERPNext's own Sales Team table, or every
+			# native sales-person report reads only the invoices somebody typed on a form
+			"sf_trading.sales_team_sync.set_sales_team",
 		],
 		"validate": [
 			"sf_trading.api.sales_invoice_override.validate",
@@ -349,6 +352,8 @@ doc_events = {
 			_BPL_HOOK,
 			# a delivery person belongs to a cash sale, on the order as on the invoice
 			"sf_trading.api.sales_invoice_override.clear_driver_for_non_cash",
+			# the order carries custom_sales_person too, so it gets the same mirror
+			"sf_trading.sales_team_sync.set_sales_team",
 		],
 		"validate": [
 			_LH_HOOK,
