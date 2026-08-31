@@ -1,12 +1,15 @@
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import SalesInvoice
 
 from sf_trading.sbnd import get_sbnd_gl_entries
+from sf_trading.credit_limit import skip_credit_limit
 from sf_trading.sdbnb import get_sdbnb_gl_entries
 
 
 class CustomSalesInvoice(SalesInvoice):
 	def check_credit_limit(self):
-		if self.get("custom_payment_mode") == "Cash":
+		# the same rule the Sales Order now uses -- sf_trading/credit_limit.py explains why Cash is
+		# exempt and Cheque is not
+		if skip_credit_limit(self):
 			return
 		super().check_credit_limit()
 

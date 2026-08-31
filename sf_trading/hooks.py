@@ -222,6 +222,9 @@ permission_query_conditions = {
 
 override_doctype_class = {
 	"Sales Invoice": "sf_trading.overrides.sales_invoice_class.CustomSalesInvoice",
+	# the credit rule the invoice already had: core counts every unbilled order as exposure and
+	# knows nothing about custom_payment_mode, so a cash order tripped the customer's limit
+	"Sales Order": "sf_trading.overrides.sales_order_class.CustomSalesOrder",
 	"Delivery Note": "sf_trading.overrides.delivery_note_class.CustomDeliveryNote",
 	"Purchase Invoice": "sf_trading.overrides.purchase_invoice_class.CustomPurchaseInvoice",
 }
