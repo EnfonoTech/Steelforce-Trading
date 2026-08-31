@@ -335,6 +335,9 @@ doc_events = {
 			_SP_HOOK,
 			# freezes the valuation rate on rows invoiced ahead of delivery
 			"sf_trading.sbnd.freeze_valuation_rate",
+			# a cash return may not ENTER the approval chain with no refund planned: the approval
+			# submits it server-side, where the payment popup cannot ask anything
+			"sf_trading.planned_payment.require_plan_before_approval",
 		],
 		# the refund a return promised is checked while refusing is still safe, and paid the
 		# moment the return is submitted -- approval and refund land together

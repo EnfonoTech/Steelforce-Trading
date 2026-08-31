@@ -170,6 +170,52 @@ def validate_planned_payments(doc, method=None):
 	_validate_plan(doc)
 
 
+# A state that is not Draft, on a document that is still a draft, means the approval chain has it.
+LIVE_APPROVAL_STATES = ("pending", "pending approval", "sent for approval", "awaiting approval")
+
+
+def require_plan_before_approval(doc, method=None):
+	"""validate: a cash return may not enter the approval chain with no refund planned.
+
+	The payment popup is browser code. It gates the SUBMIT button, and that is the only thing it
+	gates -- press Submit on the form with nothing entered and it refuses, which is what everyone
+	tests. But a return over the approval limit is never submitted from the form: it is saved, sent
+	for approval, and then SUBMITTED BY THE APPROVER'S ACTION, server-side, with no browser in the
+	loop. Nothing there ever asked about the refund.
+
+	Production, 27 August: 20010004147 was created at 16:40 with the popup dismissed, sent for
+	approval at 16:48 and submitted by the approval at 16:53 -- a 12.439 cash refund the customer
+	is still owed, and 13 more cash returns since 24 August carry neither a plan nor a payment.
+
+	So the requirement belongs here, on the way IN to the chain, where the cashier is still at the
+	counter with the customer. Refusing later, at before_submit, would strand an approved return
+	that nobody can now fix without cancelling it.
+
+	Credit-mode returns are exempt: nothing is paid out, the note reduces what the customer owes.
+	"""
+	if not cint(doc.get("is_return")) or doc.docstatus != 0:
+		return
+	if (doc.get("custom_payment_mode") or "") == "Credit":
+		return
+	state = (doc.get("workflow_state") or "").strip().lower()
+	if state not in LIVE_APPROVAL_STATES:
+		return
+	before = doc.get_doc_before_save()
+	if before and (before.get("workflow_state") or "").strip().lower() == state:
+		# already in the chain; this save is something else and must not be blocked
+		return
+	if planned_rows(doc) or _payable_amount(doc) < 0.005:
+		return
+
+	frappe.throw(
+		_("Plan the refund before sending this return for approval. The approval submits the "
+		  "return by itself, and a refund that was never planned is never paid -- it simply "
+		  "leaves {0} owed to the customer.").format(
+			frappe.utils.fmt_money(_payable_amount(doc), currency=doc.get("currency"))),
+		title=_("Refund Not Planned"),
+	)
+
+
 def apply_planned_payments(doc, method=None):
 	"""on_submit: the plan becomes Payment Entries, in the same breath as the return.
 
