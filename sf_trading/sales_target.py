@@ -334,10 +334,16 @@ def variance_dataset(filters, dimension: str):
 			row[f"{b.key}_target"] = t
 			row[f"{b.key}_actual"] = a
 			row[f"{b.key}_variance"] = a - t
+			# carried on the row, not as columns: the drill-down link needs this bucket's own date
+			# window, and the datatable ignores a key that has no column of its own
+			row[f"{b.key}_from"] = str(b.start)
+			row[f"{b.key}_to"] = str(b.end)
 			total_t += t
 			total_a += a
 		row["total_target"] = total_t
 		row["total_actual"] = total_a
+		row["window_from"] = str(from_date) if from_date else str(report_buckets[0].start) if report_buckets else ""
+		row["window_to"] = str(to_date) if to_date else str(report_buckets[-1].end) if report_buckets else ""
 		row["total_variance"] = total_a - total_t
 		row["achieved_pct"] = (total_a / total_t * 100) if total_t else 0.0
 		data.append(row)

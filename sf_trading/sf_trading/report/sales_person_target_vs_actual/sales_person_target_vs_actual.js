@@ -1,4 +1,57 @@
 // sf_trading/sf_trading/report/sales_person_target_vs_actual/sales_person_target_vs_actual.js
+const SF_REPORT_NAME = "Sales Person Target vs Actual";
+
+// ── Drill-down ────────────────────────────────────────────────────────────────
+// The same report, reopened in Invoice-wise mode and scoped to the row (and, on a period cell,
+// to that period's own dates). No second report to keep in step with this one -- DCR Detailed is
+// a separate document because it lists a different shape; here the detail IS this report's other
+// view, so the figures can never disagree.
+function sf_drill_link(value, row_value, dimension_filter, from_date, to_date) {
+	const f = (frappe.query_report && frappe.query_report.get_filter_values(false)) || {};
+	const params = {
+		view: "Invoice-wise",
+		company: f.company || "",
+		fiscal_year: f.fiscal_year || "",
+		basis: f.basis || "Net of VAT",
+		period: f.period || "Monthly",
+		from_date: from_date || f.from_date || "",
+		to_date: to_date || f.to_date || "",
+	};
+	if (f.branch) params.branch = f.branch;
+	params[dimension_filter] = row_value;
+
+	const qs = Object.keys(params)
+		.filter((k) => params[k] !== "" && params[k] != null)
+		.map((k) => encodeURIComponent(k) + "=" + encodeURIComponent(params[k]))
+		.join("&");
+	const route = "/app/query-report/" + encodeURIComponent(SF_REPORT_NAME) + "?" + qs;
+	return `<a href="${route}" title="${__("Show the invoices behind this figure")}">${value}</a>`;
+}
+
+function sf_add_drill(value, row, column, data, dimension_filter) {
+	// no drilling from the detail view itself, and never from the Unassigned bucket -- it has no
+	// dimension value to filter on
+	const f = (frappe.query_report && frappe.query_report.get_filter_values(false)) || {};
+	if ((f.view || "Summary") === "Invoice-wise") return value;
+	if (!data || !data.dimension_value || data.dimension_value === "Unassigned") return value;
+
+	if (column.fieldname === "dimension_value") {
+		return sf_drill_link(value, data.dimension_value, dimension_filter,
+			data.window_from, data.window_to);
+	}
+	if (column.fieldname === "total_actual") {
+		return sf_drill_link(value, data.dimension_value, dimension_filter,
+			data.window_from, data.window_to);
+	}
+	const bucket = /^(b\d+)_actual$/.exec(column.fieldname);
+	if (bucket) {
+		const key = bucket[1];
+		return sf_drill_link(value, data.dimension_value, dimension_filter,
+			data[key + "_from"], data[key + "_to"]);
+	}
+	return value;
+}
+
 frappe.query_reports["Sales Person Target vs Actual"] = {
 	filters: [
 		{
@@ -64,6 +117,6 @@ frappe.query_reports["Sales Person Target vs Actual"] = {
 			const colour = pct >= 100 ? "var(--green-600)" : pct >= 80 ? "var(--orange-500)" : "var(--red-500)";
 			value = `<span style="color:${colour}"><b>${value}</b></span>`;
 		}
-		return value;
+		return sf_add_drill(value, row, column, data, "sales_person");
 	},
 };
