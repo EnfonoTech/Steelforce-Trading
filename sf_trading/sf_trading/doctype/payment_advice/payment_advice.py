@@ -909,6 +909,15 @@ def order_block_message(idx, order_doctype, order_name, block, currency=None):
     dt = _(order_doctype)
     name = frappe.bold(order_name)
     invoice_dt = _(ORDER_INVOICE.get(order_doctype, "Purchase Invoice"))
+    # what to do about it depends on whether the document is already on an advice: a row can be
+    # replaced while the advice is a draft and only a cancel + amend can replace it afterwards,
+    # while a document being picked right now simply should not be picked
+    remedy = (
+        _("Replace the order row with the invoice — and if this advice is already submitted, "
+          "cancel it and amend.")
+        if idx
+        else _("Pick the invoice instead.")
+    )
 
     if block.get("reason") == "closed":
         return _(
@@ -939,9 +948,8 @@ def order_block_message(idx, order_doctype, order_name, block, currency=None):
         return _(
             "%(prefix)s%(dt)s %(name)s is fully billed, so the amount is now owed on "
             "%(invoices)s and not on the order. ERPNext will not accept a payment against a "
-            "billed order — cancel this advice and amend it, replacing the order row with the "
-            "invoice."
-        ) % {"prefix": prefix, "dt": dt, "name": name, "invoices": listed}
+            "billed order. %(remedy)s"
+        ) % {"prefix": prefix, "dt": dt, "name": name, "invoices": listed, "remedy": remedy}
 
     if invoices:
         listed = ", ".join(frappe.bold(row.get("name")) for row in invoices)
