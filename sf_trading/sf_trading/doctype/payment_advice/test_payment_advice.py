@@ -564,10 +564,17 @@ class TestPaymentAdviceStaleReferences(FrappeTestCase):
 		self.assertIn("Row #3", body)
 		self.assertIn("PINV-0009", body)
 
-	def test_over_allocation_error_points_at_the_row(self):
+	def test_over_payable_amount_is_trimmed_and_the_row_is_named(self):
+		"""Refusing the save was replaced by trimming — validate_payment_amount's docstring says
+		why: the refusal landed during the very save that was refreshing the references, so the
+		accountant was told a number was wrong without being shown the right one.
+
+		The reader must still see WHICH reference moved, and that is the notice's job.
+		"""
 		from sf_trading.sf_trading.doctype.payment_advice.payment_advice import PaymentAdvice
 
 		advice = frappe.get_doc({"doctype": "Payment Advice"})
+		advice.docstatus = 0
 		advice.payment_amount = 656.691
 		advice.amount_to_be_settled = 653.890
 		advice._payable_changes = [
@@ -577,12 +584,31 @@ class TestPaymentAdviceStaleReferences(FrappeTestCase):
 			{"reference_doctype": "Purchase Invoice", "reference_record": "PINV-0042",
 			 "net_payable_amount": 653.890})
 
-		with self.assertRaises(frappe.ValidationError) as caught:
-			PaymentAdvice.validate_payment_amount(advice)
-		text = frappe.utils.strip_html(str(caught.exception))
-		# the reader must be able to see WHICH reference moved, not just two totals
+		PaymentAdvice.validate_payment_amount(advice)
+		self.assertEqual(flt(advice.payment_amount, 3), 653.890, "too high is trimmed, not refused")
+		self.assertEqual(advice._payment_amount_trim, {"was": 656.691, "now": 653.890})
+
+		messages = []
+		original = frappe.msgprint
+		frappe.msgprint = lambda msg, **kwargs: messages.append(msg)
+		try:
+			PaymentAdvice.report_payable_changes(advice)
+		finally:
+			frappe.msgprint = original
+		text = frappe.utils.strip_html(messages[0])
 		self.assertIn("Row #2", text)
 		self.assertIn("PINV-0042", text)
+		self.assertIn("653.89", text)
+
+	def test_a_nonsensical_payment_amount_is_still_refused(self):
+		from sf_trading.sf_trading.doctype.payment_advice.payment_advice import PaymentAdvice
+
+		advice = frappe.get_doc({"doctype": "Payment Advice"})
+		advice.amount_to_be_settled = 653.890
+		for amount in (0, -5):
+			advice.payment_amount = amount
+			with self.assertRaises(frappe.ValidationError):
+				PaymentAdvice.validate_payment_amount(advice)
 
 	# ── the order that got billed while the advice waited ────────────────────────
 	#
