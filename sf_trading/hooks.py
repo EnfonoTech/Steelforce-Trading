@@ -176,6 +176,8 @@ after_migrate = [
 	"sf_trading.sales_order_fields.ensure_custom_fields",
 	# the refund a return will pay once it is approved
 	"sf_trading.planned_payment.ensure_custom_fields",
+	# a System Settings value with no global default row is blanked by its own form
+	"sf_trading.system_defaults.sync_system_settings_defaults",
 ]
 
 # Uninstallation
