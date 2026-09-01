@@ -663,6 +663,25 @@ function sf_return_needs_approval(frm) {
 	return amount - flt(rule.threshold) > 0.0001;
 }
 
+// Nothing is being paid out, so the cashier is told what IS happening instead of being asked how
+// they will pay a refund. Said once per document, like the approval note below.
+function sf_say_no_refund_due(frm, context) {
+	if (frm.__sf_said_no_refund === frm.doc.name) return;
+	frm.__sf_said_no_refund = frm.doc.name;
+	const owed = format_currency(flt(context.payable), frm.doc.currency);
+	const original = context.return_against
+		? frappe.utils.get_form_link("Sales Invoice", context.return_against, true)
+		: __("the original invoice");
+	frappe.msgprint({
+		title: __("No Refund Due"),
+		message:
+			__("Nothing was ever collected on {0}, so this return pays no money back — it clears the {1} still owed on it.", [original, owed]) +
+			"<br><br>" +
+			__("Save it, then use <b>Actions &rarr; Send for Approval</b>. Once approved the return submits itself and no refund is needed."),
+		indicator: "blue",
+	});
+}
+
 // Said once per document rather than on every save, so it reads as information and not as nagging.
 function sf_say_needs_approval(frm) {
 	if (frm.__sf_said_needs_approval === frm.doc.name) return;
@@ -820,13 +839,34 @@ frappe.ui.form.on("Sales Invoice", {
 		// is pay it, because a Payment Entry needs a submitted document to point at. So the popup
 		// opens in plan mode: the answer is kept on the return and paid the moment it is approved.
 		if (sf_return_needs_approval(frm)) {
-			frm.__sf_plan_mode = true;
-			if (Math.abs(flt(frm.doc.grand_total)) > 0) {
-				if (frm.doc.custom_payment_mode === "Cheque") sf_trading_show_pdc_popup(frm);
-				else sf_trading_show_pos_total_popup(frm);
-			} else {
+			if (Math.abs(flt(frm.doc.grand_total)) <= 0) {
 				sf_say_needs_approval(frm);
+				return;
 			}
+			// A return against an invoice nobody paid refunds nothing — it cancels a receivable —
+			// so there is no refund to plan and the popup would be asking for cash that was never
+			// taken. The server applies the same test before it lets the return into the approval
+			// chain (sf_trading/planned_payment.py, refundable_amount).
+			frappe.call({
+				method: "sf_trading.planned_payment.refund_context",
+				args: { sales_invoice: frm.doc.name },
+				callback: function (r) {
+					const context = r.message || {};
+					if (flt(context.refundable) < 0.005) {
+						sf_say_no_refund_due(frm, context);
+						return;
+					}
+					frm.__sf_plan_mode = true;
+					if (frm.doc.custom_payment_mode === "Cheque") sf_trading_show_pdc_popup(frm);
+					else sf_trading_show_pos_total_popup(frm);
+				},
+				error: function () {
+					// never leave the cashier without the popup because a lookup failed
+					frm.__sf_plan_mode = true;
+					if (frm.doc.custom_payment_mode === "Cheque") sf_trading_show_pdc_popup(frm);
+					else sf_trading_show_pos_total_popup(frm);
+				},
+			});
 			return;
 		}
 

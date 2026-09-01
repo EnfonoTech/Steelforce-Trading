@@ -26,6 +26,7 @@ import json
 import frappe
 from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+from frappe.query_builder.functions import Sum
 from frappe.utils import cint, flt
 
 FIELD = "custom_planned_payments"
@@ -94,6 +95,80 @@ def _payable_amount(doc) -> float:
 	return abs(flt(doc.get("outstanding_amount") or doc.get("rounded_total") or doc.get("grand_total")))
 
 
+def collected_against(invoice: str | None) -> float:
+	"""How much money was ever actually taken in against a Sales Invoice.
+
+	NOT `grand_total - outstanding_amount`: a credit note with `return_against` set reduces the
+	original's outstanding too, so that subtraction reads a return as if it were a payment and
+	every second return against the same bill would look refundable.
+
+	Three real sources instead:
+
+	  * `paid_amount` — cash or card taken on the invoice itself (Include Payment / POS)
+	  * submitted Payment Entry allocations to it
+	  * a Journal Entry crediting its receivable — how a counter settlement or a contra is booked
+	    when no Payment Entry was raised
+	"""
+	if not invoice:
+		return 0.0
+
+	values = frappe.db.get_value(
+		"Sales Invoice", invoice, ["paid_amount", "debit_to"], as_dict=True
+	) or frappe._dict()
+	collected = flt(values.get("paid_amount"))
+
+	reference = frappe.qb.DocType("Payment Entry Reference")
+	entry = frappe.qb.DocType("Payment Entry")
+	rows = (
+		frappe.qb.from_(reference)
+		.join(entry)
+		.on(entry.name == reference.parent)
+		.select(Sum(reference.allocated_amount).as_("allocated"))
+		.where(
+			(entry.docstatus == 1)
+			& (reference.reference_doctype == "Sales Invoice")
+			& (reference.reference_name == invoice)
+		)
+	).run(as_dict=True)
+	collected += flt(rows[0].allocated) if rows else 0.0
+
+	if values.get("debit_to"):
+		gl = frappe.qb.DocType("GL Entry")
+		rows = (
+			frappe.qb.from_(gl)
+			.select(Sum(gl.credit).as_("credited"))
+			.where(
+				(gl.is_cancelled == 0)
+				& (gl.voucher_type == "Journal Entry")
+				& (gl.against_voucher_type == "Sales Invoice")
+				& (gl.against_voucher == invoice)
+				& (gl.account == values.debit_to)
+			)
+		).run(as_dict=True)
+		collected += flt(rows[0].credited) if rows else 0.0
+
+	return flt(collected, 3)
+
+
+def refundable_amount(doc) -> float:
+	"""What can honestly be refunded on this return: never more than was collected.
+
+	A return against an invoice nobody has paid refunds nothing — it cancels a receivable. On
+	production 20010004598 (436.700, mode Cash) was blocked from approval for a refund that could
+	not exist: its original 20010004589 had paid_amount 0, no Payment Entry, no POS payment row,
+	and the whole 436.700 still sitting in Debtors. 7 of the 310 cash returns since 15 July are
+	that shape.
+
+	A return that names no invoice cannot be measured this way, so it keeps the old behaviour and
+	is treated as fully refundable.
+	"""
+	payable = _payable_amount(doc)
+	original = doc.get("return_against")
+	if not original:
+		return payable
+	return min(payable, collected_against(original))
+
+
 @frappe.whitelist()
 def set_planned_payments(
 	sales_invoice: str,
@@ -139,6 +214,27 @@ def set_planned_payments(
 	return {
 		"planned": planned_total(doc),
 		"payable": _payable_amount(doc),
+		"refundable": refundable_amount(doc),
+		"rows": len(planned_rows(doc)),
+	}
+
+
+@frappe.whitelist()
+def refund_context(sales_invoice: str) -> dict:
+	"""What the form needs to know before asking how a refund will be paid.
+
+	`refundable` is 0 when the invoice being returned was never collected, and the form uses that
+	to skip the popup entirely rather than asking about money that is not moving.
+	"""
+	frappe.has_permission("Sales Invoice", "read", doc=sales_invoice, throw=True)
+
+	doc = frappe.get_doc("Sales Invoice", sales_invoice)
+	return {
+		"is_return": cint(doc.get("is_return")),
+		"return_against": doc.get("return_against"),
+		"payable": _payable_amount(doc),
+		"collected_on_original": collected_against(doc.get("return_against")),
+		"refundable": refundable_amount(doc),
 		"rows": len(planned_rows(doc)),
 	}
 
@@ -204,14 +300,22 @@ def require_plan_before_approval(doc, method=None):
 	if before and (before.get("workflow_state") or "").strip().lower() == state:
 		# already in the chain; this save is something else and must not be blocked
 		return
-	if planned_rows(doc) or _payable_amount(doc) < 0.005:
+	if planned_rows(doc):
+		return
+
+	# Measured against what was actually collected on the invoice being returned, not against the
+	# return's own total. A return against a bill nobody paid gives no money back — it cancels a
+	# receivable — and demanding a refund plan for it sent the counter looking for cash that was
+	# never taken. See refundable_amount().
+	refundable = refundable_amount(doc)
+	if refundable < 0.005:
 		return
 
 	frappe.throw(
 		_("Plan the refund before sending this return for approval. The approval submits the "
 		  "return by itself, and a refund that was never planned is never paid -- it simply "
 		  "leaves {0} owed to the customer.").format(
-			frappe.utils.fmt_money(_payable_amount(doc), currency=doc.get("currency"))),
+			frappe.utils.fmt_money(refundable, currency=doc.get("currency"))),
 		title=_("Refund Not Planned"),
 	)
 
