@@ -64,6 +64,13 @@ VALID_REFERENCE_DOCTYPES = {
 
 ORDER_DOCTYPES = ("Sales Order", "Purchase Order")
 
+# Which invoice carries the money once an order has been billed. Used only to name the right
+# doctype in a message — nothing here follows the link and pays it on the accountant's behalf.
+ORDER_INVOICE = {"Purchase Order": "Purchase Invoice", "Sales Order": "Sales Invoice"}
+
+# The item field on that invoice that names the order.
+ORDER_LINK_FIELD = {"Purchase Order": "purchase_order", "Sales Order": "sales_order"}
+
 ALLOWED_REFERENCE_DOCTYPES = tuple(
     sorted({dt for types in VALID_REFERENCE_DOCTYPES.values() for dt in types})
 )
@@ -339,6 +346,7 @@ class PaymentAdvice(Document):
             else {}
         )
         self._payable_changes = []
+        self._unpayable_orders = []
 
         today = getdate(nowdate())
         company_currency = get_company_currency(self.company)
@@ -400,6 +408,20 @@ class PaymentAdvice(Document):
 
             # live status of the voucher, so the advice never shows a stale picture
             row.reference_status = source("status") if meta.has_field("status") else None
+
+            # An order billed since the advice was raised can no longer be paid as an order.
+            # Reported, never refused: this runs while the references are being refreshed, and
+            # refusing the save would leave the accountant holding stale figures with no way to
+            # bring them up to date.
+            if row.reference_doctype in ORDER_DOCTYPES:
+                block = order_payment_block(row.reference_doctype, row.reference_record)
+                if block:
+                    self._unpayable_orders.append(
+                        order_block_message(
+                            row.idx, row.reference_doctype, row.reference_record, block,
+                            company_currency,
+                        )
+                    )
 
             rate = flt(row.exchange_rate) or 1.0
             row.amount_in_currency = flt(flt(row.amount) / rate, 3)
@@ -503,6 +525,17 @@ class PaymentAdvice(Document):
                     "was": frappe.bold(frappe.utils.fmt_money(trim["was"])),
                     "now": frappe.bold(frappe.utils.fmt_money(trim["now"])),
                 }
+            )
+
+        if getattr(self, "_unpayable_orders", None):
+            # a row that has crossed from "order awaiting a bill" into "bill awaiting payment":
+            # the money is still owed, but on the invoice, and ERPNext will not take a payment
+            # against the order any more
+            sections.append(
+                _("These rows can no longer be paid as they stand:")
+                + "<ul>"
+                + "".join("<li>%s</li>" % message for message in self._unpayable_orders)
+                + "</ul>"
             )
 
         if not sections:
@@ -797,6 +830,133 @@ def get_document_total(doctype, name, meta=None):
     return get_reference_amounts(doctype, name, meta)[0]
 
 
+def get_invoices_against_order(order_doctype, order_name):
+    """Submitted invoices that bill this order, oldest first, with what each still owes.
+
+    Read off the item link, which is the only place the connection is recorded. Returns an
+    empty list when nothing names the order — a bill keyed in by hand against the supplier
+    rather than against the order is common, and the caller has to be able to say so.
+
+    Returns are excluded: a debit note is money coming back, never the thing to pay.
+    """
+    invoice_doctype = ORDER_INVOICE.get(order_doctype)
+    link_field = ORDER_LINK_FIELD.get(order_doctype)
+    if not (invoice_doctype and link_field):
+        return []
+
+    parents = frappe.get_all(
+        invoice_doctype + " Item",
+        filters={link_field: order_name, "docstatus": 1},
+        pluck="parent",
+        distinct=True,
+    )
+    if not parents:
+        return []
+
+    return frappe.get_all(
+        invoice_doctype,
+        filters={"name": ("in", parents), "docstatus": 1, "is_return": 0},
+        fields=["name", "outstanding_amount"],
+        order_by="posting_date, name",
+    )
+
+
+def order_payment_block(order_doctype, order_name):
+    """Why ERPNext will refuse a payment against this order, or None when it will accept one.
+
+    ERPNext decides with one SQL WHERE in `get_orders_to_be_billed`
+    (erpnext/accounts/doctype/payment_entry/payment_entry.py): an order is offered while
+    `status != "Closed"`, its total is greater than `advance_paid`, and
+    `abs(100 - per_billed) > 0.01`. An order failing any of those simply does not come back,
+    and PaymentEntry.validate_allocated_amount_with_latest_data() then reports the absence as
+    "has already been fully paid" — which is false whenever, as here, the bill is unpaid.
+
+    The arithmetic is copied deliberately, `abs(100 - per_billed) <= 0.01` and not
+    `per_billed >= 100`: an over-billed order (per_billed 105) passes ERPNext's filter, so it
+    has to pass this one too.
+    """
+    fields = ["status", "per_billed", "advance_paid", "base_rounded_total", "base_grand_total",
+              "grand_total"]
+    values = frappe.db.get_value(order_doctype, order_name, fields, as_dict=True)
+    if not values:
+        return None
+
+    # same fall-through-on-zero rule as get_reference_amounts: a rounded total is genuinely 0
+    # on a document with rounding disabled
+    total = 0.0
+    for fieldname in ("base_rounded_total", "base_grand_total", "grand_total"):
+        total = flt(values.get(fieldname))
+        if total:
+            break
+
+    if abs(100 - flt(values.per_billed)) <= 0.01:
+        return {"reason": "billed", "invoices": get_invoices_against_order(order_doctype, order_name)}
+    if values.status == "Closed":
+        return {"reason": "closed"}
+    if total <= flt(values.advance_paid):
+        return {"reason": "advanced", "advance": flt(values.advance_paid)}
+    return None
+
+
+def order_block_message(idx, order_doctype, order_name, block, currency=None):
+    """The sentence a human should read instead of "has already been fully paid".
+
+    Pure: everything it needs is in `block`, so the wording can be tested without a database.
+    `idx` is the reference row number when there is one, and None when the message is raised
+    at the moment the document is picked, where there is no row yet.
+    """
+    prefix = _("Row #%s: ") % idx if idx else ""
+    dt = _(order_doctype)
+    name = frappe.bold(order_name)
+    invoice_dt = _(ORDER_INVOICE.get(order_doctype, "Purchase Invoice"))
+
+    if block.get("reason") == "closed":
+        return _(
+            "%(prefix)s%(dt)s %(name)s is Closed, so ERPNext will not accept a payment against "
+            "it. Remove this row, or reopen the order."
+        ) % {"prefix": prefix, "dt": dt, "name": name}
+
+    if block.get("reason") == "advanced":
+        return _(
+            "%(prefix)s%(dt)s %(name)s is already fully advanced, so there is nothing left to "
+            "pay against it."
+        ) % {"prefix": prefix, "dt": dt, "name": name}
+
+    invoices = block.get("invoices") or []
+    unpaid = [row for row in invoices if flt(row.get("outstanding_amount")) > 0]
+
+    if unpaid:
+        listed = ", ".join(
+            _("%(invoice)s (%(amount)s outstanding)")
+            % {
+                "invoice": frappe.bold(row.get("name")),
+                "amount": frappe.utils.fmt_money(
+                    flt(row.get("outstanding_amount")), currency=currency
+                ),
+            }
+            for row in unpaid
+        )
+        return _(
+            "%(prefix)s%(dt)s %(name)s is fully billed, so the amount is now owed on "
+            "%(invoices)s and not on the order. ERPNext will not accept a payment against a "
+            "billed order — cancel this advice and amend it, replacing the order row with the "
+            "invoice."
+        ) % {"prefix": prefix, "dt": dt, "name": name, "invoices": listed}
+
+    if invoices:
+        listed = ", ".join(frappe.bold(row.get("name")) for row in invoices)
+        return _(
+            "%(prefix)s%(dt)s %(name)s is fully billed and nothing is outstanding on "
+            "%(invoices)s, so there is nothing left to pay. Remove this row, or cancel this "
+            "advice."
+        ) % {"prefix": prefix, "dt": dt, "name": name, "invoices": listed}
+
+    return _(
+        "%(prefix)s%(dt)s %(name)s is fully billed, so ERPNext will not accept a payment "
+        "against the order. Pay the %(invoice_dt)s raised against it instead."
+    ) % {"prefix": prefix, "dt": dt, "name": name, "invoice_dt": invoice_dt}
+
+
 def get_branch_cost_center(branch, company=None):
     """The cost centre configured for a branch, from Branch Configuration.
 
@@ -861,6 +1021,29 @@ def get_company_account(company, mode_of_payment=None):
     )
 
 
+def pe_reference_row(row):
+    """One Payment Entry Reference row from one advice row.
+
+    `outstanding_amount` and `total_amount` are deliberately left out: ERPNext's validate()
+    calls set_missing_ref_details(force=True) before it compares anything, which overwrites
+    both from the reference document, so writing them here would be theatre.
+
+    `payment_term` is carried when the row has one, and the key is omitted entirely when it
+    does not. ERPNext arms its "has already been partly paid" throw on a payment_term that is
+    literally the empty string, and refuses a reference under a Payment Terms Template with
+    term-based allocation when the term is missing — so the value has to travel, and the blank
+    must not.
+    """
+    values = {
+        "reference_doctype": row.reference_doctype,
+        "reference_name": row.reference_record,
+        "allocated_amount": flt(row.allocated_amount),
+    }
+    if row.get("payment_term"):
+        values["payment_term"] = row.payment_term
+    return values
+
+
 def build_payment_entry(advice):
     """Return an unsaved Payment Entry for a submitted Payment Advice."""
     if not advice.payment_advice_reference:
@@ -869,6 +1052,37 @@ def build_payment_entry(advice):
     allocations = [r for r in advice.payment_advice_reference if flt(r.allocated_amount) > 0]
     if not allocations:
         frappe.throw(_("Nothing is allocated for payment on this advice."))
+
+    # An order that has since been billed is no longer payable, and ERPNext reports that with
+    # the wrong sentence — "has already been fully paid" — because its test is per_billed and
+    # not payment. Say what is actually true, before pe.insert() gets the chance to say what is
+    # not. Read-only, so this is safe on a submitted, already-approved advice.
+    company_currency = get_company_currency(advice.company)
+    for row in allocations:
+        if row.reference_doctype in ORDER_DOCTYPES:
+            block = order_payment_block(row.reference_doctype, row.reference_record)
+            if block:
+                frappe.throw(
+                    order_block_message(
+                        row.idx, row.reference_doctype, row.reference_record, block,
+                        company_currency,
+                    )
+                )
+
+    # A supplier on hold makes ERPNext's get_outstanding_reference_documents return NOTHING, so
+    # every reference row on the advice reports "has already been fully paid" — the same wrong
+    # sentence for an entirely different reason.
+    if advice.party_type == "Supplier":
+        from erpnext.controllers.accounts_controller import get_supplier_block_status
+
+        if (get_supplier_block_status(advice.party) or {}).get("on_hold"):
+            frappe.throw(
+                _(
+                    "Payments to %s are on hold, so ERPNext will not accept a Payment Entry "
+                    "from this advice. Release the hold on the supplier first."
+                )
+                % frappe.bold(advice.party)
+            )
 
     company = advice.company
     party_account = get_party_account(advice.party_type, advice.party, company)
@@ -923,17 +1137,10 @@ def build_payment_entry(advice):
         pe.reference_date = advice.reference_date or nowdate()
 
     for row in allocations:
-        pe.append(
-            "references",
-            {
-                "reference_doctype": row.reference_doctype,
-                "reference_name": row.reference_record,
-                "allocated_amount": flt(row.allocated_amount),
-            },
-        )
+        pe.append("references", pe_reference_row(row))
 
-    # currencies: read them, never assume they match
-    company_currency = frappe.db.get_value("Company", company, "default_currency")
+    # currencies: read them, never assume they match (company_currency was read above, for
+    # the guard's message)
     pe.paid_from_account_currency = frappe.db.get_value("Account", paid_from, "account_currency")
     pe.paid_to_account_currency = frappe.db.get_value("Account", paid_to, "account_currency")
 
@@ -1094,6 +1301,18 @@ def get_reference_details(reference_doctype: str, reference_record: str, company
             _("%(name)s is already allocated on Payment Advice %(advice)s.")
             % {"name": frappe.bold(reference_record), "advice": frappe.bold(clash[0].parent)}
         )
+
+    if reference_doctype in ORDER_DOCTYPES:
+        # refuse a billed or closed order at the moment it is picked, with the reason, rather
+        # than letting it sit on the advice until the Payment Entry is refused
+        block = order_payment_block(reference_doctype, reference_record)
+        if block:
+            frappe.throw(
+                order_block_message(
+                    None, reference_doctype, reference_record, block,
+                    get_company_currency(company),
+                )
+            )
 
     total, outstanding = get_reference_amounts(reference_doctype, reference_record, meta)
     if outstanding <= 0:

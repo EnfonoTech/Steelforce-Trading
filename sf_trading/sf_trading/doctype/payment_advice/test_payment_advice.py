@@ -583,3 +583,230 @@ class TestPaymentAdviceStaleReferences(FrappeTestCase):
 		# the reader must be able to see WHICH reference moved, not just two totals
 		self.assertIn("Row #2", text)
 		self.assertIn("PINV-0042", text)
+
+	# ── the order that got billed while the advice waited ────────────────────────
+	#
+	# ERPNext refuses a payment against a billed order and reports it as
+	# "{0} {1} has already been fully paid." — which is false whenever the bill is still
+	# unpaid, which is the normal case. PA-26-0048 on production said that about
+	# PUR-ORD-2026-00227 while Purchase Invoice 20020000196 held 715.000 outstanding.
+	# These fix the wording, so the negative assertions matter as much as the positive ones.
+
+	def message(self, idx, block, currency="BHD", order="PUR-ORD-2026-00227"):
+		from sf_trading.sf_trading.doctype.payment_advice.payment_advice import order_block_message
+
+		return frappe.utils.strip_html(
+			order_block_message(idx, "Purchase Order", order, block, currency)
+		)
+
+	def test_billed_order_message_names_the_invoice_and_its_outstanding(self):
+		body = self.message(
+			1,
+			{
+				"reason": "billed",
+				"invoices": [frappe._dict(name="20020000196", outstanding_amount=715.0)],
+			},
+		)
+		self.assertIn("Row #1", body)
+		self.assertIn("PUR-ORD-2026-00227", body)
+		self.assertIn("20020000196", body)
+		self.assertIn("715", body)
+		self.assertIn("fully billed", body)
+		# the whole point of the change
+		self.assertNotIn("fully paid", body)
+
+	def test_billed_order_with_a_settled_invoice_says_nothing_is_left(self):
+		body = self.message(
+			2,
+			{"reason": "billed", "invoices": [frappe._dict(name="20020000196", outstanding_amount=0)]},
+		)
+		self.assertIn("nothing left to pay", body)
+		self.assertIn("20020000196", body)
+		self.assertNotIn("fully paid", body)
+
+	def test_billed_order_with_no_invoice_found_is_still_truthful(self):
+		# a bill keyed in against the supplier rather than against the order
+		body = self.message(3, {"reason": "billed", "invoices": []})
+		self.assertIn("fully billed", body)
+		self.assertIn("Purchase Invoice", body)
+		self.assertNotIn("fully paid", body)
+		self.assertNotIn("outstanding)", body)
+
+	def test_closed_and_fully_advanced_orders_state_their_own_reason(self):
+		closed = self.message(1, {"reason": "closed"})
+		self.assertIn("is Closed", closed)
+		self.assertIn("PUR-ORD-2026-00227", closed)
+		self.assertNotIn("fully paid", closed)
+
+		advanced = self.message(1, {"reason": "advanced", "advance": 715.0})
+		self.assertIn("already fully advanced", advanced)
+		self.assertNotIn("fully paid", advanced)
+
+	def test_pick_time_message_carries_no_row_number(self):
+		body = self.message(None, {"reason": "billed", "invoices": []})
+		self.assertNotIn("Row #", body)
+
+	def test_reference_row_never_carries_an_empty_payment_term(self):
+		"""ERPNext arms its "partly paid" throw on a payment_term that is literally ""."""
+		from sf_trading.sf_trading.doctype.payment_advice.payment_advice import pe_reference_row
+
+		blank = pe_reference_row(
+			frappe._dict(reference_doctype="Purchase Invoice", reference_record="PINV-1",
+			             allocated_amount=10, payment_term="")
+		)
+		self.assertNotIn("payment_term", blank)
+
+		missing = pe_reference_row(
+			frappe._dict(reference_doctype="Purchase Invoice", reference_record="PINV-1",
+			             allocated_amount=10, payment_term=None)
+		)
+		self.assertNotIn("payment_term", missing)
+
+		carried = pe_reference_row(
+			frappe._dict(reference_doctype="Purchase Invoice", reference_record="PINV-1",
+			             allocated_amount=10, payment_term="30 Days")
+		)
+		self.assertEqual(carried["payment_term"], "30 Days")
+		self.assertEqual(carried["reference_name"], "PINV-1")
+		self.assertEqual(carried["allocated_amount"], 10)
+		# writing these is theatre: set_missing_ref_details(force=True) overwrites both
+		self.assertNotIn("outstanding_amount", carried)
+		self.assertNotIn("total_amount", carried)
+
+	def test_draft_notice_lists_the_row_that_can_no_longer_be_paid(self):
+		from sf_trading.sf_trading.doctype.payment_advice.payment_advice import PaymentAdvice
+
+		advice = frappe.get_doc({"doctype": "Payment Advice"})
+		advice.docstatus = 0
+		advice._unpayable_orders = [
+			"Row #1: Purchase Order PUR-ORD-2026-00227 is fully billed"
+		]
+		messages = []
+		original = frappe.msgprint
+		frappe.msgprint = lambda msg, **kwargs: messages.append(msg)
+		try:
+			PaymentAdvice.report_payable_changes(advice)
+		finally:
+			frappe.msgprint = original
+
+		self.assertTrue(messages, "a row that went unpayable must be announced")
+		body = frappe.utils.strip_html(messages[0])
+		self.assertIn("can no longer be paid", body)
+		self.assertIn("Row #1", body)
+
+
+class TestOrderReferenceGuard(FrappeTestCase):
+    """order_payment_block against real documents on this site, and the guard it feeds.
+
+    Read-only throughout: nothing is created, and build_payment_entry() is called without
+    insert(), which is exactly the point — the guard has to fire before ERPNext ever sees the
+    Payment Entry.
+    """
+
+    def order(self, **filters):
+        return frappe.db.get_value(
+            "Purchase Order", dict({"docstatus": 1}, **filters),
+            ["name", "supplier", "company", "per_billed"], as_dict=True
+        )
+
+    def test_a_fully_billed_order_is_blocked_and_names_its_invoice(self):
+        from sf_trading.sf_trading.doctype.payment_advice.payment_advice import (
+            get_invoices_against_order,
+            order_payment_block,
+        )
+
+        po = self.order(per_billed=[">=", 100], status=["!=", "Closed"])
+        if not po:
+            self.skipTest("no fully billed Purchase Order on this site")
+
+        block = order_payment_block("Purchase Order", po.name)
+        self.assertIsNotNone(block, "a fully billed order cannot be paid as an order")
+        self.assertEqual(block["reason"], "billed")
+        self.assertEqual(block["invoices"], get_invoices_against_order("Purchase Order", po.name))
+
+    def test_a_partly_billed_order_is_not_blocked(self):
+        """The regression net: ERPNext accepts these, so the guard must stay out of the way."""
+        from sf_trading.sf_trading.doctype.payment_advice.payment_advice import order_payment_block
+
+        po = self.order(per_billed=[">", 0.02], status=["!=", "Closed"])
+        if po and abs(100 - flt(po.per_billed)) <= 0.01:
+            po = None
+        po = po or self.order(per_billed=[">", 0.02])
+        if not po or abs(100 - flt(po.per_billed)) <= 0.01:
+            self.skipTest("no partly billed Purchase Order on this site")
+
+        block = order_payment_block("Purchase Order", po.name)
+        if block:
+            # only legitimately blocked when it is Closed or already fully advanced
+            self.assertIn(block["reason"], ("closed", "advanced"))
+
+    def test_an_unbilled_order_with_something_left_is_not_blocked(self):
+        from sf_trading.sf_trading.doctype.payment_advice.payment_advice import order_payment_block
+
+        po = self.order(per_billed=0, status=["not in", ["Closed", "On Hold"]])
+        if not po:
+            self.skipTest("no unbilled Purchase Order on this site")
+        block = order_payment_block("Purchase Order", po.name)
+        if block:
+            self.assertEqual(block["reason"], "advanced")
+
+    def test_get_reference_details_refuses_a_billed_order_with_the_reason(self):
+        from sf_trading.sf_trading.doctype.payment_advice.payment_advice import get_reference_details
+
+        po = self.order(per_billed=[">=", 100], status=["!=", "Closed"])
+        if not po:
+            self.skipTest("no fully billed Purchase Order on this site")
+
+        with self.assertRaises(frappe.ValidationError) as caught:
+            get_reference_details("Purchase Order", po.name, po.company, "Supplier", po.supplier)
+        text = frappe.utils.strip_html(str(caught.exception))
+        self.assertIn(po.name, text)
+        self.assertNotIn("fully paid", text)
+
+    def test_build_payment_entry_refuses_before_erpnext_does(self):
+        """The PA-26-0048 reproduction: an advice on an order that has since been billed."""
+        from sf_trading.sf_trading.doctype.payment_advice.payment_advice import build_payment_entry
+
+        row = frappe.db.sql(
+            """select r.parent from `tabPayment Advice Reference` r
+               join `tabPurchase Order` po on po.name = r.reference_record
+               join `tabPayment Advice` pa on pa.name = r.parent
+               where r.reference_doctype = 'Purchase Order' and pa.docstatus = 1
+                 and coalesce(pa.payment_entry, '') = '' and abs(100 - po.per_billed) <= 0.01
+               limit 1""",
+            as_dict=True,
+        )
+        if not row:
+            self.skipTest("no submitted advice pointing at a fully billed order on this site")
+
+        advice = frappe.get_doc("Payment Advice", row[0].parent)
+        before = frappe.db.count("Payment Entry")
+        with self.assertRaises(frappe.ValidationError) as caught:
+            build_payment_entry(advice)
+        text = frappe.utils.strip_html(str(caught.exception))
+        self.assertIn("fully billed", text)
+        self.assertNotIn("fully paid", text)
+        # the guard has to beat pe.insert(), or a Payment Entry exists by the time it throws
+        self.assertEqual(frappe.db.count("Payment Entry"), before)
+
+    def test_an_invoice_reference_still_builds_its_row(self):
+        from sf_trading.sf_trading.doctype.payment_advice.payment_advice import build_payment_entry
+
+        row = frappe.db.sql(
+            """select r.parent, r.reference_record from `tabPayment Advice Reference` r
+               join `tabPurchase Invoice` pi on pi.name = r.reference_record
+               join `tabPayment Advice` pa on pa.name = r.parent
+               where r.reference_doctype = 'Purchase Invoice' and pa.docstatus = 1
+                 and r.allocated_amount > 0 and pi.outstanding_amount > 0
+               limit 1""",
+            as_dict=True,
+        )
+        if not row:
+            self.skipTest("no submitted advice against an outstanding Purchase Invoice")
+
+        advice = frappe.get_doc("Payment Advice", row[0].parent)
+        pe = build_payment_entry(advice)
+        self.assertTrue(pe.references)
+        self.assertIn(row[0].reference_record, [r.reference_name for r in pe.references])
+        self.assertTrue(all(r.reference_doctype for r in pe.references))
+        self.assertFalse(pe.get("name") and frappe.db.exists("Payment Entry", pe.name))

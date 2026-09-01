@@ -47,6 +47,19 @@ frappe.ui.form.on("Payment Advice", {
 			// Payment Request selector
 			if (["Sales Order", "Purchase Order"].includes(row.reference_doctype)) {
 				filters.status = ["not in", ["Closed", "Completed"]];
+				// Status alone is not enough: a fully billed order that has not been received
+				// still reads "To Receive" — 18 of them on production — and ERPNext refuses a
+				// payment against any billed order. Same test the Create Payment Advice button
+				// on the order form already applies.
+				filters.per_billed = ["<", 100];
+			}
+
+			// an invoice with nothing outstanding, a debit note, or an invoice on hold cannot be
+			// paid, so it should not be offered
+			if (["Sales Invoice", "Purchase Invoice"].includes(row.reference_doctype)) {
+				filters.outstanding_amount = [">", 0];
+				filters.is_return = 0;
+				if (row.reference_doctype === "Purchase Invoice") filters.on_hold = 0;
 			}
 
 			return { filters };

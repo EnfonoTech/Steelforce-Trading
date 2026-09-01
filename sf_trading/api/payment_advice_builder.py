@@ -27,11 +27,13 @@ from frappe import _
 from frappe.utils import add_days, cint, flt, getdate, nowdate
 
 from sf_trading.sf_trading.doctype.payment_advice.payment_advice import (
+    ORDER_DOCTYPES,
     PARTY_TYPES,
     PAY_PARTY_TYPES,
     RECEIVE_PARTY_TYPES,
     get_party_account,
     get_reference_amounts,
+    order_payment_block,
     shape_reference_rows,
 )
 
@@ -490,7 +492,7 @@ def create_advices_from_documents(documents, options=None):
         frappe.throw(_("Select documents of a single company."))
 
     already = _already_advised([r.name for r in rows])
-    skipped_advised, skipped_nothing_due = [], []
+    skipped_advised, skipped_nothing_due, skipped_billed = [], [], []
 
     today = getdate(nowdate())
     grouped = {}
@@ -502,6 +504,12 @@ def create_advices_from_documents(documents, options=None):
         total, payable = get_reference_amounts(doctype, row.name, meta)
         if payable <= 0:
             skipped_nothing_due.append(row.name)
+            continue
+
+        # an order that is already billed cannot be paid as an order — skipped rather than
+        # refused, because one such order must not kill a batch of twenty
+        if doctype in ORDER_DOCTYPES and order_payment_block(doctype, row.name):
+            skipped_billed.append(row.name)
             continue
 
         due = row.get("due_date") or row.get("schedule_date") or row.get("posting_date") or row.get("transaction_date")
@@ -526,6 +534,10 @@ def create_advices_from_documents(documents, options=None):
             reasons.append(_("already on a live advice: %s") % ", ".join(skipped_advised))
         if skipped_nothing_due:
             reasons.append(_("nothing left to pay: %s") % ", ".join(skipped_nothing_due))
+        if skipped_billed:
+            reasons.append(
+                _("already billed, pay the invoice instead: %s") % ", ".join(skipped_billed)
+            )
         frappe.throw(_("No advice could be raised — %s") % "; ".join(reasons or [_("no payable documents")]))
 
     options.update({"company": companies.pop() if companies else options.get("company"),
@@ -535,6 +547,7 @@ def create_advices_from_documents(documents, options=None):
     )
     result["skipped_already_advised"] = skipped_advised
     result["skipped_nothing_due"] = skipped_nothing_due
+    result["skipped_billed"] = skipped_billed
     return result
 
 
