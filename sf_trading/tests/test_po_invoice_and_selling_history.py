@@ -8,7 +8,7 @@ from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_days, add_months, flt, nowdate
 
 from sf_trading.api.purchase_order_invoice import make_purchase_invoice, set_update_stock
-from sf_trading.api.selling_history import get_selling_history
+from sf_trading.api.selling_history import _branches_to_read, get_selling_history
 from sf_trading.tests.test_open_items import CUSTOMER, SUPPLIER, TestOpenItems
 
 
@@ -113,6 +113,57 @@ class TestPurchaseInvoiceUpdateStock(FrappeTestCase):
 		pi = make_purchase_invoice(po.name)
 		self.assertFalse(set_update_stock(pi), "already ticked; nothing left to do")
 
+	def test_a_closed_order_is_refused(self):
+		"""A ticked invoice reaches update_ordered_and_reserved_qty, which throws on a Closed order.
+
+		Without this gate the box would be ticked for the buyer and the invoice would then refuse
+		to submit -- a document that works today breaking because of a default nobody asked for.
+		"""
+		po = self.make_order()
+		po.update_status("Closed")
+
+		pi = make_purchase_invoice(po.name)
+		self.assertEqual(int(pi.update_stock or 0), 0)
+		po.update_status("Submitted")
+
+	def test_an_order_already_part_received_is_refused(self):
+		"""per_received moves for a receipt AND for an earlier ticked invoice; only it sees both."""
+		po = self.make_order()
+		frappe.db.set_value("Purchase Order", po.name, "per_received", 40)
+
+		pi = make_purchase_invoice(po.name)
+		self.assertEqual(int(pi.update_stock or 0), 0, "some of these goods are already in stock")
+
+	def test_a_drop_ship_row_is_refused(self):
+		"""The goods never enter a warehouse, and no receipt will ever arrive to stop the tick."""
+		po = self.make_order()
+		pi = make_purchase_invoice(po.name)
+		pi.update_stock = 0
+		for row in pi.items:
+			row.delivered_by_supplier = 1
+
+		self.assertFalse(set_update_stock(pi))
+		self.assertEqual(int(pi.update_stock or 0), 0)
+
+	def test_a_batch_tracked_item_is_refused(self):
+		"""A ticked invoice demands a Serial and Batch Bundle nobody entered."""
+		from erpnext.stock.doctype.item.test_item import make_item
+
+		tracked = make_item(
+			"SF Test Batched Item",
+			properties={
+				"is_stock_item": 1,
+				"item_group": "Products",
+				"stock_uom": "Nos",
+				"has_batch_no": 1,
+				"create_new_batch": 1,
+				"batch_number_series": "SFTB-.####",
+			},
+		).name
+		po = self.make_order(item_code=tracked, qty=2, rate=10)
+		pi = make_purchase_invoice(po.name)
+		self.assertEqual(int(pi.update_stock or 0), 0)
+
 	def test_an_invoice_naming_no_order_is_untouched(self):
 		pi = frappe.get_doc(
 			{
@@ -159,7 +210,7 @@ class TestSellingHistory(FrappeTestCase):
 		cls.cost_center = TestOpenItems.cost_center
 		cls.item_code = TestOpenItems.item_code
 
-	def sell(self, qty=2, rate=150, customer=CUSTOMER):
+	def sell(self, qty=2, rate=150, customer=CUSTOMER, item_code=None):
 		si = frappe.get_doc(
 			{
 				"doctype": "Sales Invoice",
@@ -168,7 +219,7 @@ class TestSellingHistory(FrappeTestCase):
 				"cost_center": self.cost_center,
 				"items": [
 					{
-						"item_code": self.item_code,
+						"item_code": item_code or self.item_code,
 						"qty": qty,
 						"rate": rate,
 						"warehouse": TestOpenItems.warehouse,
@@ -267,6 +318,64 @@ class TestSellingHistory(FrappeTestCase):
 		self.assertEqual(
 			get_selling_history(items=[], company=self.company)["currency"], company_currency
 		)
+
+	def test_every_item_gets_its_own_share_of_the_limit(self):
+		"""A flat limit lets the busiest item eat it and reports the quiet one as never sold."""
+		from erpnext.stock.doctype.item.test_item import make_item
+
+		# non-stock on purpose: this site's invoices post stock, and the point being tested is the
+		# per-item share of the limit, not whether a brand-new item has any
+		quiet = make_item(
+			"SF Test Quiet Item",
+			properties={"is_stock_item": 0, "item_group": "Products", "stock_uom": "Nos"},
+		).name
+		for _ in range(3):
+			self.sell(qty=1, rate=100)
+		self.sell(qty=1, rate=90, item_code=quiet)
+
+		data = get_selling_history(
+			items=[self.item_code, quiet], company=self.company, limit=200
+		)
+		codes = {row["item_code"] for row in data["rows"]}
+		self.assertIn(quiet, codes, "the quiet item must not be crowded out")
+		self.assertIn(self.item_code, codes)
+		self.assertGreaterEqual(data["filters"]["rows_per_item"], 10)
+
+	def test_a_free_line_is_not_a_price(self):
+		"""A zero rate is a sample, not a price, and one of them drags Lowest down to nothing.
+
+		The row is zeroed after submit because Selling Settings on this site refuses to submit a
+		rate below valuation; what is under test is the query, not how the row came to be free.
+		"""
+		si = self.sell(qty=1, rate=150)
+		frappe.db.set_value("Sales Invoice Item", si.items[0].name, "rate", 0)
+
+		data = get_selling_history(items=[self.item_code], company=self.company)
+		self.assertFalse([row for row in data["rows"] if row["invoice"] == si.name])
+
+	def test_the_newest_sale_of_the_day_is_the_last_rate(self):
+		"""Two invoices on one date: posting_time decides, not the order rows came back in."""
+		early = self.sell(qty=1, rate=111)
+		frappe.db.set_value("Sales Invoice", early.name, "posting_time", "01:00:00")
+		late = self.sell(qty=1, rate=222)
+		frappe.db.set_value("Sales Invoice", late.name, "posting_time", "23:00:00")
+
+		data = get_selling_history(items=[self.item_code], company=self.company)
+		mine = [row for row in data["rows"] if row["invoice"] in (early.name, late.name)]
+		self.assertEqual(mine[0]["invoice"], late.name, "the later invoice is reported first")
+
+	def test_a_branch_outside_a_users_permissions_is_refused(self):
+		"""frappe.qb applies no User Permissions; without this gate any branch could be named."""
+		with self.assertRaises(frappe.PermissionError):
+			_branches_to_read("Some Other Branch - X", 0, ["Only Mine - Y"])
+
+		self.assertEqual(
+			_branches_to_read(None, 1, ["Only Mine - Y"]),
+			["Only Mine - Y"],
+			"All Branches widens as far as the permissions reach, and no further",
+		)
+		self.assertIsNone(_branches_to_read(None, 1, None), "an unrestricted user sees every branch")
+		self.assertEqual(_branches_to_read("A Branch - Z", 0, None), ["A Branch - Z"])
 
 	def test_no_items_asks_nothing_of_the_database(self):
 		self.assertEqual(get_selling_history(items=[], company=self.company)["rows"], [])

@@ -17,7 +17,23 @@ sf_trading.add_selling_history_button = function (frm) {
 	let $toolbar = grid.wrapper.find(".grid-buttons");
 	if (!$toolbar.length) $toolbar = grid.wrapper.find(".grid-footer .grid-buttons");
 	if (!$toolbar.length) return;
-	if ($toolbar.find("button:contains('Selling History')").length > 0) return;
+	// Third, after BOTH siblings, so the three read left to right in the order a buyer uses them:
+	// what we hold, what we paid, what we sell it for. Stock Availability and Last Purchase Rate
+	// both insert themselves after Add Multiple at 800ms, which reverses their order, so anchoring
+	// on Stock Availability alone lands this button second. A button already placed is moved
+	// rather than left where it was, because the sibling it belongs after may arrive later.
+	const $lpr = $toolbar.find("button:contains('Last Purchase Rate')").last();
+	let $after = $lpr;
+	if (!$after.length) $after = $toolbar.find("button:contains('Stock Availability')").last();
+	if (!$after.length) $after = $toolbar.find("button:contains('Add Multiple')").last();
+	if (!$after.length) $after = $toolbar.find("button:contains('Add Row')").last();
+	const placeable = $after.length && $after.parent().is($toolbar);
+
+	const $existing = $toolbar.find("button:contains('Selling History')").last();
+	if ($existing.length) {
+		if (placeable && !$existing.prev().is($after)) $existing.insertAfter($after);
+		return;
+	}
 
 	const btn = $(
 		`<button type="button" class="btn btn-secondary btn-xs" style="margin-left: 10px;">${__(
@@ -28,10 +44,7 @@ sf_trading.add_selling_history_button = function (frm) {
 		sf_trading.open_selling_history_dialog(frm);
 	});
 
-	// after Stock Availability when it is there, so the three read left to right in the order a
-	// buyer uses them: what we hold, what we paid, what we sell it for
-	const $after = $toolbar.find("button:contains('Stock Availability')").last();
-	if ($after.length && $after.parent().is($toolbar)) btn.insertAfter($after);
+	if (placeable) btn.insertAfter($after);
 	else $toolbar.append(btn);
 };
 
@@ -216,9 +229,13 @@ frappe.ui.form.on("Purchase Order", {
 			if (frm.fields_dict.items && frm.fields_dict.items.grid) {
 				sf_trading.add_selling_history_button(frm);
 				const $toolbar = frm.fields_dict.items.grid.wrapper.find(".grid-buttons");
-				if ($toolbar.find("button:contains('Selling History')").length > 0) return;
+				const placed = $toolbar.find("button:contains('Selling History')").length > 0;
+				// keep going until the sibling this one sits after has arrived too, otherwise the
+				// button stops in second place the moment it exists
+				const sibling = $toolbar.find("button:contains('Last Purchase Rate')").length > 0;
+				if (placed && sibling) return;
 			}
-			if (attempts < 8) setTimeout(tryAdd, 400);
+			if (attempts < 10) setTimeout(tryAdd, 400);
 		};
 		setTimeout(tryAdd, 900);
 	},
