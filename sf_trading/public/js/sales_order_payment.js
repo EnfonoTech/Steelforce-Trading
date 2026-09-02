@@ -24,7 +24,9 @@
 frappe.ui.form.on("Sales Order", {
 	refresh(frm) {
 		if (frm.doc.docstatus !== 1) return;
-		if (frm.doc.status === "Closed") return;
+		// the server refuses both (api/sales_order_payment.py), so offering the dialog on an
+		// On Hold order only collects keystrokes it is going to throw away
+		if (frm.doc.status === "Closed" || frm.doc.status === "On Hold") return;
 
 		// advance_paid is hidden on this site's Sales Order form, so the button is the only
 		// place the balance is visible — always offer it and let the dialog say "nothing left".
@@ -395,7 +397,11 @@ function sf_trading_render_so_dialog(frm, state) {
 				.find("input")
 				.off("click.sf_so_fill")
 				.on("click.sf_so_fill", function () {
-					let other = 0;
+					// the loyalty is part of what is already allocated. Without counting it,
+					// typing Loyalty and then clicking an amount box fills the WHOLE balance,
+					// and the collection is refused for exceeding it with nothing on screen to
+					// explain why. sales_invoice.js sums it the same way.
+					let other = allow_write_off ? flt(d.get_value("write_off")) || 0 : 0;
 					all_fns.forEach(function (ofn, oi) {
 						if (oi !== idx) other += flt(d.get_value(ofn)) || 0;
 					});

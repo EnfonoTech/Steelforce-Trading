@@ -178,13 +178,47 @@ def create_payments_for_sales_order(
 		company_defaults = frappe.get_cached_value(
 			"Company",
 			so.company,
-			["write_off_account", "custom_max_payment_write_off", "cost_center"],
+			["write_off_account", "custom_max_payment_write_off", "cost_center", "default_currency"],
 			as_dict=True,
 		) or frappe._dict()
+		company_currency = company_defaults.get("default_currency")
+
+		# A deduction row is ALWAYS in company currency -- `Payment Entry Deduction.amount`
+		# carries options "Company:company:default_currency" -- while the allocation is in the
+		# party account's. On a foreign-currency order `paid_amount = allocated - write_off`
+		# cannot satisfy the base-currency identity ERPNext checks, and the entry dies inside
+		# submit() on "Difference Amount must be zero" (payment_entry.py:119) -- by which time
+		# an earlier mode of the same collection has already posted. Refused up front instead.
+		if company_currency and so.currency != company_currency:
+			frappe.throw(
+				_("Loyalty is only available on an order in {0}. Order {1} is in {2}.").format(
+					company_currency, so.name, so.currency
+				)
+			)
+
+		# Loyalty is for the last fils of an order nobody has billed yet. Once billing has
+		# started the receivable exists, and that is where the invoice popup's own Loyalty
+		# belongs -- forgiving fils here would leave an advance only a future invoice can use.
+		if flt(so.get("per_billed")) > 0.01:
+			frappe.throw(
+				_("Order {0} is already {1}% billed. Take the loyalty on the invoice instead.").format(
+					so.name, flt(so.per_billed, 2)
+				)
+			)
 
 		write_off_account = company_defaults.get("write_off_account")
 		if not write_off_account:
 			frappe.throw(_("Set 'Write Off Account' on company {0}.").format(so.company))
+
+		# ERPNext builds the deduction's GL row inside submit() and throws
+		# "Currency for {0} must be {1}" there. Same check, before anything is created.
+		account_currency = frappe.get_cached_value("Account", write_off_account, "account_currency")
+		if company_currency and account_currency and account_currency != company_currency:
+			frappe.throw(
+				_("Write Off Account {0} must be in {1} to be used as Loyalty.").format(
+					write_off_account, company_currency
+				)
+			)
 
 		max_write_off = flt(company_defaults.get("custom_max_payment_write_off"))
 		if not max_write_off:

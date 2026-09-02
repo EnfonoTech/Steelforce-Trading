@@ -142,6 +142,41 @@ class TestSalesOrderLoyalty(FrappeTestCase):
 			self.collect(so, cash=99.7, loyalty=0.3)
 		self.assertIn("Max Payment Write Off", frappe.utils.strip_html(str(caught.exception)))
 
+	def test_loyalty_is_refused_on_a_foreign_currency_order(self):
+		"""A deduction is always in company currency; the identity cannot close otherwise."""
+		other = frappe.db.get_value(
+			"Currency", {"name": ["!=", frappe.db.get_value("Company", self.company, "default_currency")],
+			             "enabled": 1}, "name"
+		)
+		if not other:
+			self.skipTest("no second enabled currency on this site")
+
+		so = self.make_order(qty=1, rate=100)
+		frappe.db.set_value("Sales Order", so.name, "currency", other)
+		before = frappe.db.count("Payment Entry")
+		with self.assertRaises(frappe.ValidationError) as caught:
+			self.collect(so, cash=99.7, loyalty=0.3)
+		self.assertIn("only available on an order in", frappe.utils.strip_html(str(caught.exception)))
+		self.assertEqual(frappe.db.count("Payment Entry"), before)
+
+	def test_loyalty_is_refused_once_billing_has_started(self):
+		from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+
+		so = self.make_order(qty=2, rate=50)
+		si = make_sales_invoice(so.name)
+		si.items[0].qty = 1
+		TestOpenItems.fill_site_mandatories(si)
+		si.insert()
+		si.submit()
+		so.reload()
+		if flt(so.per_billed) <= 0.01:
+			self.skipTest("the invoice did not register against the order on this site")
+
+		with self.assertRaises(frappe.ValidationError) as caught:
+			self.collect(so, cash=flt(so.grand_total) - flt(so.advance_paid) - 0.3, loyalty=0.3)
+		self.assertIn("Take the loyalty on the invoice instead",
+		              frappe.utils.strip_html(str(caught.exception)))
+
 	# ── the happy path ───────────────────────────────────────────────────────────
 	def test_loyalty_closes_the_order_and_books_the_difference(self):
 		so = self.make_order(qty=1, rate=100)
