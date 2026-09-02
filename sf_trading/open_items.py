@@ -563,8 +563,8 @@ def fold_to_documents(rows, document_doctype, status_field="status", total_field
 		for fieldname in MATCHED_FIELDNAMES:
 			if fieldname in entry:
 				entry[fieldname] = flt(entry[fieldname], QTY_PRECISION)
-		if "_remarks" in entry:
-			entry.remarks = "; ".join(entry.pop("_remarks"))
+		# always a string, never absent: a missing key renders as "None" in the grid
+		entry.remarks = "; ".join(entry.pop("_remarks", []) or [])
 
 	return sorted(per_document.values(), key=lambda row: (getdate(row.posting_date), row.document))
 
