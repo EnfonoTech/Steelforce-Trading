@@ -1257,6 +1257,15 @@ class TestOpenItems(FrappeTestCase):
 				],
 			}
 		)
+		# this site makes the salesman mandatory on an order (sf_trading custom field), and a
+		# fixture that ignores a client's own mandatory fields cannot run on the client's site
+		if frappe.get_meta("Sales Order").get_field("custom_sales_person"):
+			person = frappe.db.get_value(
+				"Sales Person", {"enabled": 1, "is_group": 0}, "name"
+			)
+			if person:
+				so.custom_sales_person = person
+
 		so.insert()
 		so.submit()
 		return so
