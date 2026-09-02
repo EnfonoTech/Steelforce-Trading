@@ -21,7 +21,7 @@ from sf_trading.api.sales_order_payment import (
 	create_payments_for_sales_order,
 	get_sales_order_payment_state,
 )
-from sf_trading.tests.test_open_items import CUSTOMER, TestOpenItems
+from sf_trading.tests.test_open_items import CUSTOMER, OTHER_CUSTOMER, TestOpenItems
 
 COMPANY = None  # resolved in setUpClass from the same test company the family uses
 
@@ -265,14 +265,19 @@ class TestSalesOrderLoyalty(FrappeTestCase):
 		self.assertEqual(frappe.db.count("Payment Entry"), before)
 
 	def test_an_invoice_with_no_order_still_offers_loyalty(self):
-		"""The regression net: 3,462 of 3,469 invoices on production name no order."""
+		"""The regression net: 3,462 of 3,469 invoices on production name no order.
+
+		Raised for OTHER_CUSTOMER on purpose. The advance guard is scoped to the customer, and
+		FrappeTestCase rolls back per CLASS rather than per test, so a customer used by an
+		earlier test in this class is still holding that test's unapplied advance.
+		"""
 		from sf_trading.api.sales_invoice_payment import get_loyalty_state, loyalty_already_given
 
 		si = frappe.get_doc(
 			{
 				"doctype": "Sales Invoice",
 				"company": self.company,
-				"customer": CUSTOMER,
+				"customer": OTHER_CUSTOMER,
 				"cost_center": self.cost_center,
 				"items": [
 					{
