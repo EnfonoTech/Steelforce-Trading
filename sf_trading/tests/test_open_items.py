@@ -40,8 +40,12 @@ class TestOpenItems(FrappeTestCase):
 		from erpnext.stock.doctype.item.test_item import make_item
 		from erpnext.stock.doctype.stock_entry.test_stock_entry import make_stock_entry
 
+		# stock_uom is spelled out rather than left to the doctype default: on a site whose
+		# Item defaults were cleared (steelforce and its UAT copy), make_item cannot insert
+		# without it and the whole suite dies in setUpClass
 		item_code = make_item(
-			"Open Items Test Item", properties={"is_stock_item": 1, "item_group": "Products"}
+			"Open Items Test Item",
+			properties={"is_stock_item": 1, "item_group": "Products", "stock_uom": "Nos"},
 		).name
 		make_stock_entry(
 			item_code=item_code, target=cls.warehouse, qty=500, basic_rate=100, company=COMPANY
