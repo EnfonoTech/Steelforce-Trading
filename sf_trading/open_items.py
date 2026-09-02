@@ -28,8 +28,8 @@ Used by the four Script Reports in sf_trading/report/:
 
 import frappe
 from frappe import _
-from frappe.query_builder.functions import Sum
-from frappe.utils import cint, date_diff, flt, getdate, nowdate
+from frappe.query_builder.functions import Count, Sum
+from frappe.utils import cint, date_diff, flt, fmt_money, getdate, nowdate
 
 QTY_PRECISION = 3
 
@@ -135,6 +135,16 @@ def matched_qty_map(child_doctype, parent_doctype, link_field, as_on, is_return=
 	return {row.link: flt(row.qty) for row in query.run(as_dict=True)}
 
 
+# The field that dates a source document. An order is dated by when it was placed;
+# every other document these reports read has a posting date. Both are reported under
+# `posting_date` so one set of columns, filters and ageing serves them all.
+PARENT_DATE_FIELD = {"Sales Order": "transaction_date", "Purchase Order": "transaction_date"}
+
+
+def parent_date_field(parent_doctype: str) -> str:
+	return PARENT_DATE_FIELD.get(parent_doctype, "posting_date")
+
+
 # Which User Permission narrows which column. Branch lives on the parent; cost
 # center and warehouse are read off the row, which is what these reports display.
 PERMISSION_COLUMNS = (
@@ -193,6 +203,7 @@ def base_rows(parent_doctype, party_field, filters, extra_conditions=None):
 	child = frappe.qb.DocType(parent_doctype + " Item")
 	item = frappe.qb.DocType("Item")
 	as_on = as_on_date(filters)
+	dated = parent[parent_date_field(parent_doctype)]
 
 	query = (
 		frappe.qb.from_(parent)
@@ -202,7 +213,7 @@ def base_rows(parent_doctype, party_field, filters, extra_conditions=None):
 		.on(item.name == child.item_code)
 		.select(
 			parent.name.as_("document"),
-			parent.posting_date,
+			dated.as_("posting_date"),
 			parent[party_field].as_("party"),
 			parent[party_field + "_name"].as_("party_name"),
 			parent.company,
@@ -219,22 +230,27 @@ def base_rows(parent_doctype, party_field, filters, extra_conditions=None):
 		)
 		.where(
 			(parent.docstatus == 1)
-			& (parent.is_return == 0)
 			& (parent.company == filters.get("company"))
-			& (parent.posting_date <= as_on)
+			& (dated <= as_on)
 			& (child.qty > 0)
 		)
-		.orderby(parent.posting_date)
+		.orderby(dated)
 		.orderby(parent.name)
 	)
+
+	# An order has no return of its own -- goods go back against the delivery or the invoice
+	# raised from it -- so the field is absent on Sales Order and Purchase Order and asking for
+	# it there is a 1054, not a filter.
+	if frappe.get_meta(parent_doctype).get_field("is_return"):
+		query = query.where(parent.is_return == 0)
 
 	query = apply_user_permissions(query, parent, child, parent_doctype)
 
 	from_date, to_date = posting_range(filters)
 	if from_date:
-		query = query.where(parent.posting_date >= from_date)
+		query = query.where(dated >= from_date)
 	if to_date:
-		query = query.where(parent.posting_date <= to_date)
+		query = query.where(dated <= to_date)
 
 	if not includes_non_stock(filters):
 		query = query.where(item.is_stock_item == 1)
@@ -437,6 +453,195 @@ def pending_delivery_columns():
 	]
 
 
+# ---------------------------------------------------------------------------
+# item rows or document rows — the same answer, folded two ways
+# ---------------------------------------------------------------------------
+
+VIEW_ITEMS = "Item Rows"
+VIEW_DOCUMENTS = "Document Rows"
+
+
+def resolve_view(filters):
+	"""Which shape the reader asked for, defaulting to the item rows these reports began as.
+
+	A Select and never a Check, for the reason `purchase_register_extended.resolve_scope`
+	records: `query_report.js` collects filter values with `.filter((f) => f.get_value())`, so a
+	Check the reader has just UNTICKED is falsy, never reaches the server, and is
+	indistinguishable there from "not supplied" — the view could be switched on and never off.
+
+	Defaulting to VIEW_ITEMS matters beyond taste: the four Number Cards on the Open Items
+	workspace call these reports with `{"company": ..., "range": ...}` and no view at all, so the
+	default is what they get. Their totals must not move because a filter was added — and they
+	do not, because folding sums the very rows the item view prints.
+	"""
+	view = filters.get("view")
+	return view if view in (VIEW_ITEMS, VIEW_DOCUMENTS) else VIEW_ITEMS
+
+
+def shows_documents(filters) -> bool:
+	return resolve_view(filters) == VIEW_DOCUMENTS
+
+
+# what each flow's matched quantity is called, so a folded row can name it the same way the
+# item rows do
+MATCHED_FIELDNAMES = ("delivered_qty", "billed_qty", "received_qty", "returned_qty")
+
+
+def fold_to_documents(rows, document_doctype, status_field="status", total_field=None):
+	"""One row per source document, summed from the item rows the detail view prints.
+
+	Aggregated from the flow's own output rather than re-derived, exactly as
+	`invoices_pending_delivery` has always done it: a second query path drifts, and returns are
+	already netted here in the way each flow decided to net them.
+
+	`total_field` is the document's own total, read once for every document on the page rather
+	than once per row. Left as None it is skipped, for a doctype where the figure would mean
+	nothing.
+	"""
+	if not rows:
+		return []
+
+	per_document = {}
+	for row in rows:
+		entry = per_document.get(row.document)
+		if entry is None:
+			entry = per_document[row.document] = frappe._dict(
+				{
+					"document": row.document,
+					"posting_date": row.posting_date,
+					"party": row.party,
+					"party_name": row.party_name,
+					"company": row.company,
+					"cost_center": row.cost_center,
+					"items_pending": 0,
+					"pending_qty": 0.0,
+					"pending_amount": 0.0,
+					"age": row.age,
+					"bucket": row.bucket,
+				}
+			)
+			for fieldname in MATCHED_FIELDNAMES:
+				if fieldname in row:
+					entry[fieldname] = 0.0
+
+		entry.items_pending += 1
+		entry.pending_qty += flt(row.pending_qty)
+		entry.pending_amount += flt(row.pending_amount)
+		# a flow that explains its rows keeps explaining them when they are folded; the same
+		# sentence about the order itself would otherwise be repeated once per line
+		if row.get("remarks"):
+			said = entry.setdefault("_remarks", [])
+			for sentence in str(row.remarks).split("; "):
+				if sentence and sentence not in said:
+					said.append(sentence)
+		for fieldname in MATCHED_FIELDNAMES:
+			if fieldname in row:
+				entry[fieldname] = flt(entry.get(fieldname)) + flt(row.get(fieldname))
+		# the oldest line is what the document has been waiting for
+		if flt(row.age) > flt(entry.age):
+			entry.age = row.age
+			entry.bucket = row.bucket
+
+	wanted = ["name", status_field] if status_field else ["name"]
+	if total_field:
+		wanted.append(total_field)
+	heads = {
+		head.name: head
+		for head in frappe.get_all(
+			document_doctype, filters={"name": ["in", list(per_document)]}, fields=wanted
+		)
+	}
+
+	for name, entry in per_document.items():
+		head = heads.get(name) or frappe._dict()
+		if status_field:
+			entry.status = head.get(status_field)
+		if total_field:
+			entry.document_total = flt(head.get(total_field))
+		entry.pending_qty = flt(entry.pending_qty, QTY_PRECISION)
+		entry.pending_amount = flt(entry.pending_amount, 2)
+		for fieldname in MATCHED_FIELDNAMES:
+			if fieldname in entry:
+				entry[fieldname] = flt(entry[fieldname], QTY_PRECISION)
+		if "_remarks" in entry:
+			entry.remarks = "; ".join(entry.pop("_remarks"))
+
+	return sorted(per_document.values(), key=lambda row: (getdate(row.posting_date), row.document))
+
+
+def document_columns(document_doctype, party_doctype, matched_fieldname=None, matched_label=None,
+                     total_label=None):
+	"""Columns for the folded view: the document, who it is with, and what is still open.
+
+	Deliberately the same fieldnames as the item view — `pending_qty`, `pending_amount`, `age`,
+	`bucket` — so a Number Card, an export or a saved filter reads the same key whichever view
+	produced the page.
+	"""
+	columns = [
+		{
+			"label": _(document_doctype),
+			"fieldname": "document",
+			"fieldtype": "Link",
+			"options": document_doctype,
+			"width": 170,
+		},
+		{"label": _("Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 95},
+		{
+			"label": _(party_doctype),
+			"fieldname": "party",
+			"fieldtype": "Link",
+			"options": party_doctype,
+			"width": 140,
+		},
+		{"label": _(party_doctype + " Name"), "fieldname": "party_name", "fieldtype": "Data", "width": 190},
+		{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 120},
+		{
+			# a Link, because that is what lets a User Permission on Cost Center narrow this
+			# report to a branch
+			"label": _("Branch (Cost Center)"),
+			"fieldname": "cost_center",
+			"fieldtype": "Link",
+			"options": "Cost Center",
+			"width": 130,
+		},
+		{"label": _("Items Pending"), "fieldname": "items_pending", "fieldtype": "Int", "width": 105},
+		{"label": _("Pending Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 105},
+	]
+
+	if matched_fieldname:
+		columns.append(
+			{"label": matched_label, "fieldname": matched_fieldname, "fieldtype": "Float", "width": 110}
+		)
+
+	columns += [
+		{"label": _("Returned Qty"), "fieldname": "returned_qty", "fieldtype": "Float", "width": 110},
+		{
+			"label": _("Pending Amount"),
+			"fieldname": "pending_amount",
+			"fieldtype": "Currency",
+			"options": "Company:company:default_currency",
+			"width": 130,
+		},
+	]
+
+	if total_label:
+		columns.append(
+			{
+				"label": total_label,
+				"fieldname": "document_total",
+				"fieldtype": "Currency",
+				"options": "Company:company:default_currency",
+				"width": 120,
+			}
+		)
+
+	columns += [
+		{"label": _("Age (Days)"), "fieldname": "age", "fieldtype": "Int", "width": 85},
+		{"label": _("Ageing Bucket"), "fieldname": "bucket", "fieldtype": "Data", "width": 95},
+	]
+	return columns
+
+
 def includes_non_stock(filters) -> bool:
 	"""Whether rows for items that are not stock items belong in the answer.
 
@@ -523,6 +728,149 @@ def received_items_pending_billing(filters):
 	)
 
 	return build_open_rows(rows, [billed, returned], ["billed_qty", "returned_qty"], filters)
+
+
+def ordered_items_pending_billing(filters):
+	"""Sales Order rows nobody has invoiced yet.
+
+	The order layer, which this family never covered: its four other flows all start at a
+	delivery or an invoice, so an order that was placed and never billed appeared nowhere. Core
+	had a report for it and deleted it -- `erpnext/patches/v13_0/delete_old_sales_reports.py`
+	drops "Ordered Items To Be Billed" -- leaving only Sales Order Analysis, which carries no
+	branch, no ageing, and lists Completed orders alongside open ones.
+
+	Billing is measured from the invoice rows, not from `Sales Order Item.billed_amt`:
+
+	  * billed_amt is an AMOUNT and this family counts QUANTITY, which is what "how much is
+	    still owed" means when a line was invoiced at a different rate;
+	  * it is denormalised and undated -- `StatusUpdater._update_children` writes it as raw SQL
+	    with no posting date -- while `matched_qty_map` reads the invoice rows themselves, which
+	    is what lets this report be re-run for a closed period and answer the way it answered
+	    then, and what lets a cancelled invoice re-open a line by itself.
+
+	Where the two bases disagree the reader is told, in Remarks, rather than handed a silent
+	winner -- the same call `pending_advance_so` makes about `advance_paid` versus the ledger.
+
+	A credit note carries `so_detail` forward and its rows are negative, so summing every
+	submitted row that points at the order line nets returns without a second pass. The sum is
+	floored at zero before it is handed to `build_open_rows`, which takes `abs()` of whatever it
+	is given: a line whose invoice was cancelled while its credit note still stands nets
+	negative, and the absolute value of that would be subtracted as though it had been billed.
+
+	Closed and On Hold orders are LEFT IN, unlike the four siblings, and the divergence is
+	deliberate: an abandoned order still has goods promised against it and money possibly taken
+	for them, so it is the row most worth seeing. Core refuses an invoice against either, so the
+	Status column is the instruction for the row rather than decoration.
+
+	`delivered_qty` is reported and never subtracted. Goods that left the yard are still
+	unbilled revenue -- that is the point of the report -- and `Delivered Items Pending Billing`
+	counts the same revenue against the Delivery Note instead. An order shipped on a note
+	appears in both. **The two are never added.**
+
+	Service lines are out of scope, inherited from `base_rows`, which asks only about stock
+	items unless a caller widens it. A missing service line here is a scope decision.
+	"""
+	as_on = as_on_date(filters)
+
+	rows = base_rows("Sales Order", "customer", filters)
+
+	invoiced = matched_qty_map("Sales Invoice Item", "Sales Invoice", "so_detail", as_on)
+	credited = matched_qty_map("Sales Invoice Item", "Sales Invoice", "so_detail", as_on, is_return=1)
+	delivered = matched_qty_map("Delivery Note Item", "Delivery Note", "so_detail", as_on)
+
+	billed = {link: max(flt(qty), 0.0) for link, qty in invoiced.items()}
+	open_rows = build_open_rows(rows, [billed], ["billed_qty"], filters)
+	if not open_rows:
+		return []
+
+	annotate_ordered_rows(open_rows, invoiced, credited, delivered, as_on)
+	return open_rows
+
+
+def annotate_ordered_rows(rows, invoiced, credited, delivered, as_on):
+	"""Fill the display-only columns, and say where the order disagrees with the invoices.
+
+	Four reads for the whole page rather than one per row: the order headers, the order rows'
+	own billed figure, and the draft invoices naming them.
+	"""
+	row_names = [row.row_name for row in rows]
+	orders = {
+		head.name: head
+		for head in frappe.get_all(
+			"Sales Order",
+			filters={"name": ["in", list({row.document for row in rows})]},
+			fields=["name", "status", "currency", "conversion_rate", "advance_paid"],
+		)
+	}
+	lines = {
+		line.name: line
+		for line in frappe.get_all(
+			"Sales Order Item", filters={"name": ["in", row_names]}, fields=["name", "billed_amt", "amount"]
+		)
+	}
+
+	child = frappe.qb.DocType("Sales Invoice Item")
+	parent = frappe.qb.DocType("Sales Invoice")
+	draft_counts = {}
+	for record in (
+		frappe.qb.from_(child)
+		.join(parent)
+		.on(parent.name == child.parent)
+		.select(child.so_detail.as_("link"), Count(parent.name.distinct()).as_("drafts"))
+		.where((parent.docstatus == 0) & (child.so_detail.isin(row_names)))
+		.groupby(child.so_detail)
+	).run(as_dict=True):
+		draft_counts[record.link] = cint(record.drafts)
+
+	company_currency = None
+
+	for row in rows:
+		row.delivered_qty = flt(delivered.get(row.row_name, 0), QTY_PRECISION)
+		# display only: the netting already happened inside the invoiced map
+		row.returned_qty = flt(abs(flt(credited.get(row.row_name, 0))), QTY_PRECISION)
+
+		order = orders.get(row.document) or frappe._dict()
+		line = lines.get(row.row_name) or frappe._dict()
+		row.status = order.get("status")
+
+		rate = flt(order.get("conversion_rate")) or 1.0
+		# billed_amt is in the ORDER's currency; every figure printed here is the company's
+		billed_amount = flt(line.get("billed_amt")) * rate
+		ordered_amount = flt(line.get("amount")) * rate
+
+		remarks = []
+		if billed_amount > 0.005 and flt(invoiced.get(row.row_name)) <= 0:
+			remarks.append(
+				_("Order records %s billed on this line but no submitted invoice row names it")
+				% fmt_money(billed_amount)
+			)
+		elif ordered_amount and billed_amount >= ordered_amount - 0.005 and row.pending_qty > 0:
+			remarks.append(
+				_("Order shows this line fully billed by value; %s still uninvoiced by quantity")
+				% row.pending_qty
+			)
+		if flt(invoiced.get(row.row_name)) < 0:
+			remarks.append(_("More was credited than invoiced against this line"))
+		if draft_counts.get(row.row_name):
+			remarks.append(_("%s draft invoice(s) already name this order") % draft_counts[row.row_name])
+		if flt(order.get("advance_paid")) > 0.005:
+			remarks.append(
+				_("Advance of %s already received — see Pending Advance SO")
+				% fmt_money(flt(order.get("advance_paid")))
+			)
+		if order.get("status") in ("Closed", "On Hold"):
+			remarks.append(
+				_("Order is %s — reopen it before an invoice can be raised") % _(order.get("status"))
+			)
+		if company_currency is None:
+			company_currency = frappe.get_cached_value("Company", row.company, "default_currency")
+		if order.get("currency") and order.get("currency") != company_currency:
+			remarks.append(
+				_("Order is in %(currency)s; every amount here is company currency at rate %(rate)s")
+				% {"currency": order.get("currency"), "rate": rate}
+			)
+
+		row.remarks = "; ".join(remarks)
 
 
 def billed_items_pending_receipt(filters):

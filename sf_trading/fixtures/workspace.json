@@ -194,6 +194,7 @@
    {
     "dependencies": "",
     "hidden": 0,
+    "idx": 1,
     "is_query_report": 0,
     "label": "Sales",
     "link_count": 3,
@@ -205,6 +206,7 @@
    {
     "dependencies": "",
     "hidden": 0,
+    "idx": 2,
     "is_query_report": 1,
     "label": "Customer Open Items Summary",
     "link_count": 0,
@@ -216,6 +218,7 @@
    {
     "dependencies": "",
     "hidden": 0,
+    "idx": 3,
     "is_query_report": 1,
     "label": "Invoiced Items To Be Delivered",
     "link_count": 0,
@@ -227,6 +230,7 @@
    {
     "dependencies": "",
     "hidden": 0,
+    "idx": 4,
     "is_query_report": 1,
     "label": "Delivered Items Pending Billing",
     "link_count": 0,
@@ -238,6 +242,19 @@
    {
     "dependencies": "",
     "hidden": 0,
+    "idx": 5,
+    "is_query_report": 1,
+    "label": "Ordered Items Pending Billing",
+    "link_count": 0,
+    "link_to": "Ordered Items Pending Billing",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 6,
     "is_query_report": 1,
     "label": "Pending Advance SO",
     "link_count": 0,
@@ -249,6 +266,7 @@
    {
     "dependencies": "",
     "hidden": 0,
+    "idx": 7,
     "is_query_report": 0,
     "label": "Purchase",
     "link_count": 5,
@@ -260,6 +278,7 @@
    {
     "dependencies": "",
     "hidden": 0,
+    "idx": 8,
     "is_query_report": 1,
     "label": "Supplier Open Items Summary",
     "link_count": 0,
@@ -271,6 +290,7 @@
    {
     "dependencies": "",
     "hidden": 0,
+    "idx": 9,
     "is_query_report": 1,
     "label": "Received Items Pending Billing",
     "link_count": 0,
@@ -282,6 +302,7 @@
    {
     "dependencies": "",
     "hidden": 0,
+    "idx": 10,
     "is_query_report": 1,
     "label": "Billed Items Pending Receipt",
     "link_count": 0,
@@ -293,6 +314,7 @@
    {
     "dependencies": "",
     "hidden": 0,
+    "idx": 11,
     "is_query_report": 1,
     "label": "Purchase Register Extended",
     "link_count": 0,
@@ -304,6 +326,7 @@
    {
     "dependencies": "",
     "hidden": 0,
+    "idx": 12,
     "is_query_report": 1,
     "label": "Pending Advance PO",
     "link_count": 0,

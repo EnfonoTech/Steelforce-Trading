@@ -3,11 +3,27 @@
 
 from frappe import _
 
-from sf_trading.open_items import delivered_items_pending_billing, report_columns
+from sf_trading.open_items import (
+	delivered_items_pending_billing,
+	document_columns,
+	fold_to_documents,
+	report_columns,
+	shows_documents,
+)
 
 
 def execute(filters=None):
 	filters = filters or {}
-	columns = report_columns("Delivery Note", "Customer", "billed_qty", _("Billed Qty"))
-	data = delivered_items_pending_billing(filters)
-	return columns, data
+	rows = delivered_items_pending_billing(filters)
+
+	# Document Rows is the same answer folded, never a second query: the totals a Number Card
+	# reads off the item view are the totals it reads off this one.
+	if shows_documents(filters):
+		return (
+			document_columns(
+				"Delivery Note", "Customer", "billed_qty", _("Billed Qty"), _("Note Total")
+			),
+			fold_to_documents(rows, "Delivery Note", total_field="base_grand_total"),
+		)
+
+	return report_columns("Delivery Note", "Customer", "billed_qty", _("Billed Qty")), rows

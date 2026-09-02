@@ -69,6 +69,19 @@ frappe.query_reports["Delivered Items Pending Billing"] = {
 			},
 		},
 		{
+			// Item Rows or Document Rows — a Select and never a Check, because query_report.js
+			// drops a filter whose value is falsy, so an unticked Check never reaches the server
+			// and the view could be switched on but never off. Default Item Rows: the Open Items
+			// number cards call these reports without a view, and their totals must not move
+			// because a filter was added — folding sums the very rows the item view prints.
+			fieldname: "view",
+			label: __("View"),
+			fieldtype: "Select",
+			options: ["Item Rows", "Document Rows"].join("\n"),
+			default: "Item Rows",
+			reqd: 1,
+		},
+		{
 			fieldname: "range",
 			label: __("Ageing Range"),
 			fieldtype: "Data",

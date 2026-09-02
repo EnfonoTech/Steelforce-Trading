@@ -8,7 +8,7 @@ company, warehouse, items and parties:
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
-from frappe.utils import add_days, nowdate
+from frappe.utils import add_days, flt, getdate, nowdate
 
 from sf_trading.open_items import (
 	ageing_bucket,
@@ -1138,3 +1138,214 @@ class TestOpenItems(FrappeTestCase):
 		# the halves add back to the voucher: neither side is charged twice
 		self.assertAlmostEqual(allocated, 200, places=1)
 		self.assertAlmostEqual(self.register_row(rows, pr.name)["landed_cost_amount"], 120, places=1)
+
+	# ------------------------------------------------------------------
+	# item rows or document rows — the toggle every open-item report now carries
+	# ------------------------------------------------------------------
+
+	def test_the_view_defaults_to_item_rows_and_cannot_be_stuck_on(self):
+		from sf_trading.open_items import VIEW_DOCUMENTS, VIEW_ITEMS, resolve_view, shows_documents
+
+		# the Number Cards call these reports with no view at all
+		self.assertEqual(resolve_view(frappe._dict({"company": COMPANY})), VIEW_ITEMS)
+		self.assertEqual(resolve_view(frappe._dict({"view": ""})), VIEW_ITEMS)
+		self.assertEqual(resolve_view(frappe._dict({"view": "nonsense"})), VIEW_ITEMS)
+		self.assertEqual(resolve_view(frappe._dict({"view": VIEW_DOCUMENTS})), VIEW_DOCUMENTS)
+		self.assertFalse(shows_documents(frappe._dict({})))
+		self.assertTrue(shows_documents(frappe._dict({"view": VIEW_DOCUMENTS})))
+
+	def test_folding_sums_the_item_rows_and_keeps_the_oldest_age(self):
+		from sf_trading.open_items import fold_to_documents
+
+		rows = [
+			frappe._dict(document="DOC-1", posting_date=nowdate(), party=CUSTOMER, party_name=CUSTOMER,
+			             company=COMPANY, cost_center=self.cost_center, pending_qty=2, pending_amount=200,
+			             billed_qty=1, returned_qty=0, age=5, bucket="0-30"),
+			frappe._dict(document="DOC-1", posting_date=nowdate(), party=CUSTOMER, party_name=CUSTOMER,
+			             company=COMPANY, cost_center=self.cost_center, pending_qty=3, pending_amount=300,
+			             billed_qty=2, returned_qty=1, age=40, bucket="31-60"),
+			frappe._dict(document="DOC-2", posting_date=nowdate(), party=CUSTOMER, party_name=CUSTOMER,
+			             company=COMPANY, cost_center=self.cost_center, pending_qty=1, pending_amount=50,
+			             billed_qty=0, returned_qty=0, age=1, bucket="0-30"),
+		]
+		folded = {row.document: row for row in fold_to_documents(rows, "Sales Invoice", status_field=None)}
+
+		self.assertEqual(len(folded), 2)
+		self.assertEqual(folded["DOC-1"].items_pending, 2)
+		self.assertAlmostEqual(folded["DOC-1"].pending_qty, 5, places=3)
+		self.assertAlmostEqual(folded["DOC-1"].pending_amount, 500, places=2)
+		self.assertAlmostEqual(folded["DOC-1"].billed_qty, 3, places=3)
+		self.assertAlmostEqual(folded["DOC-1"].returned_qty, 1, places=3)
+		# the document has been waiting as long as its oldest line
+		self.assertEqual(folded["DOC-1"].age, 40)
+		self.assertEqual(folded["DOC-1"].bucket, "31-60")
+
+	def test_both_views_report_the_same_totals(self):
+		"""The invariant the Open Items number cards depend on."""
+		from sf_trading.open_items import VIEW_DOCUMENTS
+
+		reports = {
+			"Invoiced Items To Be Delivered":
+				"sf_trading.sf_trading.report.invoiced_items_to_be_delivered.invoiced_items_to_be_delivered",
+			"Delivered Items Pending Billing":
+				"sf_trading.sf_trading.report.delivered_items_pending_billing.delivered_items_pending_billing",
+			"Received Items Pending Billing":
+				"sf_trading.sf_trading.report.received_items_pending_billing.received_items_pending_billing",
+			"Billed Items Pending Receipt":
+				"sf_trading.sf_trading.report.billed_items_pending_receipt.billed_items_pending_receipt",
+			"Ordered Items Pending Billing":
+				"sf_trading.sf_trading.report.ordered_items_pending_billing.ordered_items_pending_billing",
+		}
+		self.make_si(qty=3)          # guarantees at least one open row somewhere
+
+		for label, module in reports.items():
+			execute = frappe.get_attr(module + ".execute")
+			item_columns, item_rows = execute(self.filters(company=COMPANY))
+			doc_columns, doc_rows = execute(self.filters(company=COMPANY, view=VIEW_DOCUMENTS))
+
+			item_total = sum(flt(r.get("pending_amount")) for r in item_rows)
+			doc_total = sum(flt(r.get("pending_amount")) for r in doc_rows)
+			self.assertAlmostEqual(item_total, doc_total, places=2, msg=label)
+			self.assertLessEqual(len(doc_rows), len(item_rows), label)
+			# and the two views are genuinely different shapes
+			self.assertNotEqual(
+				[c["fieldname"] for c in item_columns], [c["fieldname"] for c in doc_columns], label
+			)
+			self.assertEqual(doc_columns[0]["fieldname"], "document", label)
+
+	# ------------------------------------------------------------------
+	# Sales Order -> Sales Invoice, the layer the family never covered
+	# ------------------------------------------------------------------
+
+	def make_so(self, qty=4, rate=120, customer=CUSTOMER):
+		so = frappe.get_doc(
+			{
+				"doctype": "Sales Order",
+				"company": COMPANY,
+				"customer": customer,
+				"transaction_date": nowdate(),
+				"delivery_date": add_days(nowdate(), 3),
+				"cost_center": self.cost_center,
+				"items": [
+					{
+						"item_code": self.item_code,
+						"qty": qty,
+						"rate": rate,
+						"warehouse": self.warehouse,
+						"cost_center": self.cost_center,
+						"delivery_date": add_days(nowdate(), 3),
+					}
+				],
+			}
+		)
+		so.insert()
+		so.submit()
+		return so
+
+	def test_an_unbilled_order_is_pending_and_dated_by_its_order_date(self):
+		from sf_trading.open_items import ordered_items_pending_billing
+
+		so = self.make_so(qty=4, rate=120)
+		rows = self.rows_for(ordered_items_pending_billing(self.filters()), so.name)
+
+		self.assertEqual(len(rows), 1, "an order nobody invoiced must appear once")
+		row = rows[0]
+		self.assertAlmostEqual(row.pending_qty, 4, places=3)
+		self.assertAlmostEqual(row.pending_amount, 480, places=2)
+		self.assertAlmostEqual(row.billed_qty, 0, places=3)
+		self.assertAlmostEqual(row.delivered_qty, 0, places=3)
+		# Sales Order has no posting_date — the flow reports transaction_date under that key
+		self.assertEqual(getdate(row.posting_date), getdate(so.transaction_date))
+
+	def test_billing_an_order_removes_it(self):
+		from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+		from sf_trading.open_items import ordered_items_pending_billing
+
+		so = self.make_so(qty=4, rate=120)
+		si = make_sales_invoice(so.name)
+		si.insert()
+		si.submit()
+
+		self.assertFalse(self.rows_for(ordered_items_pending_billing(self.filters()), so.name))
+
+	def test_part_billing_an_order_leaves_the_remainder(self):
+		from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+		from sf_trading.open_items import ordered_items_pending_billing
+
+		so = self.make_so(qty=4, rate=120)
+		si = make_sales_invoice(so.name)
+		si.items[0].qty = 1
+		si.insert()
+		si.submit()
+
+		rows = self.rows_for(ordered_items_pending_billing(self.filters()), so.name)
+		self.assertEqual(len(rows), 1)
+		self.assertAlmostEqual(rows[0].pending_qty, 3, places=3)
+		self.assertAlmostEqual(rows[0].billed_qty, 1, places=3)
+		self.assertAlmostEqual(rows[0].pending_amount, 360, places=2)
+
+	def test_delivering_an_order_does_not_make_it_billed(self):
+		"""Goods that left the yard are still unbilled revenue — reported, never subtracted."""
+		from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
+		from sf_trading.open_items import ordered_items_pending_billing
+
+		so = self.make_so(qty=4, rate=120)
+		dn = make_delivery_note(so.name)
+		dn.insert()
+		dn.submit()
+
+		rows = self.rows_for(ordered_items_pending_billing(self.filters()), so.name)
+		self.assertEqual(len(rows), 1, "delivery is not billing")
+		self.assertAlmostEqual(rows[0].pending_qty, 4, places=3)
+		self.assertAlmostEqual(rows[0].delivered_qty, 4, places=3)
+
+	def test_a_closed_order_stays_in_and_says_so(self):
+		"""The one place this report parts from its siblings, and why.
+
+		An abandoned order still has goods promised against it, and core refuses an invoice
+		against a Closed one — so the row is the most worth seeing, not the least, and the
+		remark tells the reader what has to happen before it can be billed.
+		"""
+		from sf_trading.open_items import ordered_items_pending_billing
+
+		so = self.make_so(qty=2, rate=100)
+		frappe.db.set_value("Sales Order", so.name, "status", "Closed")
+
+		rows = self.rows_for(ordered_items_pending_billing(self.filters()), so.name)
+		self.assertEqual(len(rows), 1, "an abandoned order still has goods promised against it")
+		self.assertEqual(rows[0].status, "Closed")
+		self.assertIn("reopen", rows[0].remarks.lower())
+
+	def test_a_draft_invoice_leaves_the_order_pending_and_is_named(self):
+		from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+		from sf_trading.open_items import ordered_items_pending_billing
+
+		so = self.make_so(qty=4, rate=120)
+		si = make_sales_invoice(so.name)
+		si.insert()          # deliberately not submitted
+
+		rows = self.rows_for(ordered_items_pending_billing(self.filters()), so.name)
+		self.assertEqual(len(rows), 1, "a draft is not billing")
+		self.assertAlmostEqual(rows[0].pending_qty, 4, places=3)
+		self.assertIn("draft invoice", rows[0].remarks.lower())
+
+	def test_a_credit_note_reopens_the_quantity_it_reversed(self):
+		from erpnext.controllers.sales_and_purchase_return import make_return_doc
+		from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+		from sf_trading.open_items import ordered_items_pending_billing
+
+		so = self.make_so(qty=4, rate=120)
+		si = make_sales_invoice(so.name)
+		si.insert()
+		si.submit()
+		self.assertFalse(self.rows_for(ordered_items_pending_billing(self.filters()), so.name))
+
+		credit = make_return_doc("Sales Invoice", si.name)
+		credit.items[0].qty = -1
+		credit.insert()
+		credit.submit()
+
+		rows = self.rows_for(ordered_items_pending_billing(self.filters()), so.name)
+		self.assertEqual(len(rows), 1, "credited quantity is owed again")
+		self.assertAlmostEqual(rows[0].pending_qty, 1, places=3)
+		self.assertAlmostEqual(rows[0].returned_qty, 1, places=3)

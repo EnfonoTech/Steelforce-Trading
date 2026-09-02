@@ -1,7 +1,7 @@
 // Copyright (c) 2026, Enfono Technologies and contributors
 // For license information, please see license.txt
 
-frappe.query_reports["Invoiced Items To Be Delivered"] = {
+frappe.query_reports["Ordered Items Pending Billing"] = {
 	filters: [
 		{
 			fieldname: "company",
@@ -18,18 +18,17 @@ frappe.query_reports["Invoiced Items To Be Delivered"] = {
 			default: frappe.datetime.get_today(),
 			reqd: 1,
 		},
-		// Optional posting-date window for the source documents. Left empty it
-		// reports every document, which is what the workspace number cards do, so
-		// their totals do not move because these exist. As On Date still governs
-		// how much billing is counted against whatever falls inside the window.
+		// Optional order-date window. Left empty it reports every open order, the same way its
+		// siblings report every document, so nothing that reads a total off this report moves
+		// because a date was typed. As On Date still governs how much billing is counted.
 		{
 			fieldname: "from_date",
-			label: __("From Date"),
+			label: __("From Order Date"),
 			fieldtype: "Date",
 		},
 		{
 			fieldname: "to_date",
-			label: __("To Date"),
+			label: __("To Order Date"),
 			fieldtype: "Date",
 		},
 		{
@@ -71,9 +70,7 @@ frappe.query_reports["Invoiced Items To Be Delivered"] = {
 		{
 			// Item Rows or Document Rows — a Select and never a Check, because query_report.js
 			// drops a filter whose value is falsy, so an unticked Check never reaches the server
-			// and the view could be switched on but never off. Default Item Rows: the Open Items
-			// number cards call these reports without a view, and their totals must not move
-			// because a filter was added — folding sums the very rows the item view prints.
+			// and the view could be switched on but never off.
 			fieldname: "view",
 			label: __("View"),
 			fieldtype: "Select",
