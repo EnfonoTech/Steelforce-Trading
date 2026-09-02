@@ -4,13 +4,22 @@
 // mode of payment the branch allows, a button per mode that fills the whole amount into it,
 // and clicking into any amount field fills it with whatever is still unallocated. What differs
 // is what is being collected: an order's balance (grand_total less advance_paid), not an
-// invoice's outstanding, and there is no Loyalty field because an order carries no receivable
-// to write off.
+// invoice's outstanding.
 //
 // Cheque modes (the branch's "For PDC" rows) get their own section with a cheque number and
 // date. Both are asked for only when a cheque amount is actually entered, so a customer paying
 // cash is never made to invent a cheque number — the invoice flow can demand them up front
 // because it already knows from custom_payment_mode that a cheque is coming; an order does not.
+//
+// Loyalty is here too now, on the same footing as the invoice popup: the field is `write_off`,
+// the money lands on the Company's Write Off Account (named "Loyalty Rewards" here) as a
+// deduction on the last Payment Entry, and the Company's Max Payment Write Off caps it — 0.400
+// on this company, because what it is for is closing a fils-level shortfall.
+//
+// One rule the invoice does not need: loyalty may only CLOSE an order. Cash plus loyalty has to
+// equal the whole remaining balance, the way the invoice popup insists on the whole outstanding.
+// An order accepts partial deposits, and forgiving part of one nobody is settling would drop the
+// balance with no bill behind it. A deposit with no loyalty is untouched.
 
 frappe.ui.form.on("Sales Order", {
 	refresh(frm) {
@@ -119,6 +128,11 @@ function sf_trading_render_so_dialog(frm, state) {
 		});
 	}
 
+	// Same two Company settings the invoice popup reads, arriving with the rest of the state
+	const wo_account = state.write_off_account || "";
+	const wo_limit = flt(state.max_write_off);
+	const allow_write_off = !!wo_account;
+
 	if (cash_modes.length) {
 		fields.push({ fieldtype: "Section Break", label: __("Enter Payment Amounts") });
 		cash_modes.forEach(function (mode, idx) {
@@ -142,6 +156,9 @@ function sf_trading_render_so_dialog(frm, state) {
 							all_fns.forEach(function (fn) {
 								d.set_value(fn, 0);
 							});
+							// the mode button means "the customer is paying all of it", so any
+							// loyalty typed before it is cleared — same as the invoice popup
+							if (allow_write_off) d.set_value("write_off", 0);
 							d.set_value(fi, balance);
 						};
 					})("csh_" + idx),
@@ -183,12 +200,77 @@ function sf_trading_render_so_dialog(frm, state) {
 							all_fns.forEach(function (fn) {
 								d.set_value(fn, 0);
 							});
+							// the mode button means "the customer is paying all of it", so any
+							// loyalty typed before it is cleared — same as the invoice popup
+							if (allow_write_off) d.set_value("write_off", 0);
 							d.set_value(fi, balance);
 						};
 					})("chq_" + idx),
 				}
 			);
 		});
+	}
+
+	if (allow_write_off) {
+		fields.push(
+			{ fieldtype: "Section Break", fieldname: "row_wo", label: "", hide_border: 1 },
+			{
+				fieldname: "write_off",
+				fieldtype: "Currency",
+				label: __("Loyalty"),
+				default: 0,
+				options: "currency",
+				precision,
+				description: __("Closes the order's last fils. Company limit {0}.", [
+					format_currency(wo_limit, currency),
+				]),
+			},
+			{ fieldtype: "Column Break", fieldname: "cb_wo" }
+		);
+	}
+
+	// The invoice popup's checks, word for word — the cashier meets the same sentences on both
+	// documents, and the server repeats every one of them.
+	function validate_write_off(write_off) {
+		if (write_off < 0) {
+			frappe.msgprint({
+				title: __("Error"),
+				message: __("Loyalty amount cannot be negative."),
+				indicator: "red",
+			});
+			return false;
+		}
+		if (!write_off) return true;
+		if (!wo_account) {
+			frappe.msgprint({
+				title: __("Loyalty Not Configured"),
+				message: __("Set 'Write Off Account' on company {0}.", [frm.doc.company]),
+				indicator: "red",
+			});
+			return false;
+		}
+		if (!wo_limit) {
+			frappe.msgprint({
+				title: __("Loyalty Not Configured"),
+				message: __("Set 'Max Payment Write Off' on company {0} to allow write off in payments.", [
+					frm.doc.company,
+				]),
+				indicator: "red",
+			});
+			return false;
+		}
+		if (write_off - wo_limit > 0.0001) {
+			frappe.msgprint({
+				title: __("Loyalty Limit Exceeded"),
+				message: __("Loyalty amount {0} exceeds the company limit of {1}.", [
+					format_currency(write_off, currency),
+					format_currency(wo_limit, currency),
+				]),
+				indicator: "red",
+			});
+			return false;
+		}
+		return true;
 	}
 
 	function collect(vals) {
@@ -224,12 +306,28 @@ function sf_trading_render_so_dialog(frm, state) {
 			});
 			return;
 		}
-		if (total - balance > 0.0001) {
+		const write_off = allow_write_off ? flt(vals.write_off) || 0 : 0;
+		if (!validate_write_off(write_off)) return;
+		const settled = flt(total + write_off, precision);
+
+		if (settled - balance > 0.0001) {
 			frappe.msgprint({
 				title: __("Error"),
 				message: __("Total payment {0} cannot be greater than amount to pay {1}.", [
-					format_currency(total, currency),
+					format_currency(settled, currency),
 					format_currency(balance, currency),
+				]),
+				indicator: "red",
+			});
+			return;
+		}
+		// Loyalty closes an order or it does nothing: a deposit with loyalty on it would drop
+		// the balance with no invoice behind the part that was forgiven.
+		if (write_off > 0 && balance - settled > 0.0001) {
+			frappe.msgprint({
+				title: __("Incomplete"),
+				message: __("{0} still to be allocated — loyalty may only close the order.", [
+					format_currency(balance - settled, currency),
 				]),
 				indicator: "red",
 			});
@@ -255,6 +353,7 @@ function sf_trading_render_so_dialog(frm, state) {
 				payments: JSON.stringify(payload),
 				cheque_no: cheque_total > 0 ? (vals.cheque_no || "").trim() : undefined,
 				cheque_date: cheque_total > 0 ? vals.cheque_date : undefined,
+				write_off_amount: write_off || 0,
 			},
 			freeze: true,
 			freeze_message: __("Creating payments..."),

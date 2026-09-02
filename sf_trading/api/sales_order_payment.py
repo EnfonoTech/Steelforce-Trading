@@ -67,6 +67,9 @@ def get_sales_order_payment_state(sales_order: str) -> dict:
 
 	so = frappe.get_doc("Sales Order", sales_order)
 	branch = so.get("branch") or ""
+	company = frappe.get_cached_value(
+		"Company", so.company, ["write_off_account", "custom_max_payment_write_off"], as_dict=True
+	) or frappe._dict()
 
 	return {
 		"sales_order": so.name,
@@ -77,6 +80,10 @@ def get_sales_order_payment_state(sales_order: str) -> dict:
 		"advance_paid": flt(so.get("advance_paid")),
 		"balance": _order_balance(so),
 		"per_billed": flt(so.get("per_billed")),
+		# what the Loyalty field may do here, read once with everything else. Same two Company
+		# settings the invoice popup reads, under the same names.
+		"write_off_account": company.get("write_off_account"),
+		"max_write_off": flt(company.get("custom_max_payment_write_off")),
 		"modes": get_payment_modes_with_account(so.company, is_return=0, is_pdc=0, branch=branch),
 		"pdc_modes": (
 			get_payment_modes_with_account(so.company, is_return=0, is_pdc=1, branch=branch)
@@ -93,6 +100,7 @@ def create_payments_for_sales_order(
 	cheque_date: str = None,
 	cheque_no: str = None,
 	posting_date: str = None,
+	write_off_amount: float | str = 0,
 ):
 	"""One submitted Payment Entry per mode of payment, as an advance against the order.
 
@@ -103,6 +111,16 @@ def create_payments_for_sales_order(
 			today's -- the cheque date rides on `reference_date`, which is what the PDC
 			Report and the cheque reminder read.
 		posting_date: overrides today, for a collection being recorded after the fact.
+		write_off_amount: the "Loyalty" the counter is giving up, booked as a deduction on the
+			LAST Payment Entry against the Company's Write Off Account -- the same mechanism,
+			the same Company settings and the same cap as
+			`sales_invoice_payment.create_pos_payments_for_invoice`. On this company the
+			account is "Loyalty Rewards" and the cap is 0.400, which is what this is for:
+			closing a fils-level shortfall so the order reads fully advanced.
+
+			It may only CLOSE an order. Cash plus loyalty must equal the whole remaining
+			balance, exactly as the invoice popup demands of an invoice, because forgiving
+			part of an order nobody is settling would drop the balance with no bill behind it.
 
 	Returns:
 		List of created Payment Entry names.
@@ -150,10 +168,56 @@ def create_payments_for_sales_order(
 	precision = _currency_precision(so.currency)
 	asked = flt(sum(row["amount"] for row in valid_rows), precision)
 	balance_now = _order_balance(so)
-	if asked - balance_now > 0.0001:
+
+	write_off_amount = flt(write_off_amount, precision)
+	write_off_account = None
+	write_off_cost_center = None
+	if write_off_amount < 0:
+		frappe.throw(_("Loyalty amount cannot be negative."))
+	if write_off_amount > 0:
+		company_defaults = frappe.get_cached_value(
+			"Company",
+			so.company,
+			["write_off_account", "custom_max_payment_write_off", "cost_center"],
+			as_dict=True,
+		) or frappe._dict()
+
+		write_off_account = company_defaults.get("write_off_account")
+		if not write_off_account:
+			frappe.throw(_("Set 'Write Off Account' on company {0}.").format(so.company))
+
+		max_write_off = flt(company_defaults.get("custom_max_payment_write_off"))
+		if not max_write_off:
+			frappe.throw(
+				_("Set 'Max Payment Write Off' on company {0} to allow write off in payments.").format(
+					so.company
+				)
+			)
+		if write_off_amount - max_write_off > 0.0001:
+			frappe.throw(
+				_("Loyalty amount {0} exceeds the company limit of {1}.").format(
+					write_off_amount, max_write_off
+				)
+			)
+
+		write_off_cost_center = so.get("cost_center") or company_defaults.get("cost_center")
+		if not write_off_cost_center:
+			frappe.throw(_("Set a default Cost Center on company {0}.").format(so.company))
+
+		# Loyalty closes an order or it does nothing. Anything less would forgive part of an
+		# order nobody is settling, and the balance would fall with no invoice behind it.
+		if abs(flt(asked + write_off_amount, precision) - balance_now) > 0.0001:
+			frappe.throw(
+				_("Loyalty may only close an order: {0} plus loyalty of {1} must equal the "
+				  "balance of {2} on order {3}.").format(
+					asked, write_off_amount, balance_now, so.name
+				)
+			)
+
+	if flt(asked + write_off_amount, precision) - balance_now > 0.0001:
 		frappe.throw(
 			_("Total payment {0} is more than the balance of {1} on order {2}.").format(
-				asked, balance_now, so.name
+				flt(asked + write_off_amount, precision), balance_now, so.name
 			)
 		)
 
@@ -162,7 +226,8 @@ def create_payments_for_sales_order(
 
 	cheque_modes = _cheque_modes(so)
 	created = []
-	for row in valid_rows:
+	last_index = len(valid_rows) - 1
+	for index, row in enumerate(valid_rows):
 		# Re-read the order: ERPNext refreshes `advance_paid` from the advance ledger when a
 		# payment is submitted, so the balance the next mode may take is only known now.
 		so.reload()
@@ -196,11 +261,31 @@ def create_payments_for_sales_order(
 		if not pe.references:
 			frappe.throw(_("Order {0} has nothing left to collect against.").format(so.name))
 
+		# the whole write-off rides on the last mode, as it does on the invoice side: split
+		# across modes it would need a deduction row per entry for no gain
+		row_write_off = write_off_amount if index == last_index else 0.0
+
 		reference = pe.references[0]
-		allocated = min(amount, balance, flt(reference.outstanding_amount))
+		# the allocation covers the cash AND the loyalty, which is what closes the order; the
+		# deduction row below is what funds the difference
+		allocated = min(amount + row_write_off, balance, flt(reference.outstanding_amount))
 		reference.allocated_amount = allocated
-		pe.paid_amount = allocated
-		pe.received_amount = allocated
+		# paid_amount is the cash that actually moved. ERPNext's own identity is
+		# paid_amount = allocated - deductions, which is why the deduction row is appended
+		# whenever one is carried here.
+		pe.paid_amount = flt(allocated - row_write_off, precision)
+		pe.received_amount = pe.paid_amount
+
+		if row_write_off:
+			pe.append(
+				"deductions",
+				{
+					"account": write_off_account,
+					"cost_center": write_off_cost_center,
+					"amount": row_write_off,
+					"description": _("Loyalty"),
+				},
+			)
 
 		pe.posting_date = posting_date or nowdate()
 		pe.reference_no = cheque_no or so.name
