@@ -49,12 +49,18 @@ class TestSalesOrderLoyalty(FrappeTestCase):
 		frappe.db.set_value("Company", self.company, "custom_max_payment_write_off", 0.4)
 		frappe.clear_cache(doctype="Company")
 
-	def make_order(self, qty=1, rate=100):
+	def make_order(self, qty=1, rate=100, currency=None):
+		# In the company's own currency, which is the only shape loyalty is allowed on and the
+		# shape production has (Steel Force sells in BHD and books in BHD). The test company's
+		# price list is not necessarily its own currency, so this is spelled out.
+		company_currency = frappe.db.get_value("Company", self.company, "default_currency")
 		so = frappe.get_doc(
 			{
 				"doctype": "Sales Order",
 				"company": self.company,
 				"customer": CUSTOMER,
+				"currency": currency or company_currency,
+				"conversion_rate": 1,
 				"transaction_date": nowdate(),
 				"delivery_date": add_days(nowdate(), 3),
 				"cost_center": self.cost_center,
@@ -152,7 +158,7 @@ class TestSalesOrderLoyalty(FrappeTestCase):
 			self.skipTest("no second enabled currency on this site")
 
 		so = self.make_order(qty=1, rate=100)
-		frappe.db.set_value("Sales Order", so.name, "currency", other)
+		frappe.db.set_value("Sales Order", so.name, {"currency": other, "conversion_rate": 2})
 		before = frappe.db.count("Payment Entry")
 		with self.assertRaises(frappe.ValidationError) as caught:
 			self.collect(so, cash=99.7, loyalty=0.3)
