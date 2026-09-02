@@ -28,7 +28,7 @@ Used by the four Script Reports in sf_trading/report/:
 
 import frappe
 from frappe import _
-from frappe.query_builder.functions import Count, Sum
+from frappe.query_builder.functions import Sum
 from frappe.utils import cint, date_diff, flt, fmt_money, getdate, nowdate
 
 QTY_PRECISION = 3
@@ -811,16 +811,19 @@ def annotate_ordered_rows(rows, invoiced, credited, delivered, as_on):
 
 	child = frappe.qb.DocType("Sales Invoice Item")
 	parent = frappe.qb.DocType("Sales Invoice")
-	draft_counts = {}
+	# counted in python rather than with COUNT(DISTINCT ...): pypika on this bench has no
+	# `.distinct()` on a Field, and a draft invoice naming an order twice would otherwise be
+	# reported as two drafts
+	drafts = {}
 	for record in (
 		frappe.qb.from_(child)
 		.join(parent)
 		.on(parent.name == child.parent)
-		.select(child.so_detail.as_("link"), Count(parent.name.distinct()).as_("drafts"))
+		.select(child.so_detail.as_("link"), parent.name.as_("invoice"))
 		.where((parent.docstatus == 0) & (child.so_detail.isin(row_names)))
-		.groupby(child.so_detail)
 	).run(as_dict=True):
-		draft_counts[record.link] = cint(record.drafts)
+		drafts.setdefault(record.link, set()).add(record.invoice)
+	draft_counts = {link: len(names) for link, names in drafts.items()}
 
 	company_currency = None
 
