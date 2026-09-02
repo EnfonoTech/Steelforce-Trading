@@ -956,6 +956,28 @@ function sf_set_credit_limit(frm) {
 
 function sf_trading_show_pos_total_popup(frm) {
 	if (frappe.flags.sf_trading_popup_showing || !frm || !frm.doc) return;
+
+	// One call, once per document: the company's Write Off Account and cap, plus whether an
+	// order this invoice bills already carried the loyalty. Asked before the flag is set so a
+	// failure cannot wedge the popup shut, and a failure still opens the dialog — the server
+	// refuses a double loyalty anyway, so a lookup that did not answer must not stop a
+	// collection.
+	if (frm.doc.name && !frm.doc.__islocal && frm.__sf_loyalty_state === undefined) {
+		frappe.call({
+			method: "sf_trading.api.sales_invoice_payment.get_loyalty_state",
+			args: { sales_invoice: frm.doc.name },
+			callback: function (r) {
+				frm.__sf_loyalty_state = (r && r.message) || {};
+				sf_trading_show_pos_total_popup(frm);
+			},
+			error: function () {
+				frm.__sf_loyalty_state = {};
+				sf_trading_show_pos_total_popup(frm);
+			},
+		});
+		return;
+	}
+
 	frappe.flags.sf_trading_popup_showing = true;
 
 	function ensure_payments_then_show() {
@@ -1145,7 +1167,11 @@ function sf_trading_render_dialog(frm, payments_list) {
 	// unpaid remainder as a deduction on the last Payment Entry so the invoice closes
 	// fully paid. The field, the API argument and the company's Write Off Account are
 	// all still `write_off` — only what the cashier reads changed.
-	const allow_write_off = !frm.doc.is_return;
+	// Loyalty already given on a Sales Order this invoice bills WAS the loyalty for this sale,
+	// so the field is left out rather than offered and then refused by the server. The state is
+	// fetched once per document, before either popup opens.
+	const loyalty_state = frm.__sf_loyalty_state || {};
+	const allow_write_off = !frm.doc.is_return && loyalty_state.allowed !== false;
 	let wo_config = null;
 	if (allow_write_off) {
 		frappe.db.get_value("Company", frm.doc.company, ["write_off_account", "custom_max_payment_write_off"])
@@ -1276,6 +1302,28 @@ function sf_trading_render_dialog(frm, payments_list) {
 
 function sf_trading_show_pdc_popup(frm) {
 	if (frappe.flags.sf_trading_popup_showing || !frm || !frm.doc) return;
+
+	// One call, once per document: the company's Write Off Account and cap, plus whether an
+	// order this invoice bills already carried the loyalty. Asked before the flag is set so a
+	// failure cannot wedge the popup shut, and a failure still opens the dialog — the server
+	// refuses a double loyalty anyway, so a lookup that did not answer must not stop a
+	// collection.
+	if (frm.doc.name && !frm.doc.__islocal && frm.__sf_loyalty_state === undefined) {
+		frappe.call({
+			method: "sf_trading.api.sales_invoice_payment.get_loyalty_state",
+			args: { sales_invoice: frm.doc.name },
+			callback: function (r) {
+				frm.__sf_loyalty_state = (r && r.message) || {};
+				sf_trading_show_pdc_popup(frm);
+			},
+			error: function () {
+				frm.__sf_loyalty_state = {};
+				sf_trading_show_pdc_popup(frm);
+			},
+		});
+		return;
+	}
+
 	frappe.flags.sf_trading_popup_showing = true;
 
 	const currency = frm.doc.currency || "";
@@ -1306,7 +1354,11 @@ function sf_trading_show_pdc_popup(frm) {
 		error: function() { frappe.flags.sf_trading_popup_showing = false; frappe.msgprint(__("Error loading Cheque payment modes. Please try again.")); },
 	});
 
-	const allow_write_off = !frm.doc.is_return;
+	// Loyalty already given on a Sales Order this invoice bills WAS the loyalty for this sale,
+	// so the field is left out rather than offered and then refused by the server. The state is
+	// fetched once per document, before either popup opens.
+	const loyalty_state = frm.__sf_loyalty_state || {};
+	const allow_write_off = !frm.doc.is_return && loyalty_state.allowed !== false;
 	let wo_config = null;
 	if (allow_write_off) {
 		frappe.db.get_value("Company", frm.doc.company, ["write_off_account", "custom_max_payment_write_off"])

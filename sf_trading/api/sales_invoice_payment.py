@@ -2,7 +2,7 @@ import json
 
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt
 
 
 @frappe.whitelist()
@@ -186,6 +186,74 @@ def get_accounts_for_modes(company: str, modes: str | list):
 
 
 @frappe.whitelist()
+def loyalty_already_given(sales_invoice) -> dict:
+	"""Loyalty already taken against the Sales Orders this invoice bills.
+
+	The company cap is enforced per PAYMENT, so without this one sale could take it twice --
+	once when the order was collected and again when the invoice was, each check knowing
+	nothing of the other. The order-side collection is a Payment Entry that references the
+	Sales Order and carries the loyalty as a deduction row, so the amount is readable; no new
+	field is needed to remember it.
+
+	Only orders NAMED BY THIS INVOICE's item rows can be found this way. An invoice raised
+	fresh instead of from the order names none, and nothing links the two -- see the module
+	docstring of `sales_order_payment` for what that leaves open.
+	"""
+	invoice = (
+		sales_invoice
+		if not isinstance(sales_invoice, str)
+		else frappe.get_doc("Sales Invoice", sales_invoice)
+	)
+
+	orders = sorted({row.sales_order for row in (invoice.get("items") or []) if row.get("sales_order")})
+	if not orders:
+		return {"amount": 0.0, "orders": []}
+
+	rows = frappe.db.sql(
+		"""
+		SELECT DISTINCT ded.name, ded.amount, ref.reference_name AS sales_order
+		FROM `tabPayment Entry Deduction` ded
+		INNER JOIN `tabPayment Entry` pe ON pe.name = ded.parent
+		INNER JOIN `tabPayment Entry Reference` ref ON ref.parent = pe.name
+		WHERE pe.docstatus = 1
+			AND ref.reference_doctype = 'Sales Order'
+			AND ref.reference_name IN %(orders)s
+		""",
+		{"orders": tuple(orders)},
+		as_dict=True,
+	)
+
+	given = {}
+	for row in rows:
+		given[row.sales_order] = flt(given.get(row.sales_order, 0)) + flt(row.amount)
+
+	return {"amount": flt(sum(given.values()), 3), "orders": sorted(given)}
+
+
+@frappe.whitelist()
+def get_loyalty_state(sales_invoice: str) -> dict:
+	"""What the invoice payment popup may offer for Loyalty, in one call.
+
+	Exposed so the dialog can leave the field out entirely when the order already carried the
+	loyalty for this sale, rather than offering something the server is going to refuse.
+	"""
+	frappe.has_permission("Sales Invoice", "read", doc=sales_invoice, throw=True)
+
+	si = frappe.get_doc("Sales Invoice", sales_invoice)
+	company = frappe.get_cached_value(
+		"Company", si.company, ["write_off_account", "custom_max_payment_write_off"], as_dict=True
+	) or frappe._dict()
+	already = loyalty_already_given(si)
+
+	return {
+		"write_off_account": company.get("write_off_account"),
+		"max_write_off": flt(company.get("custom_max_payment_write_off")),
+		"already_given": already["amount"],
+		"already_given_on": already["orders"],
+		"allowed": not cint(si.is_return) and already["amount"] <= 0.0001,
+	}
+
+
 def create_pos_payments_for_invoice(
 	sales_invoice: str,
 	payments: str | list,
@@ -282,6 +350,16 @@ def create_pos_payments_for_invoice(
 		if not write_off_cost_center:
 			frappe.throw(
 				_("Set a Cost Center on the invoice or a default Cost Center on company {0}.").format(si.company)
+			)
+
+		# The cap is per payment, so one sale could otherwise take it twice: once when the
+		# order was collected, once here. Loyalty already given against an order this invoice
+		# bills is loyalty for THIS sale, and it is not given again.
+		already = loyalty_already_given(si)
+		if already["amount"] > 0.0001:
+			frappe.throw(
+				_("Loyalty of {0} was already given on {1}. It cannot be given again on this "
+				  "invoice.").format(already["amount"], ", ".join(already["orders"]))
 			)
 
 	created = []

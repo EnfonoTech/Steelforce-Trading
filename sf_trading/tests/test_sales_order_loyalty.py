@@ -214,3 +214,56 @@ class TestSalesOrderLoyalty(FrappeTestCase):
 		self.assertAlmostEqual(flt(pe.paid_amount), 40, places=3)
 		so.reload()
 		self.assertAlmostEqual(flt(so.advance_paid), 40, places=3)
+
+	# ── the cap is per SALE, not per document ────────────────────────────────────
+	def test_the_invoice_refuses_loyalty_the_order_already_took(self):
+		"""One sale, one loyalty. The company cap is enforced per payment, so without this the
+		same sale could take it on the order and again on the invoice."""
+		from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+		from sf_trading.api.sales_invoice_payment import (
+			create_pos_payments_for_invoice,
+			get_loyalty_state,
+			loyalty_already_given,
+		)
+
+		so = self.make_order(qty=1, rate=100)
+		balance = get_sales_order_payment_state(so.name)["balance"]
+		self.collect(so, cash=flt(balance - 0.3, 3), loyalty=0.3)
+
+		si = make_sales_invoice(so.name)
+		TestOpenItems.fill_site_mandatories(si)
+		si.insert()
+		si.submit()
+
+		# the order's loyalty is found through the invoice's own item rows
+		already = loyalty_already_given(si)
+		self.assertAlmostEqual(already["amount"], 0.3, places=3)
+		self.assertIn(so.name, already["orders"])
+
+		# ... so the popup is told not to offer the field at all
+		state = get_loyalty_state(si.name)
+		self.assertFalse(state["allowed"])
+		self.assertAlmostEqual(flt(state["already_given"]), 0.3, places=3)
+
+		# ... and the server refuses it even if something asks anyway
+		before = frappe.db.count("Payment Entry")
+		with self.assertRaises(frappe.ValidationError) as caught:
+			create_pos_payments_for_invoice(
+				sales_invoice=si.name,
+				payments=[{"mode_of_payment": self.mode(), "amount": 1}],
+				write_off_amount=0.1,
+			)
+		text = frappe.utils.strip_html(str(caught.exception))
+		self.assertIn("already given", text)
+		self.assertIn(so.name, text)
+		self.assertEqual(frappe.db.count("Payment Entry"), before)
+
+	def test_an_invoice_with_no_order_still_offers_loyalty(self):
+		"""The regression net: 3,462 of 3,469 invoices on production name no order."""
+		from sf_trading.api.sales_invoice_payment import get_loyalty_state, loyalty_already_given
+
+		si = TestOpenItems.make_si(self, qty=1, rate=100)
+		self.assertEqual(loyalty_already_given(si)["amount"], 0.0)
+		state = get_loyalty_state(si.name)
+		self.assertTrue(state["allowed"])
+		self.assertAlmostEqual(flt(state["max_write_off"]), 0.4, places=3)
