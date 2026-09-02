@@ -959,7 +959,16 @@ def get_write_off_total(from_date, to_date, company, cost_center):
 	"""Loyalty / Write Off: every Payment Entry deduction row on a Receive PE,
 	regardless of account (the payment popup writes the company's Write Off
 	Account; a manually edited PE can carry a deduction on a different account,
-	e.g. bank charges — both count here so no deduction is ever invisible)."""
+	e.g. bank charges — both count here so no deduction is ever invisible).
+
+	Since the Sales Order payment popup also offers Loyalty, a deduction can now
+	arrive on a Payment Entry that references an ORDER and no invoice. It is
+	counted here, because the money was given away on this day in this branch —
+	but the per-bucket `write_off` figures cannot see it: `_settled_writeoff_subquery`
+	attributes a deduction to the Sales Invoice the payment settled, and an order-side
+	payment has no invoice to attribute it to. So this line can exceed the sum of the
+	bucket write-offs by exactly the order-side loyalty of the day. Both figures are
+	true; they answer different questions."""
 	conditions = "pe.docstatus = 1 AND pe.payment_type = 'Receive'"
 	if from_date:
 		conditions += " AND pe.posting_date >= %(from_date)s"
