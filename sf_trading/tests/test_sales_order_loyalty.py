@@ -292,3 +292,83 @@ class TestSalesOrderLoyalty(FrappeTestCase):
 		state = get_loyalty_state(si.name)
 		self.assertTrue(state["allowed"])
 		self.assertAlmostEqual(flt(state["max_write_off"]), 0.4, places=3)
+
+	# ── the fresh-invoice case: no link between the documents at all ─────────────
+	def test_a_fresh_invoice_is_refused_the_loyalty_the_order_already_took(self):
+		"""The case the item link cannot see.
+
+		3,462 of 3,469 invoices on production name no order, so this is the ordinary habit,
+		not an edge case: the advance is never applied, the invoice opens at its full value,
+		and without this guard the same sale gives loyalty twice.
+		"""
+		from sf_trading.api.sales_invoice_payment import (
+			create_pos_payments_for_invoice,
+			get_loyalty_state,
+			unapplied_order_advance,
+		)
+
+		so = self.make_order(qty=1, rate=150)
+		balance = get_sales_order_payment_state(so.name)["balance"]
+		self.collect(so, cash=flt(balance - 0.3, 3), loyalty=0.3)
+
+		# a FRESH invoice — nothing on it names the order
+		si = frappe.get_doc(
+			{
+				"doctype": "Sales Invoice",
+				"company": self.company,
+				"customer": CUSTOMER,
+				"cost_center": self.cost_center,
+				"items": [
+					{
+						"item_code": self.item_code,
+						"qty": 1,
+						"rate": 150,
+						"warehouse": self.warehouse,
+						"cost_center": self.cost_center,
+					}
+				],
+			}
+		)
+		TestOpenItems.fill_site_mandatories(si)
+		si.insert()
+		si.submit()
+		self.assertFalse([row for row in si.items if row.get("sales_order")], "must name no order")
+
+		held = unapplied_order_advance(CUSTOMER, self.company)
+		self.assertAlmostEqual(held["loyalty"], 0.3, places=3)
+		self.assertAlmostEqual(held["advance"], flt(balance, 3), places=3)
+		self.assertIn(so.name, held["orders"])
+
+		# the popup is told to leave the field out AND to warn about the money on file
+		state = get_loyalty_state(si.name)
+		self.assertFalse(state["allowed"])
+		self.assertAlmostEqual(flt(state["unapplied_advance"]), flt(balance, 3), places=3)
+
+		before = frappe.db.count("Payment Entry")
+		with self.assertRaises(frappe.ValidationError) as caught:
+			create_pos_payments_for_invoice(
+				sales_invoice=si.name,
+				payments=[{"mode_of_payment": self.mode(), "amount": 1}],
+				write_off_amount=0.2,
+			)
+		text = frappe.utils.strip_html(str(caught.exception))
+		self.assertIn("unapplied advance", text)
+		self.assertIn(so.name, text)
+		self.assertEqual(frappe.db.count("Payment Entry"), before)
+
+	def test_a_consumed_advance_stops_blocking(self):
+		"""Once the advance is applied it is not 'on file' any more, and loyalty is free again."""
+		from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+		from sf_trading.api.sales_invoice_payment import unapplied_order_advance
+
+		so = self.make_order(qty=1, rate=150)
+		balance = get_sales_order_payment_state(so.name)["balance"]
+		self.collect(so, cash=flt(balance - 0.3, 3), loyalty=0.3)
+		self.assertGreater(unapplied_order_advance(CUSTOMER, self.company)["loyalty"], 0.0001)
+
+		si = make_sales_invoice(so.name)
+		TestOpenItems.fill_site_mandatories(si)
+		si.insert()
+		si.submit()
+
+		self.assertLessEqual(unapplied_order_advance(CUSTOMER, self.company)["loyalty"], 0.0001)

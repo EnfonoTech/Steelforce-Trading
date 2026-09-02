@@ -240,6 +240,70 @@ def loyalty_already_given(sales_invoice) -> dict:
 	return {"amount": flt(sum(seen.values()), 3), "orders": sorted(orders_seen)}
 
 
+def unapplied_order_advance(customer: str, company: str) -> dict:
+	"""Advances collected against a Sales Order that no invoice has consumed yet.
+
+	This is the case `loyalty_already_given` cannot see. An invoice raised FRESH instead of
+	from the order names no order on its item rows, so nothing links the two documents --
+	and on this site that is the normal habit: 3,462 of 3,469 invoices since August carry
+	`allocate_advances_automatically = 0`, which sf_trading itself sets when no item names an
+	order, so the advance is never applied and the invoice opens at its full value. The
+	customer is then asked to pay a second time, and the loyalty could be given a second time
+	with it.
+
+	"Not consumed yet" is read as an order-sourced payment with no Sales Invoice reference row.
+	That is measured, not assumed: while the advance is outstanding the payment's only
+	reference is the Sales Order; when an invoice consumes it, ERPNext REPLACES that row with
+	a Sales Invoice one. The advance ledger keeps naming the order either way, which is what
+	identifies the payment as order-sourced in the first place.
+	"""
+	if not (customer and company):
+		return {"advance": 0.0, "loyalty": 0.0, "orders": []}
+
+	rows = frappe.db.sql(
+		"""
+		SELECT pe.name,
+			(SELECT COALESCE(SUM(ref.allocated_amount), 0) FROM `tabPayment Entry Reference` ref
+			 WHERE ref.parent = pe.name) AS allocated,
+			(SELECT COALESCE(SUM(ded.amount), 0) FROM `tabPayment Entry Deduction` ded
+			 WHERE ded.parent = pe.name) AS loyalty,
+			(SELECT GROUP_CONCAT(DISTINCT aple.against_voucher_no)
+			 FROM `tabAdvance Payment Ledger Entry` aple
+			 WHERE aple.voucher_no = pe.name AND aple.against_voucher_type = 'Sales Order'
+			   AND aple.delinked = 0) AS orders
+		FROM `tabPayment Entry` pe
+		WHERE pe.docstatus = 1
+			AND pe.party_type = 'Customer'
+			AND pe.party = %(customer)s
+			AND pe.company = %(company)s
+			AND EXISTS (
+				SELECT 1 FROM `tabAdvance Payment Ledger Entry` aple
+				WHERE aple.voucher_no = pe.name AND aple.against_voucher_type = 'Sales Order'
+					AND aple.delinked = 0
+			)
+			AND NOT EXISTS (
+				SELECT 1 FROM `tabPayment Entry Reference` ref
+				WHERE ref.parent = pe.name AND ref.reference_doctype = 'Sales Invoice'
+			)
+		""",
+		{"customer": customer, "company": company},
+		as_dict=True,
+	)
+
+	orders = set()
+	advance = loyalty = 0.0
+	for row in rows:
+		advance += flt(row.allocated)
+		loyalty += flt(row.loyalty)
+		orders.update((row.orders or "").split(","))
+
+	return {
+		"advance": flt(advance, 3),
+		"loyalty": flt(loyalty, 3),
+		"orders": sorted(o for o in orders if o),
+	}
+
+
 @frappe.whitelist()
 def get_loyalty_state(sales_invoice: str) -> dict:
 	"""What the invoice payment popup may offer for Loyalty, in one call.
@@ -254,13 +318,23 @@ def get_loyalty_state(sales_invoice: str) -> dict:
 		"Company", si.company, ["write_off_account", "custom_max_payment_write_off"], as_dict=True
 	) or frappe._dict()
 	already = loyalty_already_given(si)
+	unapplied = unapplied_order_advance(si.customer, si.company)
 
 	return {
 		"write_off_account": company.get("write_off_account"),
 		"max_write_off": flt(company.get("custom_max_payment_write_off")),
 		"already_given": already["amount"],
 		"already_given_on": already["orders"],
-		"allowed": not cint(si.is_return) and already["amount"] <= 0.0001,
+		# the customer is holding money for an order nobody has billed. Reported even when no
+		# loyalty rode on it, because the cashier is about to ask for the whole invoice again.
+		"unapplied_advance": unapplied["advance"],
+		"unapplied_loyalty": unapplied["loyalty"],
+		"unapplied_orders": unapplied["orders"],
+		"allowed": (
+			not cint(si.is_return)
+			and already["amount"] <= 0.0001
+			and unapplied["loyalty"] <= 0.0001
+		),
 	}
 
 
@@ -370,6 +444,19 @@ def create_pos_payments_for_invoice(
 			frappe.throw(
 				_("Loyalty of {0} was already given on {1}. It cannot be given again on this "
 				  "invoice.").format(already["amount"], ", ".join(already["orders"]))
+			)
+
+		# The invoice may name no order at all and still be the second half of the same sale.
+		# An order advance nobody has consumed, carrying loyalty, is that case.
+		unapplied = unapplied_order_advance(si.customer, si.company)
+		if unapplied["loyalty"] > 0.0001:
+			frappe.throw(
+				_("{0} is holding an unapplied advance of {1} from {2}, and loyalty of {3} was "
+				  "already given on it. Apply that advance to this invoice — or raise the "
+				  "invoice from the order — before giving loyalty again.").format(
+					si.customer, unapplied["advance"], ", ".join(unapplied["orders"]),
+					unapplied["loyalty"],
+				)
 			)
 
 	created = []

@@ -954,6 +954,38 @@ function sf_set_credit_limit(frm) {
 	});
 }
 
+// The customer is holding money against an order nobody has billed, and this invoice does not
+// name that order — so ERPNext will not apply it and the whole invoice is about to be asked for
+// a second time. Said once per document, before the amounts are entered, because afterwards the
+// only trace is an advance nobody looks at.
+function sf_trading_warn_unapplied_advance(frm) {
+	const state = frm.__sf_loyalty_state || {};
+	const advance = flt(state.unapplied_advance);
+	if (!(advance > 0)) return;
+	if (frm.__sf_said_unapplied === frm.doc.name) return;
+	frm.__sf_said_unapplied = frm.doc.name;
+
+	const orders = (state.unapplied_orders || []).join(", ");
+	frappe.msgprint({
+		title: __("Advance on File"),
+		message:
+			__("{0} already paid {1} against {2}, and no invoice has used it yet.", [
+				frm.doc.customer_name || frm.doc.customer,
+				format_currency(advance, frm.doc.currency),
+				orders || __("a Sales Order"),
+			]) +
+			"<br><br>" +
+			__("This invoice does not name that order, so the advance will NOT be applied and the customer is about to be charged again. Raise the invoice from the order, or apply the advance on the Advances tab, before collecting.") +
+			(flt(state.unapplied_loyalty) > 0
+				? "<br><br>" +
+				  __("Loyalty of {0} was already given on it, so Loyalty is not offered here.", [
+						format_currency(flt(state.unapplied_loyalty), frm.doc.currency),
+				  ])
+				: ""),
+		indicator: "orange",
+	});
+}
+
 function sf_trading_show_pos_total_popup(frm) {
 	if (frappe.flags.sf_trading_popup_showing || !frm || !frm.doc) return;
 
@@ -968,6 +1000,7 @@ function sf_trading_show_pos_total_popup(frm) {
 			args: { sales_invoice: frm.doc.name },
 			callback: function (r) {
 				frm.__sf_loyalty_state = (r && r.message) || {};
+				sf_trading_warn_unapplied_advance(frm);
 				sf_trading_show_pos_total_popup(frm);
 			},
 			error: function () {
@@ -1314,6 +1347,7 @@ function sf_trading_show_pdc_popup(frm) {
 			args: { sales_invoice: frm.doc.name },
 			callback: function (r) {
 				frm.__sf_loyalty_state = (r && r.message) || {};
+				sf_trading_warn_unapplied_advance(frm);
 				sf_trading_show_pdc_popup(frm);
 			},
 			error: function () {
