@@ -50,11 +50,12 @@ def get_selling_history(
 		items = frappe.parse_json(items)
 	items = [code for code in (items or []) if code]
 	if not items:
-		return {"rows": [], "summary": [], "filters": {}}
+		return {"rows": [], "summary": [], "currency": _company_currency(company), "filters": {}}
 
 	to_date = getdate(to_date or nowdate())
 	from_date = getdate(from_date or add_months(to_date, -DEFAULT_MONTHS))
 	limit = min(cint(limit) or DEFAULT_LIMIT, 1000)
+	company_currency = _company_currency(company)
 
 	invoice = frappe.qb.DocType("Sales Invoice")
 	row = frappe.qb.DocType("Sales Invoice Item")
@@ -117,13 +118,20 @@ def get_selling_history(
 				"qty": flt(record.qty, 3),
 				"uom": record.uom,
 				"rate": flt(rate, 3),
-				"foreign": record.currency if record.currency != _company_currency(company) else None,
+				# only claimed when the company currency is actually known; without it every row
+				# would be labelled foreign, which is worse than saying nothing
+				"foreign": record.currency
+				if company_currency and record.currency != company_currency
+				else None,
 			}
 		)
 
 	return {
 		"rows": rows,
 		"summary": _summarise(rows),
+		# the dialog formats every figure with this, NOT the order's own currency: a purchase order
+		# may be raised in the supplier's currency while these rates are all company currency
+		"currency": company_currency,
 		"filters": {
 			"from_date": str(from_date),
 			"to_date": str(to_date),
@@ -136,7 +144,9 @@ def get_selling_history(
 
 
 def _company_currency(company):
-	return frappe.get_cached_value("Company", company, "default_currency") if company else None
+	if company:
+		return frappe.get_cached_value("Company", company, "default_currency")
+	return frappe.defaults.get_global_default("currency")
 
 
 def _summarise(rows) -> list:

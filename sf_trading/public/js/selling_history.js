@@ -130,7 +130,9 @@ sf_trading.load_selling_history = function (frm, dialog, items) {
 sf_trading.render_selling_history = function (frm, $body, data) {
 	const rows = data.rows || [];
 	const summary = data.summary || [];
-	const currency = frm.doc.currency || frappe.defaults.get_default("currency");
+	// company currency, given by the server — never frm.doc.currency, which on a foreign-supplier
+	// order is the supplier's and would label every rate with the wrong symbol
+	const currency = data.currency || frappe.defaults.get_default("currency");
 
 	if (!rows.length) {
 		$body.html(
