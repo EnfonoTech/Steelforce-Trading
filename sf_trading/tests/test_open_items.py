@@ -1286,7 +1286,10 @@ class TestOpenItems(FrappeTestCase):
 		self.assertEqual(len(rows), 1, "an order nobody invoiced must appear once")
 		row = rows[0]
 		self.assertAlmostEqual(row.pending_qty, 4, places=3)
-		self.assertAlmostEqual(row.pending_amount, 480, places=2)
+		# read off the document, not hardcoded: the test company's currency need not be the
+		# price list's, and base_net_amount is what every money column here is denominated in
+		so.reload()
+		self.assertAlmostEqual(row.pending_amount, flt(so.items[0].base_net_amount), places=2)
 		self.assertAlmostEqual(row.billed_qty, 0, places=3)
 		self.assertAlmostEqual(row.delivered_qty, 0, places=3)
 		# Sales Order has no posting_date — the flow reports transaction_date under that key
@@ -1317,7 +1320,9 @@ class TestOpenItems(FrappeTestCase):
 		self.assertEqual(len(rows), 1)
 		self.assertAlmostEqual(rows[0].pending_qty, 3, places=3)
 		self.assertAlmostEqual(rows[0].billed_qty, 1, places=3)
-		self.assertAlmostEqual(rows[0].pending_amount, 360, places=2)
+		so.reload()
+		three_quarters = flt(so.items[0].base_net_amount) * 3 / 4
+		self.assertAlmostEqual(rows[0].pending_amount, three_quarters, places=2)
 
 	def test_delivering_an_order_does_not_make_it_billed(self):
 		"""Goods that left the yard are still unbilled revenue — reported, never subtracted."""
