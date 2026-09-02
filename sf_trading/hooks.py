@@ -43,6 +43,9 @@ app_include_js = [
 	f"/assets/sf_trading/js/sales_invoice_item_search.js?{_v}",
 	f"/assets/sf_trading/js/purchase_invoice_cost_center.js?{_v}",
 	f"/assets/sf_trading/js/stock_availability.js?{_v}",
+	# the third button on the Purchase Order items grid: what the branch has been selling this
+	# item for, which is the other half of a purchase negotiation
+	f"/assets/sf_trading/js/selling_history.js?{_v}",
 	# ── Global (all pages / all item_code fields / print patches) ──
 	f"/assets/sf_trading/js/workflow_approval_shortcut.js?{_v}",
 	f"/assets/sf_trading/js/item_search_cache_buster.js?{_v}",
@@ -471,6 +474,9 @@ override_whitelisted_methods = {
 	# the return window refuses before the credit note is built — the one check no stale browser
 	# and no re-painted toolbar can get past. See sf_trading/sales_return.py.
 	"erpnext.accounts.doctype.sales_invoice.sales_invoice.make_sales_return": "sf_trading.sales_return.make_sales_return",
+	# an invoice raised from an order nobody has received arrives with Update Stock ticked, so the
+	# goods reach the ledger with the bill. See sf_trading/api/purchase_order_invoice.py.
+	"erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_invoice": "sf_trading.api.purchase_order_invoice.make_purchase_invoice",
 }
 #
 # each overriding function accepts a `data` argument;
