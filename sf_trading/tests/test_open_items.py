@@ -53,15 +53,30 @@ class TestOpenItems(FrappeTestCase):
 		return item_code
 
 	@classmethod
+	def leaf(cls, doctype, fallback):
+		"""A non-group node of a tree master.
+
+		The root ("All Customer Groups", "All Territories") is what a vanilla site accepts and
+		what these fixtures used to name, but erpnext refuses a group node outright -- "Cannot
+		select a Group type Customer Group" -- on any site that put real groups under the root,
+		which is every client site. Resolved from the site rather than assumed.
+		"""
+		return frappe.db.get_value(doctype, {"is_group": 0}, "name") or fallback
+
+	@classmethod
 	def make_parties(cls):
+		customer_group = cls.leaf("Customer Group", "All Customer Groups")
+		territory = cls.leaf("Territory", "All Territories")
+		supplier_group = cls.leaf("Supplier Group", "All Supplier Groups")
+
 		for name in (CUSTOMER, OTHER_CUSTOMER):
 			if not frappe.db.exists("Customer", name):
 				frappe.get_doc(
 					{
 						"doctype": "Customer",
 						"customer_name": name,
-						"customer_group": "All Customer Groups",
-						"territory": "All Territories",
+						"customer_group": customer_group,
+						"territory": territory,
 					}
 				).insert()
 		if not frappe.db.exists("Supplier", SUPPLIER):
@@ -69,7 +84,7 @@ class TestOpenItems(FrappeTestCase):
 				{
 					"doctype": "Supplier",
 					"supplier_name": SUPPLIER,
-					"supplier_group": "All Supplier Groups",
+					"supplier_group": supplier_group,
 				}
 			).insert()
 
