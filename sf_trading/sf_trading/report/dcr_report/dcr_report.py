@@ -135,7 +135,21 @@ def _settled_writeoff_subquery(prefix, kind):
 	invoice is still correctly classified as settled by this kind (that part of
 	the accounting is unaffected), but the amount is subtracted from the row's
 	reported Income and shown in Total Discount/Adj. instead, so a sales row
-	never reports money that was actually waived, not received."""
+	never reports money that was actually waived, not received.
+
+	A payment that started life against a SALES ORDER is excluded. Loyalty given
+	at order level is recognised on the day the money was collected, which is the
+	day it appears in the report's own Loyalty / Write Off line; letting it also
+	land in a sales bucket would report the same fils twice, and on the invoice's
+	date rather than the collection's.
+
+	The exclusion is anchored on the ADVANCE LEDGER, not on the payment's own
+	reference row, because that row does not survive: when the invoice consumes
+	the advance, ERPNext REPLACES the Sales Order reference with a Sales Invoice
+	one (measured — the row changes doctype, it is not appended to), so a test on
+	`reference_doctype = 'Sales Order'` stops matching exactly when the money
+	would otherwise be re-attributed. `Advance Payment Ledger Entry` keeps naming
+	the order for good; only its `event` changes, Submit -> Adjustment."""
 	p = prefix
 	pe_cheque = _mode_is_cheque(f"{p}_pe")
 	if kind == "cash":
@@ -160,6 +174,12 @@ def _settled_writeoff_subquery(prefix, kind):
 		WHERE {p}_per.reference_doctype = 'Sales Invoice' AND {p}_per.reference_name = si.name
 			AND {p}_pe.posting_date <= si.posting_date
 			AND {pe_mode}
+			AND NOT EXISTS (
+				SELECT 1 FROM `tabAdvance Payment Ledger Entry` {p}_aple
+				WHERE {p}_aple.voucher_no = {p}_pe.name
+					AND {p}_aple.against_voucher_type = 'Sales Order'
+					AND {p}_aple.delinked = 0
+			)
 	)"""
 
 

@@ -548,13 +548,25 @@ def _detail_sales_return(params, cost_center, kind):
 
 
 def _detail_write_off(params, cost_center):
-	"""Every Payment Entry deduction row on a Receive PE, any account."""
+	"""Every Payment Entry deduction row on a Receive PE, any account.
+
+	The reference column reads the invoice OR the order the payment settled: loyalty given at
+	order level (the Sales Order payment popup) has no invoice, and listing it with a blank
+	reference made the biggest line in the drill-down the least explicable. The order is read
+	from the advance ledger, which keeps naming it — the payment's own reference row is
+	rewritten to the invoice the moment the advance is consumed.
+	"""
 	cond = _base_conditions(params["from_date"], params["to_date"], params["company"], cost_center, "pe.posting_date", "pe")
 	cc = " AND COALESCE(ded.cost_center, pe.cost_center) = %(cost_center)s" if cost_center else ""
 	sql = """
 		SELECT pe.name, pe.posting_date, pe.party, ded.account, ded.amount,
-			(SELECT wo_per.reference_name FROM `tabPayment Entry Reference` wo_per
-			 WHERE wo_per.parent = pe.name AND wo_per.reference_doctype = 'Sales Invoice' LIMIT 1) as reference_name
+			COALESCE(
+				(SELECT wo_per.reference_name FROM `tabPayment Entry Reference` wo_per
+				 WHERE wo_per.parent = pe.name AND wo_per.reference_doctype = 'Sales Invoice' LIMIT 1),
+				(SELECT wo_aple.against_voucher_no FROM `tabAdvance Payment Ledger Entry` wo_aple
+				 WHERE wo_aple.voucher_no = pe.name AND wo_aple.against_voucher_type = 'Sales Order'
+				   AND wo_aple.delinked = 0 LIMIT 1)
+			) as reference_name
 		FROM `tabPayment Entry Deduction` ded
 		INNER JOIN `tabPayment Entry` pe ON pe.name = ded.parent
 		WHERE pe.docstatus = 1 AND pe.payment_type = 'Receive' AND """ + cond + """
