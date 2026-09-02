@@ -198,7 +198,7 @@ def get_columns(report_type):
 			_("Payment Entry") + ":Link/Payment Entry:140",
 			_("Posting Date") + ":Date:100",
 			_("Party") + ":Data:150",
-			_("Sales Invoice") + ":Link/Sales Invoice:140",
+			_("Reference") + ":Data:140",
 			_("Account") + ":Link/Account:180",
 			_("Write Off Amount") + ":Currency:120",
 		]
