@@ -168,7 +168,7 @@ class TestSalesOrderLoyalty(FrappeTestCase):
 	def test_loyalty_is_refused_once_billing_has_started(self):
 		from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
 
-		so = self.make_order(qty=2, rate=50)
+		so = self.make_order(qty=2, rate=150)
 		si = make_sales_invoice(so.name)
 		si.items[0].qty = 1
 		TestOpenItems.fill_site_mandatories(si)
@@ -268,7 +268,26 @@ class TestSalesOrderLoyalty(FrappeTestCase):
 		"""The regression net: 3,462 of 3,469 invoices on production name no order."""
 		from sf_trading.api.sales_invoice_payment import get_loyalty_state, loyalty_already_given
 
-		si = TestOpenItems.make_si(self, qty=1, rate=100)
+		si = frappe.get_doc(
+			{
+				"doctype": "Sales Invoice",
+				"company": self.company,
+				"customer": CUSTOMER,
+				"cost_center": self.cost_center,
+				"items": [
+					{
+						"item_code": self.item_code,
+						"qty": 1,
+						"rate": 150,
+						"warehouse": self.warehouse,
+						"cost_center": self.cost_center,
+					}
+				],
+			}
+		)
+		TestOpenItems.fill_site_mandatories(si)
+		si.insert()
+		si.submit()
 		self.assertEqual(loyalty_already_given(si)["amount"], 0.0)
 		state = get_loyalty_state(si.name)
 		self.assertTrue(state["allowed"])

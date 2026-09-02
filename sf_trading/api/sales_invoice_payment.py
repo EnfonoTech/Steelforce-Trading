@@ -209,25 +209,35 @@ def loyalty_already_given(sales_invoice) -> dict:
 	if not orders:
 		return {"amount": 0.0, "orders": []}
 
+	# Read through the ADVANCE LEDGER, not through the Payment Entry's reference row. When the
+	# invoice is submitted ERPNext applies the advance and REWRITES that row from the Sales
+	# Order to the Sales Invoice (`update_reference_in_payment_entry` in accounts/utils.py), so
+	# a query keyed on the order finds the loyalty while the invoice is a draft and loses it the
+	# moment it is submitted -- measured on UAT: 0.300 before submit, 0.000 after.
+	# `Advance Payment Ledger Entry` keeps naming the order, which is what makes this stable.
 	rows = frappe.db.sql(
 		"""
-		SELECT DISTINCT ded.name, ded.amount, ref.reference_name AS sales_order
-		FROM `tabPayment Entry Deduction` ded
-		INNER JOIN `tabPayment Entry` pe ON pe.name = ded.parent
-		INNER JOIN `tabPayment Entry Reference` ref ON ref.parent = pe.name
-		WHERE pe.docstatus = 1
-			AND ref.reference_doctype = 'Sales Order'
-			AND ref.reference_name IN %(orders)s
+		SELECT DISTINCT ded.name AS deduction, ded.amount, aple.against_voucher_no AS sales_order
+		FROM `tabAdvance Payment Ledger Entry` aple
+		INNER JOIN `tabPayment Entry` pe ON pe.name = aple.voucher_no AND pe.docstatus = 1
+		INNER JOIN `tabPayment Entry Deduction` ded ON ded.parent = pe.name
+		WHERE aple.against_voucher_type = 'Sales Order'
+			AND aple.against_voucher_no IN %(orders)s
+			AND aple.delinked = 0
 		""",
 		{"orders": tuple(orders)},
 		as_dict=True,
 	)
 
-	given = {}
+	# one deduction can be reached through several ledger rows for the same order (a Submit and
+	# an Allocate event), so each is counted once
+	seen = {}
+	orders_seen = set()
 	for row in rows:
-		given[row.sales_order] = flt(given.get(row.sales_order, 0)) + flt(row.amount)
+		seen[row.deduction] = flt(row.amount)
+		orders_seen.add(row.sales_order)
 
-	return {"amount": flt(sum(given.values()), 3), "orders": sorted(given)}
+	return {"amount": flt(sum(seen.values()), 3), "orders": sorted(orders_seen)}
 
 
 @frappe.whitelist()
