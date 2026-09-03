@@ -35,6 +35,8 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, cstr, flt, getdate, nowdate
 
+from sf_trading.query import fetch_in
+
 # What erpnext's Unreconcile Payment will actually accept -- its validate() hard-codes
 # supported_types = ["Payment Entry", "Journal Entry"] and throws on anything else.
 PAYMENT_TYPES = ("Payment Entry", "Journal Entry")
@@ -372,8 +374,7 @@ def _payment_context(rows):
 	for doctype, names in by_doctype.items():
 		fields = ["name"] + [f"{f} as {alias}" for f, alias in optional
 		                     if frappe.db.has_column(doctype, f)]
-		for doc in frappe.get_all(doctype, filters={"name": ("in", list(names))},
-		                          fields=fields, limit_page_length=0):
+		for doc in fetch_in(doctype, list(names), fields=fields):
 			context[(doctype, doc["name"])] = doc
 	return context
 
@@ -396,13 +397,12 @@ def _return_intent(rows):
 
 	intent, origins = {}, {}
 	for doctype, group in names.items():
-		returns = frappe.get_all(doctype, filters={"name": ("in", list(group)), "is_return": 1},
-		                         fields=["name", "return_against"], limit_page_length=0)
+		returns = fetch_in(doctype, list(group), filters={"is_return": 1},
+		                   fields=["name", "return_against"])
 		wanted = [r.return_against for r in returns if r.return_against]
 		if wanted:
 			# one read for every origin invoice on the page, not one per return
-			for doc in frappe.get_all(doctype, filters={"name": ("in", wanted)},
-			                          fields=["name", "outstanding_amount"], limit_page_length=0):
+			for doc in fetch_in(doctype, wanted, fields=["name", "outstanding_amount"]):
 				origins[doc.name] = flt(doc.outstanding_amount)
 		for r in returns:
 			if not r.return_against:
@@ -528,8 +528,7 @@ def _target_context(rows):
 		           if frappe.db.has_column(doctype, f)]
 		# get_all deliberately: the rows are already scoped to a party the user filtered on, and
 		# a permission-filtered read here would silently blank the context of some rows
-		for doc in frappe.get_all(doctype, filters={"name": ("in", list(names))},
-		                          fields=fields, limit_page_length=0):
+		for doc in fetch_in(doctype, list(names), fields=fields):
 			context[(doctype, doc["name"])] = doc
 	return context
 

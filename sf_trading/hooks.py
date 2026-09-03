@@ -477,6 +477,10 @@ override_whitelisted_methods = {
 	# an invoice raised from an order nobody has received arrives with Update Stock ticked, so the
 	# goods reach the ledger with the bill. See sf_trading/api/purchase_order_invoice.py.
 	"erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_invoice": "sf_trading.api.purchase_order_invoice.make_purchase_invoice",
+	# "Add Column" on a report of more than ~5,000 rows sends every name in one query, which
+	# frappe 15.114 hands to sqlparse and sqlparse refuses past 10,000 tokens. Read it in
+	# batches. See sf_trading/api/query_report_columns.py.
+	"frappe.desk.query_report.get_data_for_custom_field": "sf_trading.api.query_report_columns.get_data_for_custom_field",
 }
 #
 # each overriding function accepts a `data` argument;
@@ -508,7 +512,13 @@ override_doctype_dashboards = {
 
 # Request Events
 # ----------------
-before_request = ["sf_trading.api.item_search.redirect_item_query_before_request"]
+before_request = [
+	"sf_trading.api.item_search.redirect_item_query_before_request",
+	# the whitelist override above only covers the HTTP door; a saved custom report and an export
+	# reach the same function by module attribute, so it is repointed here as well
+	"sf_trading.api.query_report_columns.install",
+]
+before_job = ["sf_trading.api.query_report_columns.install"]
 # after_request = ["sf_trading.utils.after_request"]
 
 # Job Events

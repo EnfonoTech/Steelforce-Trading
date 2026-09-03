@@ -31,6 +31,8 @@ from frappe import _
 from frappe.query_builder.functions import Sum
 from frappe.utils import cint, date_diff, flt, fmt_money, getdate, nowdate
 
+from sf_trading.query import fetch_in
+
 QTY_PRECISION = 3
 
 
@@ -379,12 +381,13 @@ def invoices_pending_delivery(filters):
 		entry.returned_qty += flt(row.returned_qty)
 		entry.pending_amount += flt(row.pending_amount)
 
-	# one read for every invoice on the page rather than one per row
+	# one read for every invoice on the page rather than one per row, batched because a page of
+	# more than ~5,000 invoices would otherwise build a query sqlparse refuses to parse
 	heads = {
 		head.name: head
-		for head in frappe.get_all(
+		for head in fetch_in(
 			"Sales Invoice",
-			filters={"name": ["in", list(per_invoice)]},
+			list(per_invoice),
 			fields=["name", "status", "base_grand_total"],
 		)
 	}
@@ -547,9 +550,7 @@ def fold_to_documents(rows, document_doctype, status_field="status", total_field
 		wanted.append(total_field)
 	heads = {
 		head.name: head
-		for head in frappe.get_all(
-			document_doctype, filters={"name": ["in", list(per_document)]}, fields=wanted
-		)
+		for head in fetch_in(document_doctype, list(per_document), fields=wanted)
 	}
 
 	for name, entry in per_document.items():
@@ -796,16 +797,16 @@ def annotate_ordered_rows(rows, invoiced, credited, delivered, as_on):
 	row_names = [row.row_name for row in rows]
 	orders = {
 		head.name: head
-		for head in frappe.get_all(
+		for head in fetch_in(
 			"Sales Order",
-			filters={"name": ["in", list({row.document for row in rows})]},
+			list({row.document for row in rows}),
 			fields=["name", "status", "currency", "conversion_rate", "advance_paid"],
 		)
 	}
 	lines = {
 		line.name: line
-		for line in frappe.get_all(
-			"Sales Order Item", filters={"name": ["in", row_names]}, fields=["name", "billed_amt", "amount"]
+		for line in fetch_in(
+			"Sales Order Item", row_names, fields=["name", "billed_amt", "amount"]
 		)
 	}
 
@@ -1041,12 +1042,10 @@ def party_open_summary(flow_specs, party_doctype, filters):
 	if filters.get("party_group"):
 		group_field = frappe.scrub(party_doctype) + "_group"
 		in_group = set(
-			frappe.get_all(
+			fetch_in(
 				party_doctype,
-				filters={
-					"name": ["in", list(parties)],
-					group_field: filters.get("party_group"),
-				},
+				list(parties),
+				filters={group_field: filters.get("party_group")},
 				pluck="name",
 			)
 		)
