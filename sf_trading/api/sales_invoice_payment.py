@@ -338,6 +338,7 @@ def get_loyalty_state(sales_invoice: str) -> dict:
 	}
 
 
+@frappe.whitelist()
 def create_pos_payments_for_invoice(
 	sales_invoice: str,
 	payments: str | list,
