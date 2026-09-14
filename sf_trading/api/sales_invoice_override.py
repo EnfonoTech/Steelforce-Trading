@@ -132,7 +132,16 @@ def validate_driver_payment(doc, _method=None):
 	if not doc.get("custom_driver"):
 		return
 
-	inv = _get_driver_overdue_invoice(doc.custom_driver, doc.name, as_of_date=doc.posting_date)
+	# `posting_date` belongs to the invoice; an order dates itself with `transaction_date`. Read
+	# bare, it raised AttributeError on every Cash order that named a delivery person and the
+	# order could not be saved at all (production, 2026-08-31 onward). `exclude_name` is scoped to
+	# the invoice for the same reason: the query reads `tabSales Invoice`, so passing an order's
+	# name there excluded nothing.
+	inv = _get_driver_overdue_invoice(
+		doc.custom_driver,
+		doc.name if doc.doctype == "Sales Invoice" else None,
+		as_of_date=doc.get("posting_date") or doc.get("transaction_date"),
+	)
 	if inv:
 		inv_link = frappe.utils.get_link_to_form("Sales Invoice", inv.name)
 		payment_days = frappe.db.get_value("Driver", doc.custom_driver, "custom_payment_days") or 1
