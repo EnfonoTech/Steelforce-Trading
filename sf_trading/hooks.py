@@ -181,6 +181,9 @@ after_migrate = [
 	"sf_trading.planned_payment.ensure_custom_fields",
 	# a System Settings value with no global default row is blanked by its own form
 	"sf_trading.system_defaults.sync_system_settings_defaults",
+	# a secondary Cost Center / Warehouse link, seeded from whoever raised the document, must not
+	# decide who may SEE it -- every parent link field gates the list
+	"sf_trading.user_permission_fields.apply",
 ]
 
 # Uninstallation
