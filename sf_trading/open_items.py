@@ -146,6 +146,51 @@ def merge_qty_maps(*maps):
 	return merged
 
 
+def returned_qty_by_po(child_doctype, parent_doctype, link_field, as_on):
+	"""How much each order row has had sent back, or credited back, as of a date.
+
+	A return document carries negative quantities, so the absolute value is what came back.
+	"""
+	child = frappe.qb.DocType(child_doctype)
+	parent = frappe.qb.DocType(parent_doctype)
+
+	query = (
+		frappe.qb.from_(child)
+		.join(parent)
+		.on(parent.name == child.parent)
+		.select(child[link_field].as_("po_row"), Sum(child.qty).as_("qty"))
+		.where(
+			(parent.docstatus == 1)
+			& (parent.posting_date <= as_on)
+			& (parent.is_return == 1)
+			& child[link_field].isnotnull()
+			& (child[link_field] != "")
+		)
+		.groupby(child[link_field])
+	)
+
+	if parent_doctype == "Purchase Invoice":
+		# the same population core's order-level billing pool reads
+		query = query.where(parent.update_stock == 0)
+
+	return {row.po_row: abs(flt(row.qty)) for row in query.run(as_dict=True)}
+
+
+def deduct_returns(queues_by_po, returned_by_po):
+	"""Take what came back off the front of each order row's FIFO queue."""
+	for po_row, returned in returned_by_po.items():
+		queue = queues_by_po.get(po_row)
+		if not queue:
+			continue
+		outstanding = flt(returned)
+		for entry in queue:
+			if outstanding <= 0:
+				break
+			taken = min(entry["free"], outstanding)
+			entry["free"] -= taken
+			outstanding -= taken
+
+
 def po_bridge_maps(as_on):
 	"""Pair a receipt and an invoice that meet only at the order row.
 
@@ -243,6 +288,20 @@ def po_bridge_maps(as_on):
 
 	receipts_by_po = free_rows(receipt_rows, billed_direct)
 	invoices_by_po = free_rows(invoice_rows, received_direct)
+
+	# Goods sent back, and money credited back, against the ORDER row. Core nets both into the
+	# same pool -- `get_billed_amount_against_po` sums every invoice row on the order row,
+	# debit notes included, because their quantity is negative. Leaving them out here would
+	# close a receipt with an invoice that was afterwards credited, or call an invoice received
+	# on goods that went back to the supplier.
+	deduct_returns(
+		receipts_by_po,
+		returned_qty_by_po("Purchase Receipt Item", "Purchase Receipt", "purchase_order_item", as_on),
+	)
+	deduct_returns(
+		invoices_by_po,
+		returned_qty_by_po("Purchase Invoice Item", "Purchase Invoice", "po_detail", as_on),
+	)
 
 	bridged_received: dict = {}
 	bridged_billed: dict = {}

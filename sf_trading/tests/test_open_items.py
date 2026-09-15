@@ -1519,3 +1519,61 @@ class TestPurchaseOrderBridge(TestOpenItems):
 			billed_items_pending_receipt(self.filters(as_on=yesterday)), pi.name
 		)
 		self.assertEqual(len(rows), 1, "as of yesterday the goods had not arrived")
+
+	def test_goods_sent_back_reopen_the_invoice(self):
+		"""The order row is the only thing pairing these documents, so a return must reach it."""
+		from erpnext.controllers.sales_and_purchase_return import make_return_doc
+
+		po = self.make_po(qty=10)
+		pi = self.pi_from_po(po)
+		pr = self.pr_from_po(po)
+
+		sent_back = make_return_doc("Purchase Receipt", pr.name)
+		sent_back.items[0].qty = -4
+		sent_back.items[0].received_qty = -4
+		sent_back.insert()
+		sent_back.submit()
+
+		self.assertTrue(
+			sent_back.items[0].purchase_order_item,
+			"the mapper copies the order row onto the return; without it nothing can net",
+		)
+
+		rows = self.rows_for(billed_items_pending_receipt(self.filters()), pi.name)
+		self.assertEqual(len(rows), 1, "four went back, so four are owed again")
+		self.assertAlmostEqual(rows[0].pending_qty, 4, places=3)
+
+	def test_a_debit_note_against_the_order_reopens_the_receipt(self):
+		from erpnext.controllers.sales_and_purchase_return import make_return_doc
+
+		po = self.make_po(qty=10)
+		pr = self.pr_from_po(po)
+		pi = self.pi_from_po(po)
+
+		credited = make_return_doc("Purchase Invoice", pi.name)
+		credited.items[0].qty = -4
+		credited.insert()
+		credited.submit()
+
+		self.assertTrue(credited.items[0].po_detail, "the credit has to reach the order row")
+
+		rows = self.rows_for(received_items_pending_billing(self.filters()), pr.name)
+		self.assertEqual(len(rows), 1, "four were credited back, so four are unbilled again")
+		self.assertAlmostEqual(rows[0].pending_qty, 4, places=3)
+
+	def test_a_return_does_not_net_twice(self):
+		"""Netted once on the order row and once through its own link would close the row twice."""
+		from erpnext.controllers.sales_and_purchase_return import make_return_doc
+
+		po = self.make_po(qty=10)
+		self.pi_from_po(po)
+		pr = self.pr_from_po(po)
+
+		sent_back = make_return_doc("Purchase Receipt", pr.name)
+		sent_back.items[0].qty = -4
+		sent_back.items[0].received_qty = -4
+		sent_back.insert()
+		sent_back.submit()
+
+		rows = self.rows_for(received_items_pending_billing(self.filters()), pr.name)
+		self.assertEqual(rows, [], "six billed through the order, four returned: nothing is open")
