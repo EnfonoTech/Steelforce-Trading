@@ -10,9 +10,15 @@ The second shape had to be remembered by hand on every invoice, and forgetting i
 priced and payable but absent from stock until somebody notices. So an invoice mapped from an order
 against which NOTHING has been received arrives with the box already ticked.
 
-Deliberately at mapping time and not on save. `before_validate` would re-tick it every time the
-document was saved, so a buyer who unticked it could never make that stick; here the invoice simply
-opens ticked and anybody may untick it.
+Ticking happens at mapping time and never on save: `before_validate` would re-tick it every time
+the document was saved, so a buyer who unticked it could never make that stick. Here the invoice
+simply opens ticked and anybody may untick it.
+
+UNticking is the opposite case and does run on save, in
+`untick_stock_when_the_goods_already_arrived`. Turning the box off when the goods are demonstrably
+already in the warehouse takes nothing away from the buyer -- the alternative is stock counted
+twice, or core's own refusal at submit -- and a draft raised before the receipt arrived has to be
+corrected at the moment it is saved again, not at the moment it was created.
 
 It never ticks when a receipt exists -- not a submitted one, not a draft, and not a row already
 linked on the invoice itself -- because the goods would then be counted into stock twice: once by
@@ -23,6 +29,7 @@ refuses.
 """
 
 import frappe
+from frappe import _
 from frappe.utils import cint, flt
 
 
@@ -108,18 +115,36 @@ def _is_tracked(item_code) -> bool:
 
 
 def set_update_stock(invoice) -> bool:
-	"""Tick `update_stock` when this invoice is the goods' first entry into stock."""
-	if cint(invoice.get("update_stock")) or cint(invoice.get("is_return")):
+	"""Decide `update_stock`: on when this invoice IS the goods' arrival, off when it is not.
+
+	It answers both ways on purpose. The site carries a hand-made Property Setter defaulting
+	`update_stock` to 1 on every Purchase Invoice (created 2026-09-10 through Customize Form), so
+	a function that could only ever tick the box left the dangerous case ticked: an invoice mapped
+	from an order whose goods had already arrived on a separate receipt. Core does not catch that
+	one -- `validate_purchase_receipt_if_update_stock`
+	(erpnext/accounts/doctype/purchase_invoice/purchase_invoice.py:750) only throws when the ROW
+	itself names a `purchase_receipt`, which an order-mapped row does not -- so the invoice submits
+	and receives the same goods a second time. PUR-ORD-2026-00310 was exactly that, fully received
+	on MAT-PRE-2026-01392 and still offering a ticked invoice.
+	"""
+	if cint(invoice.get("is_return")):
 		return False
 
 	orders = {row.purchase_order for row in invoice.get("items") or [] if row.get("purchase_order")}
 	if not orders:
+		# nothing to judge by: a direct invoice keeps whatever default the site set
 		return False
 
-	if not _orders_are_eligible(orders):
+	if not _orders_are_eligible(orders) or _has_a_receipt(orders, invoice):
+		# the goods are already in stock. Ticking here would receive them twice -- and a partly
+		# received order is no different, because `update_stock` posts EVERY row of the invoice,
+		# not just the quantity still outstanding. What arrived belongs to its receipt; what has
+		# not arrived yet belongs to the next one.
+		invoice.update_stock = 0
 		return False
 
-	if _has_a_receipt(orders, invoice):
+	if cint(invoice.get("update_stock")):
+		# already on, and nothing above asked for it to come off
 		return False
 
 	rows = _stock_rows(invoice)
@@ -138,6 +163,41 @@ def set_update_stock(invoice) -> bool:
 
 	invoice.update_stock = 1
 	return True
+
+
+def untick_stock_when_the_goods_already_arrived(doc, method=None):
+	"""before_validate: an invoice cannot post stock that a receipt has already posted.
+
+	The mapper decides the box at creation, but a draft outlives that moment: an invoice raised
+	while nothing had arrived, then saved again after the receipt was booked, is still ticked and
+	would receive everything twice. And the site's Property Setter defaults the box ON for every
+	invoice, including one built with Get Items From -> Purchase Receipt.
+
+	Core refuses the second shape at validate (`validate_purchase_receipt_if_update_stock`,
+	erpnext/accounts/doctype/purchase_invoice/purchase_invoice.py:750) with a message asking the
+	buyer to untick a box they never ticked, and does not refuse the first shape at all. Unticking
+	is the only answer either document can have, so it is given here instead of an error.
+	"""
+	if cint(doc.get("is_return")) or not cint(doc.get("update_stock")):
+		return
+
+	rows = doc.get("items") or []
+	if any(row.get("purchase_receipt") or row.get("pr_detail") for row in rows):
+		message = _(
+			"Update Stock has been turned off: this invoice bills a Purchase Receipt, which has "
+			"already taken the goods into stock."
+		)
+	else:
+		orders = {row.purchase_order for row in rows if row.get("purchase_order")}
+		if not orders or (_orders_are_eligible(orders) and not _has_a_receipt(orders, doc)):
+			return
+		message = _(
+			"Update Stock has been turned off: the goods on this order have already been received, "
+			"so ticking it would take them into stock a second time."
+		)
+
+	doc.update_stock = 0
+	frappe.msgprint(message, indicator="orange", alert=True)
 
 
 @frappe.whitelist()

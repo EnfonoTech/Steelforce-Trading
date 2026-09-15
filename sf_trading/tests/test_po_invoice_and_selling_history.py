@@ -47,6 +47,17 @@ class TestPurchaseInvoiceUpdateStock(FrappeTestCase):
 		po.submit()
 		return po
 
+	def receive(self, po, qty=None):
+		"""Book the order's goods in, the way a storekeeper would."""
+		from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_receipt
+
+		pr = make_purchase_receipt(po.name)
+		if qty is not None:
+			pr.items[0].qty = qty
+		pr.insert()
+		pr.submit()
+		return pr
+
 	def test_an_unreceived_order_bills_with_update_stock_ticked(self):
 		po = self.make_order()
 		pi = make_purchase_invoice(po.name)
@@ -91,14 +102,17 @@ class TestPurchaseInvoiceUpdateStock(FrappeTestCase):
 	def test_an_untick_survives_the_save(self):
 		"""The tick is an opening default, not a rule. A buyer who unticks it keeps that.
 
-		This holds because the tick happens at mapping time only. Were it wired into a document
-		event it would be re-applied on every save and the untick could never stick -- so the
-		absence of that wiring is asserted too, not just the behaviour it produces today.
+		This holds because the tick happens at mapping time only. Were the TICK wired into a
+		document event it would be re-applied on every save and the untick could never stick, so
+		the wiring is asserted too: the only thing this module may run on save is the untick.
 		"""
 		from sf_trading import hooks
 
 		wired = str(getattr(hooks, "doc_events", {}).get("Purchase Invoice", {}))
-		self.assertNotIn("purchase_order_invoice", wired, "the tick must not run on save")
+		self.assertNotIn("purchase_order_invoice.set_update_stock", wired,
+		                 "the tick must not run on save")
+		self.assertIn("purchase_order_invoice.untick_stock_when_the_goods_already_arrived", wired,
+		              "the untick must run on save, for a draft the receipt overtook")
 
 		po = self.make_order()
 		pi = make_purchase_invoice(po.name)
@@ -112,6 +126,58 @@ class TestPurchaseInvoiceUpdateStock(FrappeTestCase):
 		po = self.make_order()
 		pi = make_purchase_invoice(po.name)
 		self.assertFalse(set_update_stock(pi), "already ticked; nothing left to do")
+
+	def test_a_default_that_ticks_every_invoice_is_overruled_when_goods_arrived(self):
+		"""The site defaults update_stock ON via a Property Setter; a received order must overrule it."""
+		po = self.make_order()
+		self.receive(po)
+
+		pi = make_purchase_invoice(po.name)
+		pi.update_stock = 1          # what the site default does to every new invoice
+		set_update_stock(pi)
+		self.assertEqual(int(pi.update_stock or 0), 0, "the goods are already in the warehouse")
+
+	def test_the_untick_runs_on_save_for_a_draft_the_receipt_overtook(self):
+		"""Raised while nothing had arrived, saved again after the receipt: it must come off."""
+		po = self.make_order()
+		pi = make_purchase_invoice(po.name)
+		self.assertEqual(int(pi.update_stock or 0), 1, "nothing received yet")
+		pi.insert()
+
+		self.receive(po)
+		pi.reload()
+		pi.save()
+		self.assertEqual(int(pi.update_stock or 0), 0, "the receipt has taken the goods into stock")
+
+	def test_an_invoice_billing_a_receipt_never_posts_stock(self):
+		"""Core throws on this one; unticking answers it instead of refusing the document."""
+		from erpnext.stock.doctype.purchase_receipt.purchase_receipt import make_purchase_invoice as bill_receipt
+
+		po = self.make_order()
+		pr = self.receive(po)
+
+		pi = bill_receipt(pr.name)
+		pi.update_stock = 1          # the site default again
+		pi.insert()
+		self.assertEqual(int(pi.update_stock or 0), 0)
+
+	def test_a_direct_invoice_keeps_the_site_default(self):
+		"""No order, no receipt: nothing here knows better than whoever ticked it."""
+		pi = frappe.get_doc({
+			"doctype": "Purchase Invoice",
+			"company": self.company,
+			"supplier": SUPPLIER,
+			"update_stock": 1,
+			"items": [{
+				"item_code": self.item_code,
+				"qty": 2,
+				"rate": 50,
+				"warehouse": self.warehouse,
+			}],
+		})
+		TestOpenItems.fill_site_mandatories(pi)
+		pi.insert()
+		self.assertEqual(int(pi.update_stock or 0), 1, "an invoice that IS the arrival keeps its tick")
 
 	def test_a_closed_order_is_refused(self):
 		"""A ticked invoice reaches update_ordered_and_reserved_qty, which throws on a Closed order.

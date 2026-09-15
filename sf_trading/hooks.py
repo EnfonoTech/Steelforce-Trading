@@ -409,6 +409,9 @@ doc_events = {
 	"Purchase Invoice": {
 		"before_validate": [
 			"sf_trading.inter_company.purchase_invoice_before_validate",
+			# goods a receipt has already booked must not be taken into stock a second time by
+			# the bill, whoever ticked the box and whenever they ticked it
+			"sf_trading.api.purchase_order_invoice.untick_stock_when_the_goods_already_arrived",
 			_CC_HOOK,
 			_PTT_HOOK,
 			# before_validate, because the controller's own validate is what reads these
