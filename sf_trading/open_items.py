@@ -137,6 +137,137 @@ def matched_qty_map(child_doctype, parent_doctype, link_field, as_on, is_return=
 	return {row.link: flt(row.qty) for row in query.run(as_dict=True)}
 
 
+def merge_qty_maps(*maps):
+	"""Add several matched-quantity maps together, keyed the same way."""
+	merged: dict = {}
+	for qty_map in maps:
+		for link, qty in qty_map.items():
+			merged[link] = flt(merged.get(link, 0)) + flt(qty)
+	return merged
+
+
+def po_bridge_maps(as_on):
+	"""Pair a receipt and an invoice that meet only at the order row.
+
+	A buyer may invoice straight from the Purchase Order and receive the goods on a separate
+	Purchase Receipt raised from the same order. Neither document is made from the other, so
+	neither `pr_detail` nor `purchase_invoice_item` is ever filled and the two never meet --
+	the invoice would sit in Billed Items Pending Receipt forever while the goods are on the
+	shelf, and the receipt in Received Items Pending Billing forever while the invoice is paid.
+	On this site that is a quarter of the purchase lines (179 of 711 rows raised since July
+	2026), and 157 of the 191 rows the receipt report was showing were this and nothing else.
+
+	Core closes the same gap for money: `update_billed_amount_based_on_po`
+	(erpnext/stock/doctype/purchase_receipt/purchase_receipt.py) spreads an amount billed
+	directly against an order row across that row's receipts, FIFO. The pool it spreads is
+	exactly the population matched here -- submitted invoice rows naming the order row, with no
+	`pr_detail`, on an invoice that did not update stock itself.
+
+	This does it in quantity, which is what these reports measure, and answers BOTH reports in
+	one pass: every unit matched is credited to the invoice row and to the receipt row together,
+	so the same unit cannot be counted twice. Quantities already claimed by a real mapper link
+	are removed first, so the bridge only ever allocates what is genuinely unaccounted for.
+
+	Returns ({purchase_invoice_item: received_qty}, {purchase_receipt_item: billed_qty}).
+	"""
+	receipt = frappe.qb.DocType("Purchase Receipt")
+	receipt_item = frappe.qb.DocType("Purchase Receipt Item")
+	invoice = frappe.qb.DocType("Purchase Invoice")
+	invoice_item = frappe.qb.DocType("Purchase Invoice Item")
+
+	receipt_rows = (
+		frappe.qb.from_(receipt_item)
+		.join(receipt)
+		.on(receipt.name == receipt_item.parent)
+		.select(
+			receipt_item.name,
+			receipt_item.purchase_order_item.as_("po_row"),
+			receipt_item.qty,
+			receipt.posting_date,
+		)
+		.where(
+			(receipt.docstatus == 1)
+			& (receipt.posting_date <= as_on)
+			& (receipt.is_return == 0)
+			& receipt_item.purchase_order_item.isnotnull()
+			& (receipt_item.purchase_order_item != "")
+			# a receipt raised FROM an invoice is already paired with it by that link
+			& (receipt_item.purchase_invoice_item.isnull() | (receipt_item.purchase_invoice_item == ""))
+		)
+	).run(as_dict=True)
+
+	invoice_rows = (
+		frappe.qb.from_(invoice_item)
+		.join(invoice)
+		.on(invoice.name == invoice_item.parent)
+		.select(
+			invoice_item.name,
+			invoice_item.po_detail.as_("po_row"),
+			invoice_item.qty,
+			invoice.posting_date,
+		)
+		.where(
+			(invoice.docstatus == 1)
+			& (invoice.posting_date <= as_on)
+			& (invoice.is_return == 0)
+			# an invoice that updates stock received the goods itself: there is no receipt to pair
+			& (invoice.update_stock == 0)
+			& invoice_item.po_detail.isnotnull()
+			& (invoice_item.po_detail != "")
+			& (invoice_item.pr_detail.isnull() | (invoice_item.pr_detail == ""))
+		)
+	).run(as_dict=True)
+
+	if not receipt_rows or not invoice_rows:
+		return {}, {}
+
+	# whatever a real link already claims is not the bridge's to allocate
+	billed_direct = matched_qty_map("Purchase Invoice Item", "Purchase Invoice", "pr_detail", as_on)
+	received_direct = matched_qty_map(
+		"Purchase Receipt Item", "Purchase Receipt", "purchase_invoice_item", as_on
+	)
+
+	def free_rows(rows, claimed):
+		by_po: dict = {}
+		for row in rows:
+			free = flt(row.qty, QTY_PRECISION) - abs(flt(claimed.get(row.name, 0), QTY_PRECISION))
+			if free <= 0:
+				continue
+			by_po.setdefault(row.po_row, []).append(
+				{"name": row.name, "free": free, "posting_date": row.posting_date}
+			)
+		for queue in by_po.values():
+			# FIFO, the way core distributes an order-level amount across its receipts
+			queue.sort(key=lambda entry: (entry["posting_date"], entry["name"]))
+		return by_po
+
+	receipts_by_po = free_rows(receipt_rows, billed_direct)
+	invoices_by_po = free_rows(invoice_rows, received_direct)
+
+	bridged_received: dict = {}
+	bridged_billed: dict = {}
+
+	for po_row, invoices in invoices_by_po.items():
+		receipts = receipts_by_po.get(po_row)
+		if not receipts:
+			continue
+		position = 0
+		for inv in invoices:
+			needed = inv["free"]
+			while needed > 0 and position < len(receipts):
+				rec = receipts[position]
+				if rec["free"] <= 0:
+					position += 1
+					continue
+				taken = min(needed, rec["free"])
+				bridged_received[inv["name"]] = flt(bridged_received.get(inv["name"], 0)) + taken
+				bridged_billed[rec["name"]] = flt(bridged_billed.get(rec["name"], 0)) + taken
+				needed -= taken
+				rec["free"] -= taken
+
+	return bridged_received, bridged_billed
+
+
 # The field that dates a source document. An order is dated by when it was placed;
 # every other document these reports read has a posting date. Both are reported under
 # `posting_date` so one set of columns, filters and ageing serves them all.
@@ -717,7 +848,12 @@ def received_items_pending_billing(filters):
 
 	rows = base_rows("Purchase Receipt", "supplier", filters, extra_conditions=conditions)
 
-	billed = matched_qty_map("Purchase Invoice Item", "Purchase Invoice", "pr_detail", as_on)
+	# an invoice raised from the ORDER bills this receipt too, though no link says so
+	_bridged_received, bridged_billed = po_bridge_maps(as_on)
+	billed = merge_qty_maps(
+		matched_qty_map("Purchase Invoice Item", "Purchase Invoice", "pr_detail", as_on),
+		bridged_billed,
+	)
 
 	if ignores_return_netting(filters):
 		# the caller accounts for returns on their own lines instead — see
@@ -893,8 +1029,11 @@ def billed_items_pending_receipt(filters):
 		],
 	)
 
-	received = matched_qty_map(
-		"Purchase Receipt Item", "Purchase Receipt", "purchase_invoice_item", as_on
+	# a receipt raised from the ORDER received these goods too, though no link says so
+	bridged_received, _bridged_billed = po_bridge_maps(as_on)
+	received = merge_qty_maps(
+		matched_qty_map("Purchase Receipt Item", "Purchase Receipt", "purchase_invoice_item", as_on),
+		bridged_received,
 	)
 	debited = matched_qty_map(
 		"Purchase Invoice Item", "Purchase Invoice", "purchase_invoice_item", as_on, is_return=1

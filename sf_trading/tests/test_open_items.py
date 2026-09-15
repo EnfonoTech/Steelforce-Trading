@@ -16,6 +16,7 @@ from sf_trading.open_items import (
 	delivered_items_pending_billing,
 	invoiced_items_to_be_delivered,
 	invoices_pending_delivery,
+	po_bridge_maps,
 	received_items_pending_billing,
 )
 from sf_trading.tests.test_sdbnb import ABBR, COMPANY, get_test_company
@@ -1396,3 +1397,125 @@ class TestOpenItems(FrappeTestCase):
 		self.assertEqual(len(rows), 1, "credited quantity is owed again")
 		self.assertAlmostEqual(rows[0].pending_qty, 1, places=3)
 		self.assertAlmostEqual(rows[0].returned_qty, 1, places=3)
+
+
+class TestPurchaseOrderBridge(TestOpenItems):
+	"""An invoice and a receipt that meet only at the order row.
+
+	Buying from the order and receiving on a separate receipt leaves neither `pr_detail` nor
+	`purchase_invoice_item` filled, so nothing in the mapper links the two. Before the bridge,
+	the invoice sat in Billed Items Pending Receipt with the goods already on the shelf -- on
+	production, 149 of 158 rows.
+	"""
+
+	def make_po(self, qty=10, rate=90, supplier=SUPPLIER):
+		po = frappe.get_doc(
+			{
+				"doctype": "Purchase Order",
+				"company": COMPANY,
+				"supplier": supplier,
+				"schedule_date": nowdate(),
+				"cost_center": self.cost_center,
+				"items": [
+					{
+						"item_code": self.item_code,
+						"qty": qty,
+						"rate": rate,
+						"schedule_date": nowdate(),
+						"warehouse": self.warehouse,
+						"cost_center": self.cost_center,
+					}
+				],
+			}
+		)
+		self.fill_site_mandatories(po)
+		po.insert()
+		po.submit()
+		return po
+
+	def pi_from_po(self, po, qty=None, update_stock=0):
+		from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_invoice
+
+		pi = make_purchase_invoice(po.name)
+		pi.update_stock = update_stock
+		if qty is not None:
+			pi.items[0].qty = qty
+		self.fill_site_mandatories(pi)
+		pi.insert()
+		pi.submit()
+		return pi
+
+	def pr_from_po(self, po, qty=None, posting_date=None):
+		from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_receipt
+
+		pr = make_purchase_receipt(po.name)
+		if qty is not None:
+			pr.items[0].qty = qty
+		if posting_date:
+			pr.set_posting_time = 1
+			pr.posting_date = posting_date
+		pr.insert()
+		pr.submit()
+		return pr
+
+	def test_a_receipt_from_the_order_closes_an_invoice_from_the_order(self):
+		po = self.make_po(qty=10)
+		pi = self.pi_from_po(po)
+		self.pr_from_po(po)
+
+		self.assertEqual(
+			self.rows_for(billed_items_pending_receipt(self.filters()), pi.name),
+			[],
+			"the goods arrived on a receipt raised from the same order",
+		)
+
+	def test_the_same_pairing_closes_the_receipt_for_billing(self):
+		po = self.make_po(qty=10)
+		self.pi_from_po(po)
+		pr = self.pr_from_po(po)
+
+		self.assertEqual(
+			self.rows_for(received_items_pending_billing(self.filters()), pr.name),
+			[],
+			"the invoice was raised from the same order",
+		)
+
+	def test_a_short_receipt_leaves_the_rest_open(self):
+		po = self.make_po(qty=10)
+		pi = self.pi_from_po(po)
+		self.pr_from_po(po, qty=4)
+
+		rows = self.rows_for(billed_items_pending_receipt(self.filters()), pi.name)
+		self.assertEqual(len(rows), 1)
+		self.assertAlmostEqual(rows[0].pending_qty, 6, places=3)
+		self.assertAlmostEqual(rows[0].received_qty, 4, places=3)
+
+	def test_a_real_link_is_not_counted_twice(self):
+		"""Receipt first, invoice made FROM it: the bridge must contribute nothing."""
+		po = self.make_po(qty=10)
+		pr = self.pr_from_po(po)
+		self.make_pi_from_pr(pr)
+
+		bridged_received, bridged_billed = po_bridge_maps(getdate(nowdate()))
+		self.assertEqual(bridged_billed, {})
+		self.assertEqual(bridged_received, {})
+
+	def test_an_invoice_that_took_the_stock_itself_is_not_bridged(self):
+		"""Core leaves `update_stock` invoices out of the order's billing pool, and so does this."""
+		po = self.make_po(qty=10)
+		pr = self.pr_from_po(po)
+		self.pi_from_po(po, update_stock=1)
+
+		rows = self.rows_for(received_items_pending_billing(self.filters()), pr.name)
+		self.assertEqual(len(rows), 1, "that invoice received its own goods; it bills no receipt")
+
+	def test_a_receipt_after_the_as_on_date_does_not_close_the_invoice(self):
+		po = self.make_po(qty=10)
+		pi = self.pi_from_po(po)
+		self.pr_from_po(po)
+
+		yesterday = add_days(nowdate(), -1)
+		rows = self.rows_for(
+			billed_items_pending_receipt(self.filters(as_on=yesterday)), pi.name
+		)
+		self.assertEqual(len(rows), 1, "as of yesterday the goods had not arrived")
