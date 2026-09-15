@@ -13,7 +13,9 @@
   "si_return_approval_enabled",
   "si_return_amount_restriction",
   "si_return_approval_threshold",
-  "si_return_requires_workflow"
+  "si_return_requires_workflow",
+  "open_items_section",
+  "open_items_cutover_date"
  ],
  "fields": [
   {
@@ -60,7 +62,7 @@
   },
   {
    "default": "0",
-   "description": "Send Sales Invoice returns through the PM Workflow for Sales Invoice instead of letting them be submitted directly. While this is on, that workflow governs returns only — ordinary invoices keep their own Submit button.",
+   "description": "Send Sales Invoice returns through the PM Workflow for Sales Invoice instead of letting them be submitted directly. While this is on, that workflow governs returns only \u2014 ordinary invoices keep their own Submit button.",
    "fieldname": "si_return_approval_enabled",
    "fieldtype": "Check",
    "label": "Sales Return Approval Enabled"
@@ -88,6 +90,17 @@
    "fieldname": "si_return_requires_workflow",
    "fieldtype": "Check",
    "label": "PM Workflow Approval Mandatory Above the Threshold"
+  },
+  {
+   "fieldname": "open_items_section",
+   "fieldtype": "Section Break",
+   "label": "Open Items"
+  },
+  {
+   "description": "The four open item reports ignore documents posted before this date. Everything earlier belongs to the system this site was migrated from and was settled there, so a receipt or an invoice left looking open by the import is not a real open item. Leave it empty and every document ever raised is considered.",
+   "fieldname": "open_items_cutover_date",
+   "fieldtype": "Date",
+   "label": "Consider Open Items From"
   }
  ],
  "index_web_pages_for_search": 1,

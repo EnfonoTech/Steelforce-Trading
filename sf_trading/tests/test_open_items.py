@@ -1577,3 +1577,42 @@ class TestPurchaseOrderBridge(TestOpenItems):
 
 		rows = self.rows_for(received_items_pending_billing(self.filters()), pr.name)
 		self.assertEqual(rows, [], "six billed through the order, four returned: nothing is open")
+
+
+class TestOpenItemsCutover(TestOpenItems):
+	"""Documents older than go-live are not open items, whatever their links say."""
+
+	def tearDown(self):
+		frappe.db.set_single_value("SF Trading Settings", "open_items_cutover_date", None)
+
+	def set_cutover(self, date):
+		frappe.db.set_single_value("SF Trading Settings", "open_items_cutover_date", date)
+
+	def test_nothing_is_floored_when_the_field_is_empty(self):
+		self.set_cutover(None)
+		si = self.make_si(qty=5, posting_date=add_days(nowdate(), -30))
+		self.assertEqual(len(self.rows_for(invoiced_items_to_be_delivered(self.filters()), si.name)), 1)
+
+	def test_a_document_below_the_cutover_is_gone(self):
+		si = self.make_si(qty=5, posting_date=add_days(nowdate(), -30))
+		self.set_cutover(add_days(nowdate(), -10))
+		self.assertEqual(self.rows_for(invoiced_items_to_be_delivered(self.filters()), si.name), [])
+
+	def test_a_document_on_the_cutover_itself_survives(self):
+		posted = add_days(nowdate(), -10)
+		si = self.make_si(qty=5, posting_date=posted)
+		self.set_cutover(posted)
+		self.assertEqual(len(self.rows_for(invoiced_items_to_be_delivered(self.filters()), si.name)), 1)
+
+	def test_a_wider_from_date_cannot_reach_below_the_cutover(self):
+		"""Asking for more history than the cutover allows must not resurrect settled documents."""
+		si = self.make_si(qty=5, posting_date=add_days(nowdate(), -30))
+		self.set_cutover(add_days(nowdate(), -10))
+		rows = invoiced_items_to_be_delivered(self.filters(from_date=add_days(nowdate(), -60)))
+		self.assertEqual(self.rows_for(rows, si.name), [])
+
+	def test_a_narrower_from_date_still_narrows(self):
+		si = self.make_si(qty=5, posting_date=add_days(nowdate(), -5))
+		self.set_cutover(add_days(nowdate(), -10))
+		rows = invoiced_items_to_be_delivered(self.filters(from_date=add_days(nowdate(), -2)))
+		self.assertEqual(self.rows_for(rows, si.name), [], "the caller asked for less, and got less")

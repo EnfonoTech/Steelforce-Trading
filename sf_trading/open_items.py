@@ -45,6 +45,21 @@ def as_on_date(filters):
 	return getdate(filters.get("as_on") or nowdate())
 
 
+def cutover_date():
+	"""The date before which nothing is an open item on this site.
+
+	Everything earlier belongs to the system Steel Force migrated from and was settled there --
+	the accountant confirmed no receipt and no invoice was left pending at the cutover. What the
+	import left behind is an artifact: it created the receipts, and the invoices that had already
+	paid for them in the old system arrived without a link, so both sides sat open forever. 53
+	receipts (7,085.166 BHD) and 6 invoices were showing that way.
+
+	Blank means no floor, which is what a site that never migrated should have.
+	"""
+	value = frappe.db.get_single_value("SF Trading Settings", "open_items_cutover_date")
+	return getdate(value) if value else None
+
+
 def posting_range(filters):
 	"""Optional posting-date window for the source documents, as (from, to).
 
@@ -439,6 +454,11 @@ def base_rows(parent_doctype, party_field, filters, extra_conditions=None):
 	query = apply_user_permissions(query, parent, child, parent_doctype)
 
 	from_date, to_date = posting_range(filters)
+	cutover = cutover_date()
+	if cutover and (not from_date or from_date < cutover):
+		# the floor wins over a wider From Date: everything below it was settled in the system
+		# this site migrated from, and the number cards pass no dates at all
+		from_date = cutover
 	if from_date:
 		query = query.where(dated >= from_date)
 	if to_date:
