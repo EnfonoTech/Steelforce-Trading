@@ -168,7 +168,7 @@
    "fieldtype": "Select",
    "in_standard_filter": 1,
    "label": "Party Type",
-   "options": "Supplier\nCustomer",
+   "options": "Supplier\nCustomer\nEmployee",
    "reqd": 1
   },
   {

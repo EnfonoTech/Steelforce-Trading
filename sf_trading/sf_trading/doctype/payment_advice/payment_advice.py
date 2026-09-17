@@ -35,9 +35,18 @@ from frappe.utils import add_days, cint, flt, getdate, get_link_to_form, money_i
 from erpnext.accounts.party import get_party_account
 from erpnext.setup.utils import get_exchange_rate
 
-PAY_PARTY_TYPES = ("Supplier",)
+# An Employee is paid the same way a Supplier is — money leaves the company against
+# documents somebody else's app owns. Everything Employee-specific below is resolved
+# through hooks rather than named here, so sf_trading needs no knowledge of the HR app
+# and the HR app needs no dependency on sf_trading.
+PAY_PARTY_TYPES = ("Supplier", "Employee")
 RECEIVE_PARTY_TYPES = ("Customer",)
 PARTY_TYPES = PAY_PARTY_TYPES + RECEIVE_PARTY_TYPES
+
+# Party types the outstanding-invoice builder understands. An Employee has no AR/AP
+# ledger of open invoices to pull from — their advices are raised by the document that
+# owes the money — so the builder stays supplier/customer only.
+BUILDER_PARTY_TYPES = ("Supplier", "Customer")
 
 # ── Approval routing ──────────────────────────────────────────────────────────────────
 # Which approvers an advice needs depends on what it pays for. The decision is worked out
@@ -60,6 +69,8 @@ FINANCE_APPROVAL_LIMIT = 500.0
 VALID_REFERENCE_DOCTYPES = {
     "Customer": ("Sales Order", "Sales Invoice", "Journal Entry", "Dunning"),
     "Supplier": ("Purchase Order", "Purchase Invoice", "Journal Entry"),
+    # Employee: whatever the installed HR app registers. Nothing is hard-coded here.
+    "Employee": ("Journal Entry",),
 }
 
 ORDER_DOCTYPES = ("Sales Order", "Purchase Order")
@@ -76,9 +87,38 @@ ALLOWED_REFERENCE_DOCTYPES = tuple(
 )
 
 
+def registered_reference_doctypes(party_type):
+    """Reference doctypes another app has registered for this party type.
+
+    An app declares them in its own hooks.py:
+
+        payment_advice_reference_doctypes = {
+            "Employee": ["Annual Leave Disbursement", "Salary Settlement"],
+        }
+
+    Only doctypes that actually exist on this site are returned, so an advice does not
+    offer a reference the site cannot resolve after an app is uninstalled.
+    """
+    registered = (frappe.get_hooks("payment_advice_reference_doctypes") or {}).get(party_type) or []
+    return tuple(dt for dt in registered if frappe.db.exists("DocType", dt))
+
+
+@frappe.whitelist()
+def get_registered_reference_doctypes():
+    """{party_type: [doctype, ...]} for the form, from every app that registered any."""
+    registered = frappe.get_hooks("payment_advice_reference_doctypes") or {}
+    return {
+        party_type: [dt for dt in doctypes if frappe.db.exists("DocType", dt)]
+        for party_type, doctypes in registered.items()
+    }
+
+
 def valid_reference_doctypes(party_type):
-    """What this party type may be paid against — identical to Payment Entry's list."""
-    return VALID_REFERENCE_DOCTYPES.get(party_type, ())
+    """What this party type may be paid against — identical to Payment Entry's list,
+    plus anything another app has registered for it."""
+    return tuple(VALID_REFERENCE_DOCTYPES.get(party_type, ())) + registered_reference_doctypes(
+        party_type
+    )
 
 STATUS_DRAFT = "Draft"
 STATUS_PENDING = "Pending Approval"
@@ -90,6 +130,14 @@ STATUS_CANCELLED = "Cancelled"
 PARTY_NAME_FIELD = {
     "Supplier": "supplier_name",
     "Customer": "customer_name",
+    "Employee": "employee_name",
+}
+
+# The field on a reference document that names the party.
+PARTY_LINK_FIELD = {
+    "Supplier": "supplier",
+    "Customer": "customer",
+    "Employee": "employee",
 }
 
 
@@ -283,7 +331,7 @@ class PaymentAdvice(Document):
         return branches[0] if len(branches) == 1 else None
 
     def party_field(self):
-        return {"Supplier": "supplier", "Customer": "customer"}.get(self.party_type, "supplier")
+        return PARTY_LINK_FIELD.get(self.party_type, "supplier")
 
     def validate_not_advised_elsewhere(self):
         """Stop the same voucher being paid twice through two live advices."""
@@ -804,6 +852,20 @@ def get_reference_amounts(doctype, name, meta=None):
                     return amount
         return 0.0
 
+    # A document another app owns says for itself which field carries the money, in its
+    # own hooks.py:
+    #
+    #     payment_advice_reference_amount_fields = {
+    #         "Annual Leave Disbursement": ["total_leave_pay"],
+    #     }
+    #
+    # There is no outstanding concept on those documents — an advice is raised for the
+    # whole of what the document owes — so the total and the payable figure are the same.
+    registered = (frappe.get_hooks("payment_advice_reference_amount_fields") or {}).get(doctype)
+    if registered:
+        total = value(*registered)
+        return total, total
+
     if doctype in ORDER_DOCTYPES:
         total = value("base_rounded_total", "base_grand_total", "grand_total")
         advance = flt(frappe.db.get_value(doctype, name, "advance_paid"))
@@ -1009,6 +1071,48 @@ def get_payment_type(party_type):
     frappe.throw(_("Unsupported Party Type for payment: %s") % party_type)
 
 
+def resolve_party_account(party_type, party, company, advice=None):
+    """The account this payment settles, party type by party type.
+
+    erpnext's own `get_party_account` reads the ACCOUNT TYPE of the Party Type and falls
+    back to the company default for it — and Party Type "Employee" is account type
+    Payable, so an employee payment would be posted against Creditors, where nothing owes
+    them anything. What an employee is actually owed sits on the payroll liability the HR
+    document credited, so that is what this pays off:
+
+      1. a Party Account row on the Employee, where a site keeps one;
+      2. whatever the app that owns the referenced documents resolves, through the
+         `payment_advice_party_account` hook — an HR app points at the same leave-salary
+         payable its disbursement credited, so the two meet on one account;
+      3. Company.default_payroll_payable_account;
+      4. erpnext's answer, unchanged, for every other party type.
+    """
+    if party_type != "Employee":
+        return get_party_account(party_type, party, company)
+
+    account = frappe.db.get_value(
+        "Party Account", {"parenttype": "Employee", "parent": party, "company": company}, "account"
+    )
+    if account:
+        return account
+
+    for method in frappe.get_hooks("payment_advice_party_account") or []:
+        try:
+            account = frappe.call(method, party=party, company=company, advice=advice)
+        except Exception:
+            frappe.log_error(
+                title="Payment Advice: party account resolver failed",
+                message=frappe.get_traceback(),
+            )
+            account = None
+        if account:
+            return account
+
+    return frappe.get_cached_value(
+        "Company", company, "default_payroll_payable_account"
+    ) or get_party_account(party_type, party, company)
+
+
 def get_company_account(company, mode_of_payment=None):
     """Bank/cash account for the company side.
 
@@ -1052,6 +1156,58 @@ def pe_reference_row(row):
     return values
 
 
+# What a Payment Entry itself will accept as a reference, per party type — erpnext's own
+# PaymentEntry.get_valid_reference_doctypes. An advice may legitimately carry references
+# the Payment Entry cannot: an Employee advice pays HR documents, and a Payment Entry for
+# an Employee allocates against Journal Entries and nothing else.
+PE_VALID_REFERENCE_DOCTYPES = {
+    "Customer": ("Sales Order", "Sales Invoice", "Journal Entry", "Dunning", "Payment Entry"),
+    "Supplier": ("Purchase Order", "Purchase Invoice", "Journal Entry", "Payment Entry"),
+    "Employee": ("Journal Entry",),
+    "Shareholder": ("Journal Entry",),
+}
+
+
+def payment_entry_reference(party_type, row):
+    """The Payment Entry reference row for one advice row, or None to leave it unallocated.
+
+    Where the advice row names a document the Payment Entry would refuse, the app that owns
+    that document is asked what the payment should actually settle instead:
+
+        payment_advice_payment_targets = ["my_app.api.payment_target"]
+
+    An HR app answers with the Journal Entry its document already posted, so the payment
+    closes exactly the liability that document raised. When nothing answers, the row is
+    left off the Payment Entry entirely and the payment lands unallocated against the party
+    account — still the right account, still the right money, just not tied to a voucher.
+    """
+    allowed = PE_VALID_REFERENCE_DOCTYPES.get(party_type) or ()
+    if row.reference_doctype in allowed:
+        return pe_reference_row(row)
+
+    for method in frappe.get_hooks("payment_advice_payment_targets") or []:
+        try:
+            target = frappe.call(
+                method, reference_doctype=row.reference_doctype, reference_record=row.reference_record
+            )
+        except Exception:
+            frappe.log_error(
+                title="Payment Advice: payment target resolver failed",
+                message=frappe.get_traceback(),
+            )
+            target = None
+
+        if target and target.get("reference_doctype") in allowed:
+            values = {
+                "reference_doctype": target["reference_doctype"],
+                "reference_name": target["reference_name"],
+                "allocated_amount": flt(row.allocated_amount),
+            }
+            return values
+
+    return None
+
+
 def build_payment_entry(advice):
     """Return an unsaved Payment Entry for a submitted Payment Advice."""
     if not advice.payment_advice_reference:
@@ -1093,7 +1249,7 @@ def build_payment_entry(advice):
             )
 
     company = advice.company
-    party_account = get_party_account(advice.party_type, advice.party, company)
+    party_account = resolve_party_account(advice.party_type, advice.party, company, advice)
     if not party_account:
         frappe.throw(
             _("No default account is set for %(party_type)s %(party)s.")
@@ -1145,7 +1301,9 @@ def build_payment_entry(advice):
         pe.reference_date = advice.reference_date or nowdate()
 
     for row in allocations:
-        pe.append("references", pe_reference_row(row))
+        reference = payment_entry_reference(advice.party_type, row)
+        if reference:
+            pe.append("references", reference)
 
     # currencies: read them, never assume they match (company_currency was read above, for
     # the guard's message)

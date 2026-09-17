@@ -4,18 +4,34 @@
 
 // Payment Entry's own reference table, so an advice cannot hold something its Payment Entry
 // would reject at submit.
+// Filled from the server on load, because which documents an Employee may be paid against
+// is registered by whichever HR app is installed, not decided here.
+let sf_registered_reference_doctypes = {};
+
 function sf_valid_reference_doctypes(party_type) {
 	// Payment Entry is deliberately absent: an advice authorises a payment, it does not pay
 	// another payment. Orders are included and behave as Payment Request does — payable is the
 	// order total less advance_paid.
+	const registered = sf_registered_reference_doctypes[party_type] || [];
 	if (party_type === "Customer") {
-		return ["Sales Order", "Sales Invoice", "Journal Entry", "Dunning"];
+		return ["Sales Order", "Sales Invoice", "Journal Entry", "Dunning"].concat(registered);
 	}
-	return ["Purchase Order", "Purchase Invoice", "Journal Entry"];
+	if (party_type === "Employee") {
+		return ["Journal Entry"].concat(registered);
+	}
+	return ["Purchase Order", "Purchase Invoice", "Journal Entry"].concat(registered);
 }
 
 frappe.ui.form.on("Payment Advice", {
 	setup(frm) {
+		// what an Employee (or any party another app extends) may be paid against
+		frappe.call({
+			method: "sf_trading.sf_trading.doctype.payment_advice.payment_advice.get_registered_reference_doctypes",
+			callback: (r) => {
+				sf_registered_reference_doctypes = r.message || {};
+			},
+		});
+
 		// party pickers stay inside the advice's own company
 		frm.set_query("bank_account", () => ({
 			filters: { company: frm.doc.company, is_company_account: 1 },
@@ -33,7 +49,9 @@ frappe.ui.form.on("Payment Advice", {
 			const filters = { docstatus: 1 };
 			if (doc.company) filters.company = doc.company;
 
-			const party_field = { Supplier: "supplier", Customer: "customer" }[doc.party_type];
+			const party_field = { Supplier: "supplier", Customer: "customer", Employee: "employee" }[
+				doc.party_type
+			];
 			const carries_party = [
 				"Purchase Invoice",
 				"Purchase Order",
@@ -98,7 +116,11 @@ frappe.ui.form.on("Payment Advice", {
 
 	fetch_party_name(frm) {
 		if (frm.doc.docstatus !== 0) return;
-		const field = { Supplier: "supplier_name", Customer: "customer_name" }[frm.doc.party_type];
+		const field = {
+			Supplier: "supplier_name",
+			Customer: "customer_name",
+			Employee: "employee_name",
+		}[frm.doc.party_type];
 		if (!frm.doc.party || !field) {
 			if (frm.doc.party_name) frm.set_value("party_name", "");
 			return;
