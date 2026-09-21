@@ -29,6 +29,10 @@ def get_items_with_stock(company=None, price_list=None, warehouse=None, item_cod
 	Return all sales items for the company, with their stock qty for the given
 	warehouse (0 when no Bin entry exists). Items are always shown regardless of
 	stock level. ORDER BY item_name to match the standard item search order.
+
+	An item belongs to the company through its Item Defaults, or — for fixed
+	assets, which have no Item Defaults table at all — through its Asset
+	Category's account rows. See sf_trading.company_items.
 	"""
 	if not company:
 		company = frappe.defaults.get_user_default("company")
@@ -69,12 +73,18 @@ def get_items_with_stock(company=None, price_list=None, warehouse=None, item_cod
 			{stock_select},
 			{price_select}
 		FROM `tabItem` item
-		INNER JOIN `tabItem Default` idef
+		LEFT JOIN `tabItem Default` idef
 			ON idef.parent = item.name AND idef.company = %(company)s
+		LEFT JOIN `tabAsset Category Account` aca
+			ON item.is_fixed_asset = 1
+			AND aca.parenttype = 'Asset Category'
+			AND aca.parent = item.asset_category
+			AND aca.company_name = %(company)s
 		{bin_join}
 		{price_join}
 		WHERE item.is_sales_item = 1
 		  AND item.disabled = 0
+		  AND (idef.name IS NOT NULL OR aca.name IS NOT NULL)
 		GROUP BY item.name
 		ORDER BY item.item_name ASC
 		LIMIT %(limit)s

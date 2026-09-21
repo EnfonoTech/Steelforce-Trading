@@ -1,13 +1,18 @@
 import frappe
 
+from sf_trading.company_items import company_condition_sql
+
 
 def item_permission_query(user=None):
 	"""Restrict Item list/search based on Company User Permissions.
 
 	List view:
 	  - No Company User Permission → show all items.
-	  - Has Company User Permission(s) → show only items that have an Item Default
-	    for at least one of the user's permitted companies.
+	  - Has Company User Permission(s) → show only items that belong to at least
+	    one of the user's permitted companies, by either route: an Item Default
+	    row for that company, or (fixed assets, which have no Item Defaults at
+	    all) an Asset Category carrying an account row for that company. See
+	    sf_trading.company_items.
 
 	Link fields:
 	  Items with no Item Default row are excluded when a company filter is present
@@ -43,13 +48,7 @@ def item_permission_query(user=None):
 	if not companies:
 		return ""
 
-	company_list = ", ".join([frappe.db.escape(c) for c in companies])
-	return (
-		"`tabItem`.`name` IN ("
-		"  SELECT `parent` FROM `tabItem Default`"
-		"  WHERE `company` IN ({0})"
-		")".format(company_list)
-	)
+	return company_condition_sql(companies)
 
 
 def override_cost_center_from_branch(doc, method=None):

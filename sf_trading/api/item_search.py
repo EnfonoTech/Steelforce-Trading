@@ -44,6 +44,8 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 	from erpnext.controllers.queries import item_query
 	from frappe.core.doctype.user_permission.user_permission import get_permitted_documents
 
+	from sf_trading.company_items import item_codes_for_companies
+
 	if not isinstance(filters, dict):
 		filters = {}
 
@@ -53,18 +55,17 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 	company = filters.pop("company", None)
 	price_list = filters.pop("price_list", None)
 
-	# Pre-filter by Item Default for this company BEFORE calling item_query,
-	# so ERPNext's pagination operates on the already-restricted item set.
-	# Doing this post-pagination caused items to disappear: item_query returns
-	# the first N items alphabetically, and the company-specific items may not
-	# be in that first page at all.
+	# Pre-filter to this company's items BEFORE calling item_query, so ERPNext's
+	# pagination operates on the already-restricted item set. Doing this
+	# post-pagination caused items to disappear: item_query returns the first N
+	# items alphabetically, and the company-specific items may not be in that
+	# first page at all.
+	#
+	# "This company's items" means an Item Default row for the company, or — for
+	# fixed assets, which have no Item Defaults table at all — an Asset Category
+	# carrying an account row for it. See sf_trading.company_items.
 	if company:
-		allowed_codes = frappe.get_all(
-			"Item Default",
-			filters={"company": company},
-			pluck="parent",
-			ignore_permissions=True,
-		)
+		allowed_codes = item_codes_for_companies([company])
 		if not allowed_codes:
 			return []
 		filters["name"] = ["in", allowed_codes]
