@@ -1,0 +1,90 @@
+"""Tests for GS Issues 17/18/20 -- cancellation control and the open-order cap.
+
+    bench --site <scratch-site> run-tests --module sf_trading.tests.test_sales_order_governance
+"""
+
+from unittest.mock import patch
+
+import frappe
+from frappe.tests.utils import FrappeTestCase
+
+from sf_trading import sales_order_governance as gov
+
+MISSING_PHONE = "sf_trading.sales_order_governance.missing_contact_phone"
+COUNT_OPEN = "sf_trading.sales_order_governance.count_open_sales_orders"
+
+
+class StubDoc:
+	def __init__(self, doctype, **fields):
+		self.doctype = doctype
+		self.__dict__.update(fields)
+		self.name = fields.get("name")
+
+	def get(self, key, default=None):
+		return self.__dict__.get(key, default)
+
+
+def sales_order(**overrides):
+	fields = {
+		"name": "SAL-ORD-2026-00099",
+		"customer": "CUST-2026-00042",
+		"customer_name": "Al Test Trading W.L.L.",
+	}
+	fields.update(overrides)
+	return StubDoc("Sales Order", **fields)
+
+
+class TestContactCompletenessAtTransaction(FrappeTestCase):
+	def test_blocks_when_customer_has_no_phone(self):
+		with patch(MISSING_PHONE, return_value=True):
+			with self.assertRaises(frappe.ValidationError):
+				gov.validate_customer_contact_at_transaction(sales_order())
+
+	def test_passes_when_customer_has_a_phone(self):
+		with patch(MISSING_PHONE, return_value=False):
+			gov.validate_customer_contact_at_transaction(sales_order())  # must not raise
+
+	def test_a_document_with_no_customer_is_not_checked(self):
+		with patch(MISSING_PHONE) as lookup:
+			gov.validate_customer_contact_at_transaction(sales_order(customer=None))
+		lookup.assert_not_called()
+
+
+class TestPendingOrderCap(FrappeTestCase):
+	def test_blocks_the_third_open_order(self):
+		with patch(COUNT_OPEN, return_value=gov.PENDING_SO_CAP):
+			with self.assertRaises(frappe.ValidationError):
+				gov.before_submit_cap_pending_orders(sales_order())
+
+	def test_a_customer_below_the_cap_is_not_blocked(self):
+		with patch(COUNT_OPEN, return_value=gov.PENDING_SO_CAP - 1):
+			gov.before_submit_cap_pending_orders(sales_order())  # must not raise
+
+	def test_excludes_the_document_itself_from_its_own_count(self):
+		with patch(COUNT_OPEN, return_value=0) as counter:
+			gov.before_submit_cap_pending_orders(sales_order())
+		counter.assert_called_once_with("CUST-2026-00042", exclude="SAL-ORD-2026-00099")
+
+
+class TestCancellationControl(FrappeTestCase):
+	def test_blocks_a_cancel_with_no_remark(self):
+		doc = sales_order(custom_cancellation_remark="")
+		with self.assertRaises(frappe.ValidationError):
+			gov.before_cancel_require_remark_and_branch_head(doc)
+
+	def test_blocks_a_remarked_cancel_from_a_user_without_the_role(self):
+		doc = sales_order(custom_cancellation_remark="Customer changed their mind")
+		with patch("frappe.get_roles", return_value=["Sales User"]):
+			with self.assertRaises(frappe.ValidationError):
+				gov.before_cancel_require_remark_and_branch_head(doc)
+
+	def test_a_branch_head_with_a_remark_may_cancel(self):
+		doc = sales_order(custom_cancellation_remark="Customer changed their mind")
+		with patch("frappe.get_roles", return_value=[gov.ROLE_BRANCH_HEAD]):
+			gov.before_cancel_require_remark_and_branch_head(doc)  # must not raise
+
+	def test_a_system_manager_may_also_cancel(self):
+		"""So Administrator/support can always unblock a mistake, without needing Branch Head."""
+		doc = sales_order(custom_cancellation_remark="testing")
+		with patch("frappe.get_roles", return_value=["System Manager"]):
+			gov.before_cancel_require_remark_and_branch_head(doc)  # must not raise

@@ -52,6 +52,9 @@ app_include_js = [
 	f"/assets/sf_trading/js/company_print_format.js?{_v}",
 	# ── Overdue-invoice alert: chime + toast + desktop notification ──
 	f"/assets/sf_trading/js/sf_overdue_alert.js?{_v}",
+	# GS Issue 17: prompts for a cancellation remark before the cancel HTTP call fires.
+	# The actual gate is server-side (sales_order_governance.py) -- this is UX only.
+	f"/assets/sf_trading/js/sales_order_cancel.js?{_v}",
 ]
 
 # doctype_js: loaded only when that specific doctype form opens
@@ -184,6 +187,8 @@ after_migrate = [
 	# a secondary Cost Center / Warehouse link, seeded from whoever raised the document, must not
 	# decide who may SEE it -- every parent link field gates the list
 	"sf_trading.user_permission_fields.apply",
+	# GS Issue 17: the Sales Order cancellation-remark field
+	"sf_trading.sales_order_governance.ensure_custom_fields",
 ]
 
 # Uninstallation
@@ -321,6 +326,9 @@ doc_events = {
 	"Customer": {
 		"validate": [
 			"sf_trading.api.customer_override.validate",
+			# GS Issue 1: a Company-type customer must carry CR + VAT before it can be saved,
+			# new or existing -- see sf_trading/party_completeness.py for the field-list note
+			"sf_trading.party_completeness.validate_company_fields",
 			"sf_trading.customer_permission.validate_credit_branch_access",
 			"sf_trading.party_accounts.apply_title_case",
 		],
@@ -362,6 +370,9 @@ doc_events = {
 			# a cash return may not ENTER the approval chain with no refund planned: the approval
 			# submits it server-side, where the payment popup cannot ask anything
 			"sf_trading.planned_payment.require_plan_before_approval",
+			# GS Issue 20: a customer missing a phone-bearing Contact is not billable, on an
+			# existing customer exactly as much as a new one
+			"sf_trading.sales_order_governance.validate_customer_contact_at_transaction",
 		],
 		# the refund a return promised is checked while refusing is still safe, and paid the
 		# moment the return is submitted -- approval and refund land together
@@ -387,6 +398,18 @@ doc_events = {
 			_SP_HOOK,
 			_BPL_GUARD,
 			"sf_trading.api.sales_invoice_override.validate_driver_payment",
+			# GS Issue 20: same contact-completeness rule as Sales Invoice
+			"sf_trading.sales_order_governance.validate_customer_contact_at_transaction",
+		],
+		"before_submit": [
+			# GS Issue 18: a customer already sitting at the open-order cap gets no more
+			"sf_trading.sales_order_governance.before_submit_cap_pending_orders",
+		],
+		"before_cancel": [
+			# GS Issue 17: a remark is mandatory, and only a Branch Head may cancel -- both
+			# checked here because before_cancel is the one hook that runs before docstatus
+			# flips, see sf_trading/sales_order_governance.py
+			"sf_trading.sales_order_governance.before_cancel_require_remark_and_branch_head",
 		],
 	},
 	"Quotation": {
@@ -443,6 +466,11 @@ doc_events = {
 	# core logs the impersonation but drops the reason — put it back on the row
 	"Activity Log": {
 		"before_insert": "sf_trading.api.impersonation_log.capture_impersonation_reason",
+	},
+	# GS Issue 14: a non-stock item auto-generates its own code (Stock Settings' existing
+	# manual/Item-Code entry keeps governing stock items untouched -- see item_naming.py)
+	"Item": {
+		"autoname": "sf_trading.item_naming.autoname",
 	},
 }
 
@@ -827,6 +855,9 @@ fixtures = [
 			"Journal Entry Account-custom_loyalty_sales_invoice",
 			"Payment Entry-custom_payment_advice",
 			"Supplier-custom_disable_auto_payment",
+			# GS Issue 17: allow_on_submit -- set by cancel_sales_order_with_remark / the
+			# before_cancel form event, both of which act on an already-submitted order
+			"Sales Order-custom_cancellation_remark",
 		)]],
 	},
 	{
@@ -860,6 +891,9 @@ pm_workflow_applicability = ["sf_trading.sales_return.workflow_applicability"]
 scheduler_events = {
 	"daily": [
 		"sf_trading.api.overdue_notifications.notify_overdue_invoices",
+		# GS Issue 18: tell Sales Manager who is at/over the open-order cap, before it becomes
+		# a refused submission
+		"sf_trading.sales_order_governance.notify_customers_over_pending_cap",
 	],
 	# every tick: each Payment Automation Settings row names its own weekday + time,
 	# and the engine fences itself with last_execution
