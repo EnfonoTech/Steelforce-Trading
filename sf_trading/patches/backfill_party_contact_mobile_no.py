@@ -7,6 +7,13 @@ whose Contact/Address hasn't been touched since this feature shipped. Confirmed 
 2026-09-23: 0 of 7,858 Customers had a non-blank cache, and the sampled rows carried 0 Contacts
 each -- the real data lives on Address.phone. Two bulk queries per doctype, not a per-party loop,
 and only the parties that actually have a phone get a write.
+
+The existing-value lookup goes through sf_trading.query.fetch_in, not a bare
+{"name": ["in", ...]} filter -- on prod (frappe 15.114) an unbatched IN over ~8,000 names blew
+straight through sqlparse's 10,000-token cap (see query.py's own docstring); it never surfaced on
+UAT because that bench was still on 15.112.1, which has no such validator. First prod run of this
+patch failed on exactly that line before writing a single row -- no Patch Log entry, so a re-run
+after this fix picks it up cleanly.
 """
 
 from __future__ import annotations
@@ -14,6 +21,7 @@ from __future__ import annotations
 import frappe
 
 from sf_trading.party_contact_cache import CACHE_FIELD, PARTY_DOCTYPES, ensure_custom_fields
+from sf_trading.query import fetch_in
 
 
 def execute():
@@ -59,11 +67,7 @@ def execute():
 		if not phone_by_party:
 			continue
 
-		existing = frappe.get_all(
-			doctype,
-			filters={"name": ["in", list(phone_by_party.keys())]},
-			fields=["name", CACHE_FIELD],
-		)
+		existing = fetch_in(doctype, list(phone_by_party.keys()), fields=["name", CACHE_FIELD])
 		current = {row.name: row.get(CACHE_FIELD) for row in existing}
 
 		updated = 0

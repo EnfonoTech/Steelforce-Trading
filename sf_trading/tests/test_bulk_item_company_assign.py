@@ -10,7 +10,7 @@ from frappe.tests.utils import FrappeTestCase
 
 from sf_trading.api import bulk_item_company_assign as bica
 
-GET_ALL = "sf_trading.api.bulk_item_company_assign.frappe.get_all"
+FETCH_IN = "sf_trading.api.bulk_item_company_assign.fetch_in"
 ENQUEUE = "sf_trading.api.bulk_item_company_assign.frappe.enqueue"
 HAS_PERMISSION = "sf_trading.api.bulk_item_company_assign.frappe.has_permission"
 COMPANY_EXISTS = "sf_trading.api.bulk_item_company_assign.frappe.db.exists"
@@ -18,12 +18,15 @@ COMPANY_EXISTS = "sf_trading.api.bulk_item_company_assign.frappe.db.exists"
 
 class TestItemsMissingCompany(FrappeTestCase):
 	def test_empty_input_needs_no_query(self):
-		with patch(GET_ALL) as get_all:
+		"""Also the case that matters for GS Issue 31's own scale -- a raw {"in": item_codes}
+		filter blew through frappe 15.114's sqlparse token cap around ~5,000 names on prod; this
+		must go through fetch_in's batching, never frappe.get_all directly."""
+		with patch(FETCH_IN) as fetch_in:
 			self.assertEqual(bica.items_missing_company([], "Steel Force Trading WLL"), [])
-		get_all.assert_not_called()
+		fetch_in.assert_not_called()
 
 	def test_items_already_assigned_are_excluded(self):
-		with patch(GET_ALL, return_value=["ITEM-0001"]):
+		with patch(FETCH_IN, return_value=["ITEM-0001"]):
 			missing = bica.items_missing_company(["ITEM-0001", "ITEM-0002"], "Steel Force Trading WLL")
 		self.assertEqual(missing, ["ITEM-0002"])
 

@@ -15,16 +15,20 @@ from __future__ import annotations
 import frappe
 from frappe import _
 
+from sf_trading.query import fetch_in
+
 
 def items_missing_company(item_codes: list[str], company: str) -> list[str]:
-	"""Which of these items have no Item Default row for `company` yet."""
+	"""Which of these items have no Item Default row for `company` yet.
+
+	Batched through fetch_in -- a raw {"parent": ["in", item_codes]} filter is exactly the shape
+	that blows through frappe 15.114's sqlparse token cap once item_codes crosses a few thousand
+	(see sf_trading/query.py and the account's own live incident on this same GS Issue's backfill
+	patch). GS Issue 31 is about ~16,000 items; this WILL be called with that many.
+	"""
 	if not item_codes:
 		return []
-	existing = frappe.get_all(
-		"Item Default",
-		filters={"parent": ["in", item_codes], "company": company},
-		pluck="parent",
-	)
+	existing = fetch_in("Item Default", item_codes, in_field="parent", filters={"company": company}, pluck="parent")
 	existing_set = set(existing)
 	return [code for code in item_codes if code not in existing_set]
 
@@ -97,9 +101,11 @@ def _run_bulk_assign(item_codes: list[str], company: str, source_company: str | 
 
 	source_rows = {}
 	if source_company:
-		for row in frappe.get_all(
+		for row in fetch_in(
 			"Item Default",
-			filters={"parent": ["in", missing], "company": source_company},
+			missing,
+			in_field="parent",
+			filters={"company": source_company},
 			fields=[
 				"parent", "default_warehouse", "buying_cost_center", "expense_account",
 				"selling_cost_center", "income_account", "default_price_list",
