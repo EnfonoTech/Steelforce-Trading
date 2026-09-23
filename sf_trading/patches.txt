@@ -12,3 +12,4 @@ sf_trading.patches.v0_1.adopt_sales_return_settings
 sf_trading.patches.v0_1.branch_price_lists_to_branch_config
 sf_trading.patches.v0_1.align_secondary_cost_centres
 sf_trading.patches.v0_1.set_open_items_cutover
+sf_trading.patches.backfill_party_contact_mobile_no

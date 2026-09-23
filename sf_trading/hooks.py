@@ -491,6 +491,13 @@ doc_events = {
 		"on_update": "sf_trading.party_contact_cache.sync_from_contact",
 		"on_trash": "sf_trading.party_contact_cache.clear_on_contact_trash",
 	},
+	# Same GS Issue 11 cache, from the other source: most of this bench's existing parties were
+	# migrated with a phone on their Address and no Contact record at all -- see
+	# party_contact_cache.py's module docstring.
+	"Address": {
+		"on_update": "sf_trading.party_contact_cache.sync_from_address",
+		"on_trash": "sf_trading.party_contact_cache.clear_on_address_trash",
+	},
 	# GS Issue 14: a non-stock item auto-generates its own code (Stock Settings' existing
 	# manual/Item-Code entry keeps governing stock items untouched -- see item_naming.py)
 	"Item": {
