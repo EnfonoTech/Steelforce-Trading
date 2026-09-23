@@ -370,13 +370,17 @@ doc_events = {
 			# a cash return may not ENTER the approval chain with no refund planned: the approval
 			# submits it server-side, where the payment popup cannot ask anything
 			"sf_trading.planned_payment.require_plan_before_approval",
+		],
+		# the refund a return promised is checked while refusing is still safe, and paid the
+		# moment the return is submitted -- approval and refund land together. before_submit,
+		# not validate, so a draft can still be saved while a customer's contact details are
+		# being fixed elsewhere -- only SUBMIT (the actual "billable") is refused.
+		"before_submit": [
+			"sf_trading.planned_payment.validate_planned_payments",
 			# GS Issue 20: a customer missing a phone-bearing Contact is not billable, on an
 			# existing customer exactly as much as a new one
 			"sf_trading.sales_order_governance.validate_customer_contact_at_transaction",
 		],
-		# the refund a return promised is checked while refusing is still safe, and paid the
-		# moment the return is submitted -- approval and refund land together
-		"before_submit": "sf_trading.planned_payment.validate_planned_payments",
 		"on_submit": [
 			"sf_trading.inter_company.sales_invoice_on_submit",
 			"sf_trading.api.quotation.update_quotation_status_from_invoice",
@@ -398,12 +402,14 @@ doc_events = {
 			_SP_HOOK,
 			_BPL_GUARD,
 			"sf_trading.api.sales_invoice_override.validate_driver_payment",
-			# GS Issue 20: same contact-completeness rule as Sales Invoice
-			"sf_trading.sales_order_governance.validate_customer_contact_at_transaction",
 		],
+		# before_submit, not validate: a draft order can still be saved while a customer's
+		# contact details are being fixed elsewhere -- only SUBMIT is refused.
 		"before_submit": [
 			# GS Issue 18: a customer already sitting at the open-order cap gets no more
 			"sf_trading.sales_order_governance.before_submit_cap_pending_orders",
+			# GS Issue 20: same contact-completeness rule as Sales Invoice
+			"sf_trading.sales_order_governance.validate_customer_contact_at_transaction",
 		],
 		"before_cancel": [
 			# GS Issue 17: a remark is mandatory, and only a Branch Head may cancel -- both
