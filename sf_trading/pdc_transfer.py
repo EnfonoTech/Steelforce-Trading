@@ -192,6 +192,7 @@ def get_transfer_context(payment_entry: str) -> dict:
 		"cheque_no": pe.reference_no,
 		"cheque_date": str(pe.reference_date) if pe.reference_date else None,
 		"clearance_date": str(pe.clearance_date) if pe.clearance_date else None,
+		"rejection_date": str(pe.get(REJECTION_FIELD)) if pe.get(REJECTION_FIELD) else None,
 		"transfer": existing.name if existing else None,
 		"transfer_docstatus": cint(existing.docstatus) if existing else None,
 	}
@@ -379,3 +380,70 @@ def on_cancel(doc, method=None):
 		return
 
 	frappe.db.set_value("Payment Entry", source, "clearance_date", None, update_modified=False)
+
+
+# ─── Rejected status (GS Issue 25) ──────────────────────────────────────────────────────────────
+# The PDC Report's own status is computed, not stored: Cancelled from docstatus, Cleared from
+# clearance_date being set, else Pending -- which is exactly the bug the client reported. A bounced
+# cheque has no clearance_date either, so it reads as "Pending" (the report showed it as Received)
+# forever, indistinguishable from one still genuinely waiting on the bank. custom_pdc_rejection_date
+# is a second, independent date flag on the same field pattern as clearance_date: null means not
+# rejected, set means rejected on that date. pdc_report.py checks it before Cleared/Pending.
+REJECTION_FIELD = "custom_pdc_rejection_date"
+
+
+def ensure_rejection_field():
+	"""after_migrate: the Rejected-status field, alongside the existing clearance-date custom field."""
+	create_custom_fields(
+		{
+			"Payment Entry": [
+				{
+					"fieldname": REJECTION_FIELD,
+					"label": "PDC Rejection Date",
+					"fieldtype": "Date",
+					"insert_after": "clearance_date",
+					"allow_on_submit": 1,
+					"read_only": 1,
+					"no_copy": 1,
+					"depends_on": "eval:doc.mode_of_payment",
+					"description": "Set by the Reject PDC action when a cheque bounces. Null means it was not rejected.",
+				}
+			]
+		},
+		ignore_validate=True,
+		update=True,
+	)
+
+
+@frappe.whitelist()
+def reject_pdc(payment_entry: str, rejection_date: str = None) -> dict:
+	"""Mark a submitted cheque receipt Rejected (bounced) -- GS Issue 25.
+
+	Refuses a cheque that is already banked (a submitted Internal Transfer exists) or already
+	cleared some other way -- those states contradict "this bounced", and the fix there is to
+	cancel the transfer / clearance through the normal flow first, not to layer Rejected on top of
+	a contradictory state.
+	"""
+	frappe.has_permission("Payment Entry", "write", doc=payment_entry, throw=True)
+
+	pe = frappe.get_doc("Payment Entry", payment_entry)
+	if pe.docstatus != 1:
+		frappe.throw(_("%s is not a submitted cheque receipt.") % pe.name)
+	if pe.payment_type != "Receive" or pe.mode_of_payment not in cheque_modes():
+		frappe.throw(_("%s is not a cheque receipt.") % pe.name)
+	if pe.clearance_date:
+		frappe.throw(_("%s is already cleared (%s). A cleared cheque cannot be rejected.") % (pe.name, pe.clearance_date))
+	if pe.get(REJECTION_FIELD):
+		frappe.throw(_("%s is already marked Rejected (%s).") % (pe.name, pe.get(REJECTION_FIELD)))
+
+	existing_transfer = transfers_for([pe.name]).get(pe.name)
+	if existing_transfer:
+		frappe.throw(
+			_("%s already has an Internal Transfer (%s). Cancel that first.")
+			% (pe.name, existing_transfer.name)
+		)
+
+	frappe.db.set_value(
+		"Payment Entry", pe.name, REJECTION_FIELD, getdate(rejection_date or nowdate()), update_modified=False
+	)
+	return {"name": pe.name, REJECTION_FIELD: str(getdate(rejection_date or nowdate()))}

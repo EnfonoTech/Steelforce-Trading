@@ -22,7 +22,7 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, date_diff, flt, getdate, nowdate
 
-from sf_trading.pdc_transfer import transfers_for
+from sf_trading.pdc_transfer import REJECTION_FIELD, transfers_for
 
 # days before the posting date that the PDC reminder notification fires
 REMINDER_LEAD_DAYS = 3
@@ -71,21 +71,34 @@ def get_data(filters):
     if filters.get("to_date"):
         conds.append(["Payment Entry", "reference_date", "<=", getdate(filters.to_date)])
 
+    # Same guard pdc_transfer.transfers_for uses: on a bench that has pulled this code but not
+    # migrated yet, the column does not exist -- asking for it would break the whole report
+    # rather than simply not knowing about Rejected yet.
+    has_rejection_field = frappe.db.has_column("Payment Entry", REJECTION_FIELD)
+
     status = filters.get("status")
     if status == "Pending":
         conds.append(["Payment Entry", "clearance_date", "is", "not set"])
+        if has_rejection_field:
+            conds.append(["Payment Entry", REJECTION_FIELD, "is", "not set"])
     elif status == "Cleared":
         conds.append(["Payment Entry", "clearance_date", "is", "set"])
+    elif status == "Rejected" and has_rejection_field:
+        conds.append(["Payment Entry", REJECTION_FIELD, "is", "set"])
+
+    fields = [
+        "name", "payment_type", "posting_date", "reference_date", "reference_no",
+        "party_type", "party", "party_name", "mode_of_payment", "paid_amount",
+        "received_amount", "paid_from", "paid_to", "clearance_date", "docstatus",
+        "company", "paid_from_account_currency", "paid_to_account_currency",
+    ]
+    if has_rejection_field:
+        fields.append(REJECTION_FIELD)
 
     rows = frappe.get_all(
         "Payment Entry",
         filters=conds,
-        fields=[
-            "name", "payment_type", "posting_date", "reference_date", "reference_no",
-            "party_type", "party", "party_name", "mode_of_payment", "paid_amount",
-            "received_amount", "paid_from", "paid_to", "clearance_date", "docstatus",
-            "company", "paid_from_account_currency", "paid_to_account_currency",
-        ],
+        fields=fields,
         order_by="reference_date asc, name asc",
     )
 
@@ -118,8 +131,14 @@ def get_data(filters):
         if transfer_filter and transfer_filter != transfer_state:
             continue
 
+        rejection_date = r.get(REJECTION_FIELD) if has_rejection_field else None
         if r.docstatus == 2:
             state = "Cancelled"
+        elif rejection_date:
+            # Checked before Cleared/Pending: a bounced cheque has no clearance_date either, so
+            # without this it read as "Pending" forever (GS Issue 25) -- indistinguishable from
+            # one still genuinely waiting on the bank.
+            state = "Rejected"
         elif r.clearance_date:
             state = "Cleared"
         else:
@@ -147,6 +166,7 @@ def get_data(filters):
             "currency": currency,
             "bank_account": bank,
             "clearance_date": r.clearance_date,
+            "rejection_date": rejection_date,
             "company": r.company,
         })
     return out
@@ -175,5 +195,6 @@ def get_columns():
         {"label": _("Currency"), "fieldname": "currency", "fieldtype": "Link", "options": "Currency", "width": 70},
         {"label": _("Bank / Cash Account"), "fieldname": "bank_account", "fieldtype": "Link", "options": "Account", "width": 170},
         {"label": _("Cleared On"), "fieldname": "clearance_date", "fieldtype": "Date", "width": 100},
+        {"label": _("Rejected On"), "fieldname": "rejection_date", "fieldtype": "Date", "width": 100},
         {"label": _("Company"), "fieldname": "company", "fieldtype": "Link", "options": "Company", "width": 150},
     ]

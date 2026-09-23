@@ -55,6 +55,9 @@ app_include_js = [
 	# GS Issue 17: prompts for a cancellation remark before the cancel HTTP call fires.
 	# The actual gate is server-side (sales_order_governance.py) -- this is UX only.
 	f"/assets/sf_trading/js/sales_order_cancel.js?{_v}",
+	# GS Issue 15: "N similar records found" while typing, on Item/Customer/Supplier/Account.
+	# UX only -- the real uniqueness rule stays server-side.
+	f"/assets/sf_trading/js/duplicate_check_popup.js?{_v}",
 ]
 
 # doctype_js: loaded only when that specific doctype form opens
@@ -189,6 +192,10 @@ after_migrate = [
 	"sf_trading.user_permission_fields.apply",
 	# GS Issue 17: the Sales Order cancellation-remark field
 	"sf_trading.sales_order_governance.ensure_custom_fields",
+	# GS Issue 11: cached phone field on Customer/Supplier
+	"sf_trading.party_contact_cache.ensure_custom_fields",
+	# GS Issue 25: PDC Rejected-status field
+	"sf_trading.pdc_transfer.ensure_rejection_field",
 ]
 
 # Uninstallation
@@ -380,6 +387,8 @@ doc_events = {
 			# GS Issue 20: a customer missing a phone-bearing Contact is not billable, on an
 			# existing customer exactly as much as a new one
 			"sf_trading.sales_order_governance.validate_customer_contact_at_transaction",
+			# GS Issue 13: a credit customer additionally needs 2 contacts + an attachment
+			"sf_trading.sales_order_governance.validate_credit_customer_requirements_at_transaction",
 		],
 		"on_submit": [
 			"sf_trading.inter_company.sales_invoice_on_submit",
@@ -410,6 +419,8 @@ doc_events = {
 			"sf_trading.sales_order_governance.before_submit_cap_pending_orders",
 			# GS Issue 20: same contact-completeness rule as Sales Invoice
 			"sf_trading.sales_order_governance.validate_customer_contact_at_transaction",
+			# GS Issue 13: same credit-customer rule as Sales Invoice
+			"sf_trading.sales_order_governance.validate_credit_customer_requirements_at_transaction",
 		],
 		"before_cancel": [
 			# GS Issue 17: a remark is mandatory, and only a Branch Head may cancel -- both
@@ -472,6 +483,13 @@ doc_events = {
 	# core logs the impersonation but drops the reason — put it back on the row
 	"Activity Log": {
 		"before_insert": "sf_trading.api.impersonation_log.capture_impersonation_reason",
+	},
+	# GS Issue 11: refresh the cached Customer/Supplier phone whenever the linked Contact changes.
+	# Not on Customer/Supplier's own hooks -- a Contact created alongside a brand new party does
+	# not exist yet at that party's own save time, only afterwards, on the Contact's own insert.
+	"Contact": {
+		"on_update": "sf_trading.party_contact_cache.sync_from_contact",
+		"on_trash": "sf_trading.party_contact_cache.clear_on_contact_trash",
 	},
 	# GS Issue 14: a non-stock item auto-generates its own code (Stock Settings' existing
 	# manual/Item-Code entry keeps governing stock items untouched -- see item_naming.py)
@@ -684,6 +702,8 @@ fixtures = [
 						"DCR Report",
 						"DCR Detailed",
 						"DCR Detail",
+						# GS Issue 4
+						"Duplicate Customers",
 					)
 				]
 		]
@@ -864,6 +884,11 @@ fixtures = [
 			# GS Issue 17: allow_on_submit -- set by cancel_sales_order_with_remark / the
 			# before_cancel form event, both of which act on an already-submitted order
 			"Sales Order-custom_cancellation_remark",
+			# GS Issue 11: cached phone, kept in sync from the linked Contact
+			"Customer-custom_mobile_no",
+			"Supplier-custom_mobile_no",
+			# GS Issue 25: allow_on_submit -- set by reject_pdc on an already-submitted cheque
+			"Payment Entry-custom_pdc_rejection_date",
 		)]],
 	},
 	{

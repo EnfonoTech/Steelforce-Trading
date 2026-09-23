@@ -88,3 +88,40 @@ class TestCancellationControl(FrappeTestCase):
 		doc = sales_order(custom_cancellation_remark="testing")
 		with patch("frappe.get_roles", return_value=["System Manager"]):
 			gov.before_cancel_require_remark_and_branch_head(doc)  # must not raise
+
+
+class TestCreditCustomerRequirements(FrappeTestCase):
+	CREDIT_LIMIT_EXISTS = "sf_trading.sales_order_governance.frappe.db.exists"
+	PHONE_NUMBERS = "sf_trading.sales_order_governance.party_phone_numbers"
+
+	def test_a_non_credit_customer_is_never_checked(self):
+		"""No Customer Credit Limit row > 0 -- this rule does not apply at all."""
+		with patch(self.CREDIT_LIMIT_EXISTS, return_value=False) as exists:
+			with patch(self.PHONE_NUMBERS) as phones:
+				missing = gov.missing_credit_customer_requirements("CUST-0001")
+		self.assertEqual(missing, [])
+		phones.assert_not_called()
+		exists.assert_called_once()
+
+	def test_a_credit_customer_with_one_phone_and_no_attachment_lists_both(self):
+		def fake_exists(doctype, filters):
+			if doctype == "Customer Credit Limit":
+				return True
+			return False  # no File row
+
+		with patch(self.CREDIT_LIMIT_EXISTS, side_effect=fake_exists):
+			with patch(self.PHONE_NUMBERS, return_value=["33445566"]):
+				missing = gov.missing_credit_customer_requirements("CUST-0001")
+		self.assertEqual(len(missing), 2)
+
+	def test_a_fully_compliant_credit_customer_passes(self):
+		with patch(self.CREDIT_LIMIT_EXISTS, return_value=True):
+			with patch(self.PHONE_NUMBERS, return_value=["33445566", "17001122"]):
+				missing = gov.missing_credit_customer_requirements("CUST-0001")
+		self.assertEqual(missing, [])
+
+	def test_validate_throws_naming_what_is_missing(self):
+		doc = sales_order(customer_name="Al Test Trading W.L.L.")
+		with patch.object(gov, "missing_credit_customer_requirements", return_value=["at least 2 contact numbers (found 1)"]):
+			with self.assertRaises(frappe.ValidationError):
+				gov.validate_credit_customer_requirements_at_transaction(doc)

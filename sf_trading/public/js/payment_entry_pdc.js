@@ -59,6 +59,16 @@ frappe.ui.form.on("Payment Entry", {
 				// after the user moved on
 				if (frm.doc.name !== context.payment_entry) return;
 
+				if (context.rejection_date) {
+					frm.dashboard.add_indicator(
+						__("Rejected (bounced) on {0}", [context.rejection_date]),
+						"red"
+					);
+					// Nothing further to offer -- Rejected is a terminal state until someone
+					// reverses it by hand (there is deliberately no "un-reject" action yet).
+					return;
+				}
+
 				if (context.transfer) {
 					frm.dashboard.add_indicator(
 						context.transfer_docstatus === 1
@@ -77,6 +87,14 @@ frappe.ui.form.on("Payment Entry", {
 				frm.add_custom_button(
 					__("Create Internal Transfer"),
 					() => sf_pdc_transfer_dialog(frm, context),
+					__("PDC")
+				);
+
+				// GS Issue 25: instead of a bounced cheque sitting there reading "Received"
+				// forever, indistinguishable from one still genuinely in transit.
+				frm.add_custom_button(
+					__("Reject PDC (Bounced)"),
+					() => sf_pdc_reject_dialog(frm),
 					__("PDC")
 				);
 			},
@@ -144,6 +162,44 @@ function sf_pdc_transfer_dialog(frm, context) {
 						{ message: __("Internal Transfer {0} created", [r.message]), indicator: "green" },
 						6
 					);
+					frm.reload_doc();
+				},
+			});
+		},
+	});
+	d.show();
+}
+
+function sf_pdc_reject_dialog(frm) {
+	const d = new frappe.ui.Dialog({
+		title: __("Reject PDC"),
+		fields: [
+			{
+				fieldname: "info",
+				fieldtype: "HTML",
+				options: `<p>${__(
+					"Marks this cheque Rejected (bounced). It stays in the report, but as Rejected instead of Pending."
+				)}</p>`,
+			},
+			{
+				fieldname: "rejection_date",
+				fieldtype: "Date",
+				label: __("Rejection Date"),
+				default: frappe.datetime.get_today(),
+				reqd: 1,
+			},
+		],
+		primary_action_label: __("Reject"),
+		primary_action(values) {
+			d.hide();
+			frappe.call({
+				method: "sf_trading.pdc_transfer.reject_pdc",
+				args: { payment_entry: frm.doc.name, rejection_date: values.rejection_date },
+				freeze: true,
+				freeze_message: __("Marking rejected..."),
+				callback(r) {
+					if (!r || !r.message) return;
+					frappe.show_alert({ message: __("Marked Rejected."), indicator: "red" }, 5);
 					frm.reload_doc();
 				},
 			});

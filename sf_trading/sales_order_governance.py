@@ -20,6 +20,8 @@ from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.utils import cstr
 
+from sf_trading.party_contact_cache import party_phone_numbers
+
 #: Role allowed to cancel a submitted Sales Order. Reuses the same role name the account's
 #: existing Payment Advice workflow already uses for "the person in charge of one branch" --
 #: see sf_trading.api.payment_advice_workflow.ROLE_BRANCH_HEAD -- so a client asking "who is a
@@ -64,32 +66,15 @@ def ensure_custom_fields():
 def missing_contact_phone(party_doctype: str, party_name: str) -> bool:
 	"""True when the party has no linked Contact carrying a phone/mobile number.
 
-	Reads the actual Contact via Dynamic Link rather than any field cached on the party record,
-	because Customer/Supplier do not carry a phone field of their own on this bench -- it lives on
-	Contact only. This is also why the check cannot run inside Customer/Supplier's own ``validate``:
-	see party_completeness.py's module docstring for why a fresh customer has no Contact yet by the
-	time its own first save runs.
+	Delegates to party_contact_cache.party_phone_numbers -- the same Dynamic-Link-to-Contact-Phone
+	walk that fills the cached list-view field for GS Issue 11 -- so the billing gate and the list
+	view can never disagree about what "this party has a phone" means. This is also why the check
+	cannot run inside Customer/Supplier's own ``validate``: see party_completeness.py's module
+	docstring for why a fresh customer has no Contact yet by the time its own first save runs.
 	"""
 	if not party_name:
 		return True
-
-	rows = frappe.get_all(
-		"Dynamic Link",
-		filters={
-			"parenttype": "Contact",
-			"link_doctype": party_doctype,
-			"link_name": party_name,
-		},
-		pluck="parent",
-	)
-	if not rows:
-		return True
-
-	has_phone = frappe.db.exists(
-		"Contact Phone",
-		{"parent": ["in", rows], "phone": ["is", "set"]},
-	)
-	return not has_phone
+	return not party_phone_numbers(party_doctype, party_name)
 
 
 def validate_customer_contact_at_transaction(doc, _method=None):
@@ -105,6 +90,46 @@ def validate_customer_contact_at_transaction(doc, _method=None):
 			_("Customer %s has no phone number on file. Add a Contact with a phone number before billing.")
 			% (doc.customer_name or doc.customer),
 			title=_("Customer Contact Incomplete"),
+		)
+
+
+def missing_credit_customer_requirements(customer: str) -> list[str]:
+	"""GS Issue 13: a credit customer needs 2 contact numbers and at least one attachment.
+
+	"Credit customer" is not a new checkbox -- this account's own customer_permission.py already
+	treats a Customer Credit Limit row with credit_limit > 0 as exactly that marker (it is what
+	auto_add_branch_on_credit_limit and validate_credit_branch_access key off), so this reuses the
+	same signal rather than adding a second, possibly-disagreeing flag. Attachment is checked via
+	the generic File-attached-to mechanism api/customer_override.py already uses for the VAT-document
+	rule -- not yet the classified document_type + expiry_date child table GS Issue 12 asks for,
+	which needs its own new DocType and is still pending separately.
+	"""
+	is_credit_customer = frappe.db.exists(
+		"Customer Credit Limit", {"parent": customer, "credit_limit": [">", 0]}
+	)
+	if not is_credit_customer:
+		return []
+
+	missing = []
+	phone_count = len(party_phone_numbers("Customer", customer))
+	if phone_count < 2:
+		missing.append(_("at least 2 contact numbers (found %d)") % phone_count)
+	if not frappe.db.exists("File", {"attached_to_doctype": "Customer", "attached_to_name": customer}):
+		missing.append(_("at least one attachment"))
+	return missing
+
+
+def validate_credit_customer_requirements_at_transaction(doc, _method=None):
+	"""Sales Invoice / Sales Order validate: a credit customer additionally needs 2 contacts +
+	an attachment on file (GS Issue 13's field/validation half; the approval-workflow half -- who
+	is "credit dept" vs "accounts" -- is still blocked on the client naming those roles)."""
+	if not doc.get("customer"):
+		return
+	missing = missing_credit_customer_requirements(doc.customer)
+	if missing:
+		frappe.throw(
+			_("Credit customer %s is missing: %s") % (doc.customer_name or doc.customer, ", ".join(missing)),
+			title=_("Credit Customer Requirements Incomplete"),
 		)
 
 
