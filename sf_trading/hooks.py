@@ -363,6 +363,11 @@ doc_events = {
 		],
 		"before_save": "sf_trading.party_accounts.create_supplier_payable_account",
 	},
+	"Driver": {
+		# GS Issue 19: keep every branch's own Cash Limit sub-allocation from adding up to more
+		# than this driver's own overall Cash Collection Limit
+		"validate": "sf_trading.api.sales_invoice_override.validate_driver_branch_cash_limit_allocation",
+	},
 	"Sales Invoice": {
 		"before_validate": [
 			"sf_trading.api.sales_invoice_override.before_validate",
@@ -381,6 +386,8 @@ doc_events = {
 		"validate": [
 			"sf_trading.api.sales_invoice_override.validate",
 			"sf_trading.api.sales_invoice_override.validate_driver_payment",
+			# GS Issue 19: an amount cap on top of the days-only check above
+			"sf_trading.api.sales_invoice_override.validate_driver_cash_limit",
 			# a late return cannot be SAVED, so it cannot be parked in drafts either
 			"sf_trading.sales_return.validate_return_window",
 			_BPL_GUARD,
@@ -429,6 +436,7 @@ doc_events = {
 			_SP_HOOK,
 			_BPL_GUARD,
 			"sf_trading.api.sales_invoice_override.validate_driver_payment",
+			"sf_trading.api.sales_invoice_override.validate_driver_cash_limit",
 		],
 		# before_submit, not validate: a draft order can still be saved while a customer's
 		# contact details are being fixed elsewhere -- only SUBMIT is refused.
@@ -701,6 +709,8 @@ fixtures = [
 					"Sales Invoice-custom_driver",
 					"Driver-custom_branch",
 					"Driver-custom_payment_days",
+					"Driver-custom_cash_limit",
+					"Driver-custom_branch_cash_limits",
 					"Sales Invoice-custom_sales_person",
 					"Quotation-branch",
 					"Quotation-cost_center",

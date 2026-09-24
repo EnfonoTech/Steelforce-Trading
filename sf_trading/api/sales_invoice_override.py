@@ -187,6 +187,147 @@ def _get_driver_overdue_invoice(driver, exclude_name=None, as_of_date=None):
 	return rows[0] if rows else None
 
 
+def _driver_uncollected_total(driver, exclude_name=None) -> float:
+	"""Sum of outstanding_amount across every submitted, still-unpaid Cash invoice this driver is
+	holding -- the running total validate_driver_cash_limit caps, distinct from the
+	single-overdue-invoice check validate_driver_payment already does above."""
+	conditions = """
+		SELECT COALESCE(SUM(outstanding_amount), 0) AS total
+		FROM `tabSales Invoice`
+		WHERE custom_driver = %s
+		  AND docstatus = 1
+		  AND outstanding_amount > 0
+	"""
+	params = [driver]
+
+	if exclude_name:
+		conditions += " AND name != %s"
+		params.append(exclude_name)
+
+	rows = frappe.db.sql(conditions, params, as_dict=True)
+	return frappe.utils.flt(rows[0].total) if rows else 0.0
+
+
+def _driver_branch_sub_limit(driver, branch) -> float:
+	"""This driver's own Branch Cash Limit row for `branch`, or 0 if that branch carries no
+	sub-limit of its own -- uncapped at the branch level, still bound by the driver's overall
+	Cash Collection Limit."""
+	if not (driver and branch):
+		return 0
+	return frappe.utils.flt(
+		frappe.db.get_value("Driver Branch Cash Limit", {"parent": driver, "branch": branch}, "cash_limit")
+	)
+
+
+def _driver_branch_uncollected_total(driver, branch, exclude_name=None) -> float:
+	"""Sum of outstanding_amount across this driver's submitted, still-unpaid Cash invoices
+	raised specifically at this branch -- the same shape as _driver_uncollected_total, narrowed
+	by the `branch` accounting dimension."""
+	conditions = """
+		SELECT COALESCE(SUM(outstanding_amount), 0) AS total
+		FROM `tabSales Invoice`
+		WHERE custom_driver = %s
+		  AND branch = %s
+		  AND docstatus = 1
+		  AND outstanding_amount > 0
+	"""
+	params = [driver, branch]
+
+	if exclude_name:
+		conditions += " AND name != %s"
+		params.append(exclude_name)
+
+	rows = frappe.db.sql(conditions, params, as_dict=True)
+	return frappe.utils.flt(rows[0].total) if rows else 0.0
+
+
+def _throw_driver_cash_limit_exceeded(doc, driver, existing, limit, branch=None):
+	driver_name = frappe.db.get_value("Driver", driver, "full_name") or driver
+	scope = (_("at Branch %s") % branch) if branch else _("overall")
+	frappe.throw(
+		_(
+			"Delivery Person %s is already holding %s in uncollected cash %s, at or over their "
+			"Cash Limit of %s. Please collect and record payment before handing over more."
+		)
+		% (
+			frappe.bold(driver_name),
+			frappe.utils.fmt_money(existing, currency=doc.get("currency")),
+			scope,
+			frappe.utils.fmt_money(limit, currency=doc.get("currency")),
+		),
+		title=_("Delivery Person Cash Limit Exceeded"),
+	)
+
+
+def validate_driver_cash_limit(doc, _method=None):
+	"""Block a new Cash+Driver document once this driver's own running uncollected-cash total is
+	already at or past their Cash Collection Limit (Driver.custom_cash_limit) -- 0 means uncapped,
+	only the days rule (validate_driver_payment, above) applies (GS Issue 19: "amount limits ...
+	delivery-person-wise (only days can be set today)"). On top of that overall check, also
+	blocks once the driver's total AT THIS DOCUMENT'S OWN BRANCH is at or past that branch's own
+	Cash Limit sub-allocation (Driver.custom_branch_cash_limits), when that branch carries one --
+	same two-layer shape as sf_trading.credit_limit's company-wide + branch-wise Customer check.
+
+	Reads only EXISTING submitted invoices, the same "is there already a problem" shape
+	validate_driver_payment uses -- not this document's own prospective amount, which a Sales
+	Order cannot supply (it has no outstanding_amount) and a brand-new Sales Invoice hasn't been
+	billed against yet either. Hooked at the same two points as validate_driver_payment, for the
+	same "an order has no is_return" reason.
+	"""
+	if doc.get("is_return"):
+		return
+	if doc.get("custom_payment_mode") == "Credit":
+		return
+	if not doc.get("custom_driver"):
+		return
+
+	driver = doc.custom_driver
+	exclude_name = doc.name if doc.doctype == "Sales Invoice" else None
+
+	overall_limit = frappe.utils.flt(frappe.db.get_value("Driver", driver, "custom_cash_limit"))
+	if overall_limit:
+		existing = _driver_uncollected_total(driver, exclude_name)
+		if existing >= overall_limit:
+			_throw_driver_cash_limit_exceeded(doc, driver, existing, overall_limit)
+
+	branch = doc.get("branch")
+	if branch:
+		branch_limit = _driver_branch_sub_limit(driver, branch)
+		if branch_limit:
+			branch_existing = _driver_branch_uncollected_total(driver, branch, exclude_name)
+			if branch_existing >= branch_limit:
+				_throw_driver_cash_limit_exceeded(doc, driver, branch_existing, branch_limit, branch=branch)
+
+
+def _sum_positive_driver_branch_cash_limits(doc) -> float:
+	return sum(
+		frappe.utils.flt(row.get("cash_limit"))
+		for row in (doc.custom_branch_cash_limits or [])
+		if frappe.utils.flt(row.get("cash_limit")) > 0
+	)
+
+
+def validate_driver_branch_cash_limit_allocation(doc, _method=None):
+	"""Driver validate: the branches that DO carry their own Cash Limit sub-allocation may not
+	collectively promise more than this driver's own overall Cash Collection Limit -- same shape
+	as sf_trading.customer_permission.validate_branch_credit_limit_allocation."""
+	allocated = _sum_positive_driver_branch_cash_limits(doc)
+	if allocated <= 0:
+		return
+
+	total = frappe.utils.flt(doc.get("custom_cash_limit"))
+	if allocated > total:
+		frappe.throw(
+			_(
+				"Branch Cash Limits add up to %s, more than this delivery person's own overall "
+				"Cash Collection Limit of %s. Lower a branch's Cash Limit, or raise the Cash "
+				"Collection Limit above."
+			)
+			% (frappe.utils.fmt_money(allocated), frappe.utils.fmt_money(total)),
+			title=_("Branch Cash Limits Exceed Total"),
+		)
+
+
 @frappe.whitelist()
 def check_driver_payment_overdue(driver):
 	"""Client-side check: return the oldest overdue driver invoice dict or None."""

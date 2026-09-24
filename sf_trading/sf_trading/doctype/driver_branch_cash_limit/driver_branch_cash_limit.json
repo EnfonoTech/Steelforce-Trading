@@ -1,0 +1,45 @@
+{
+ "actions": [],
+ "creation": "2026-09-24 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "branch",
+  "cash_limit"
+ ],
+ "fields": [
+  {
+   "fieldname": "branch",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "in_list_view": 1,
+   "label": "Branch",
+   "options": "Branch",
+   "reqd": 1
+  },
+  {
+   "default": "0",
+   "description": "This branch's own cap on this driver's uncollected cash (Cash-mode invoices delivered under this branch). Leave 0 to not cap this branch on its own -- it can then draw on the driver's full overall Cash Collection Limit. Every branch's non-zero Cash Limit here must sum to no more than the driver's own overall Cash Collection Limit (enforced on save).",
+   "fieldname": "cash_limit",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Cash Limit",
+   "non_negative": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-09-24 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "Driver Branch Cash Limit",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
