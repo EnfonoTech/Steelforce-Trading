@@ -125,3 +125,50 @@ class TestCreditCustomerRequirements(FrappeTestCase):
 		with patch.object(gov, "missing_credit_customer_requirements", return_value=["at least 2 contact numbers (found 1)"]):
 			with self.assertRaises(frappe.ValidationError):
 				gov.validate_credit_customer_requirements_at_transaction(doc)
+
+
+class TestB2BPhoneRequirements(FrappeTestCase):
+	CUSTOMER_TYPE = "sf_trading.sales_order_governance.frappe.db.get_value"
+	PHONE_NUMBERS = "sf_trading.sales_order_governance.party_phone_numbers"
+
+	def test_a_b2c_individual_customer_is_never_checked(self):
+		with patch(self.CUSTOMER_TYPE, return_value="Individual"):
+			with patch(self.PHONE_NUMBERS) as phones:
+				missing = gov.missing_b2b_phone_requirements("CUST-0001")
+		self.assertEqual(missing, [])
+		phones.assert_not_called()
+
+	def test_a_blank_customer_type_is_treated_as_b2c(self):
+		with patch(self.CUSTOMER_TYPE, return_value=None):
+			with patch(self.PHONE_NUMBERS) as phones:
+				missing = gov.missing_b2b_phone_requirements("CUST-0001")
+		self.assertEqual(missing, [])
+		phones.assert_not_called()
+
+	def test_a_b2b_company_customer_with_one_phone_is_incomplete(self):
+		with patch(self.CUSTOMER_TYPE, return_value="Company"):
+			with patch(self.PHONE_NUMBERS, return_value=["33445566"]):
+				missing = gov.missing_b2b_phone_requirements("CUST-0001")
+		self.assertEqual(len(missing), 1)
+
+	def test_a_b2b_company_customer_with_two_phones_passes(self):
+		with patch(self.CUSTOMER_TYPE, return_value="Company"):
+			with patch(self.PHONE_NUMBERS, return_value=["33445566", "17001122"]):
+				missing = gov.missing_b2b_phone_requirements("CUST-0001")
+		self.assertEqual(missing, [])
+
+	def test_validate_throws_naming_what_is_missing(self):
+		doc = sales_order(customer_name="Al Test Trading W.L.L.")
+		with patch.object(gov, "missing_b2b_phone_requirements", return_value=["at least 2 contact numbers for a B2B customer (found 1)"]):
+			with self.assertRaises(frappe.ValidationError):
+				gov.validate_b2b_phone_requirements_at_transaction(doc)
+
+	def test_validate_passes_a_compliant_b2b_customer(self):
+		doc = sales_order()
+		with patch.object(gov, "missing_b2b_phone_requirements", return_value=[]):
+			gov.validate_b2b_phone_requirements_at_transaction(doc)  # must not raise
+
+	def test_a_document_with_no_customer_is_not_checked(self):
+		with patch.object(gov, "missing_b2b_phone_requirements") as check:
+			gov.validate_b2b_phone_requirements_at_transaction(sales_order(customer=None))
+		check.assert_not_called()

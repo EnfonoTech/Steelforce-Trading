@@ -133,6 +133,45 @@ def validate_credit_customer_requirements_at_transaction(doc, _method=None):
 		)
 
 
+def missing_b2b_phone_requirements(customer: str) -> list[str]:
+	"""A B2B customer needs at least 2 contact numbers on file. "B2B" here is core's own
+	`customer_type == "Company"` -- the same marker party_completeness.py already uses for the CR
+	+ VAT rule (GS Issue 1) -- so B2C ("Individual", or blank) customers are exempt.
+
+	Deliberately independent of missing_credit_customer_requirements's own trigger (a Customer
+	Credit Limit row): that check keeps meaning exactly what it always has -- a B2C credit
+	customer still only needs what IT asks for, and a B2B customer needs this regardless of
+	whether they are on credit at all.
+	"""
+	if frappe.db.get_value("Customer", customer, "customer_type") != "Company":
+		return []
+
+	phone_count = len(party_phone_numbers("Customer", customer))
+	if phone_count < 2:
+		return [_("at least 2 contact numbers for a B2B customer (found %d)") % phone_count]
+	return []
+
+
+def validate_b2b_phone_requirements_at_transaction(doc, _method=None):
+	"""Sales Invoice / Sales Order before_submit: a B2B customer needs 2 contact numbers on file.
+
+	before_submit, not Customer's own validate/before_save -- a Customer record can always be
+	saved and edited freely regardless of this rule; it only stops the customer from being
+	BILLED while incomplete. Existing customers are never blocked from being saved because of
+	this (the exact failure mode the client's own raw Customer-mobile_no-reqd Property Setter
+	caused on prod, live-DB-only, fixed separately in party_contact_cache.fill_mobile_no_from_cache
+	and party_mobile_no_prefill.js) -- only a fresh SUBMIT of a Sales Order/Invoice is refused.
+	"""
+	if not doc.get("customer"):
+		return
+	missing = missing_b2b_phone_requirements(doc.customer)
+	if missing:
+		frappe.throw(
+			_("B2B customer %s is missing: %s") % (doc.customer_name or doc.customer, ", ".join(missing)),
+			title=_("B2B Customer Requirements Incomplete"),
+		)
+
+
 def before_cancel_require_remark_and_branch_head(doc, _method=None):
 	"""Sales Order before_cancel: a remark is mandatory, and only a Branch Head may cancel.
 

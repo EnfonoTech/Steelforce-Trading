@@ -120,3 +120,30 @@ class TestClearOnTrash(FrappeTestCase):
 			with patch.object(pcc, "_refresh_cache") as refresh:
 				pcc.clear_on_address_trash(StubDoc("Address", name="ADDR-0001"))
 		refresh.assert_called_once_with("Supplier", "SUP-0001", exclude_address="ADDR-0001")
+
+
+class TestFillMobileNoFromCache(FrappeTestCase):
+	"""A client can make core's own mobile_no mandatory straight from Customize Form (live on
+	prod as Customer-mobile_no-reqd since 2026-09-20) with no auto-fill of its own. This is the
+	server-side half that fills it from the G11 cache; party_mobile_no_prefill.js is the
+	client-side twin that does the same thing in the browser before the user ever clicks Save."""
+
+	def test_fills_blank_mobile_no_from_the_cache(self):
+		doc = StubDoc("Customer", name="CUST-0001", mobile_no=None, custom_mobile_no="38392882")
+		pcc.fill_mobile_no_from_cache(doc)
+		self.assertEqual(doc.mobile_no, "38392882")
+
+	def test_does_not_overwrite_an_existing_mobile_no(self):
+		doc = StubDoc("Customer", name="CUST-0001", mobile_no="11112222", custom_mobile_no="38392882")
+		pcc.fill_mobile_no_from_cache(doc)
+		self.assertEqual(doc.mobile_no, "11112222")
+
+	def test_blank_cache_leaves_mobile_no_untouched(self):
+		doc = StubDoc("Customer", name="CUST-0001", mobile_no=None, custom_mobile_no="")
+		pcc.fill_mobile_no_from_cache(doc)
+		self.assertIsNone(doc.mobile_no)
+
+	def test_works_for_supplier_too(self):
+		doc = StubDoc("Supplier", name="SUP-0001", mobile_no=None, custom_mobile_no="17654321")
+		pcc.fill_mobile_no_from_cache(doc)
+		self.assertEqual(doc.mobile_no, "17654321")

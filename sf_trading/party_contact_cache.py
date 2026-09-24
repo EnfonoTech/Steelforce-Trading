@@ -171,3 +171,22 @@ def clear_on_address_trash(doc, _method=None):
 	)
 	for link in links:
 		_refresh_cache(link.link_doctype, link.link_name, exclude_address=doc.name)
+
+
+def fill_mobile_no_from_cache(doc, method=None):
+	"""Customer/Supplier validate: a client can make core's own `mobile_no` mandatory straight
+	from Customize Form on the live bench (e.g. Customer-mobile_no-reqd on prod, added
+	2026-09-20 by the client's own accountant, never exported to a fixture) -- core never wires
+	that field to anything, so every party whose real phone lives only on a linked Contact/Address
+	stays permanently blocked from being saved at all. This fills mobile_no from this same cache
+	instead of demanding the number be retyped by hand.
+
+	Runs regardless of whether `mobile_no` actually happens to be required right now -- harmless
+	either way, and covers the API/Data Import/console save paths the client's own desk-only
+	Property Setter can never reach (see the account's own "a client popup is not a gate" note).
+	Never overwrites a mobile_no someone already typed; only fills it while blank."""
+	if doc.get("mobile_no"):
+		return
+	cached = doc.get(CACHE_FIELD)
+	if cached:
+		doc.mobile_no = cached

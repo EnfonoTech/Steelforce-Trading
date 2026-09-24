@@ -8,7 +8,7 @@ so the rule belongs on the method, not on one hook.
 
 from erpnext.selling.doctype.sales_order.sales_order import SalesOrder
 
-from sf_trading.credit_limit import skip_credit_limit
+from sf_trading.credit_limit import check_branch_credit_limit, skip_credit_limit
 
 
 class CustomSalesOrder(SalesOrder):
@@ -19,3 +19,5 @@ class CustomSalesOrder(SalesOrder):
 		if skip_credit_limit(self):
 			return
 		super().check_credit_limit()
+		# on top of core's company-wide check above: GS Issue 19's optional per-branch sub-limit
+		check_branch_credit_limit(self)

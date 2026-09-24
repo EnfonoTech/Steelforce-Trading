@@ -69,7 +69,13 @@ doctype_js = {
 	],
 	"Stock Entry":      "public/js/stock_entry.js",
 	"Material Request": "public/js/material_request.js",
-	"Customer":         "public/js/customer_company.js",
+	"Customer":         [
+		"public/js/customer_company.js",
+		# core's own mobile_no can be made mandatory from Customize Form with no auto-fill of its
+		# own; this fills it from the G11 phone cache instead of demanding a retype
+		"public/js/party_mobile_no_prefill.js",
+	],
+	"Supplier":         "public/js/party_mobile_no_prefill.js",
 	"Quotation":        "public/js/quotation.js",
 	# Receive Payment on a submitted order — the invoice popup's twin — and the three fields the
 	# order now shares with the invoice
@@ -332,11 +338,17 @@ doc_events = {
 	},
 	"Customer": {
 		"validate": [
+			# fills core's own mobile_no from the G11 phone cache before any mandatory-field
+			# check runs -- see party_mobile_no_prefill.js's client-side twin
+			"sf_trading.party_contact_cache.fill_mobile_no_from_cache",
 			"sf_trading.api.customer_override.validate",
 			# GS Issue 1: a Company-type customer must carry CR + VAT before it can be saved,
 			# new or existing -- see sf_trading/party_completeness.py for the field-list note
 			"sf_trading.party_completeness.validate_company_fields",
 			"sf_trading.customer_permission.validate_credit_branch_access",
+			# GS Issue 19: keep every branch's own Credit Limit sub-allocation from adding up to
+			# more than the customer's own company-wide Credit Limit
+			"sf_trading.customer_permission.validate_branch_credit_limit_allocation",
 			"sf_trading.party_accounts.apply_title_case",
 		],
 		"before_save": [
@@ -345,7 +357,10 @@ doc_events = {
 		],
 	},
 	"Supplier": {
-		"validate": "sf_trading.party_accounts.apply_title_case",
+		"validate": [
+			"sf_trading.party_contact_cache.fill_mobile_no_from_cache",
+			"sf_trading.party_accounts.apply_title_case",
+		],
 		"before_save": "sf_trading.party_accounts.create_supplier_payable_account",
 	},
 	"Sales Invoice": {
@@ -389,6 +404,9 @@ doc_events = {
 			"sf_trading.sales_order_governance.validate_customer_contact_at_transaction",
 			# GS Issue 13: a credit customer additionally needs 2 contacts + an attachment
 			"sf_trading.sales_order_governance.validate_credit_customer_requirements_at_transaction",
+			# a B2B (Company-type) customer additionally needs 2 contact numbers, B2C exempt --
+			# billing-time only, so an existing customer is never blocked from being SAVED over this
+			"sf_trading.sales_order_governance.validate_b2b_phone_requirements_at_transaction",
 		],
 		"on_submit": [
 			"sf_trading.inter_company.sales_invoice_on_submit",
@@ -421,6 +439,8 @@ doc_events = {
 			"sf_trading.sales_order_governance.validate_customer_contact_at_transaction",
 			# GS Issue 13: same credit-customer rule as Sales Invoice
 			"sf_trading.sales_order_governance.validate_credit_customer_requirements_at_transaction",
+			# same B2B 2-contact-number rule as Sales Invoice
+			"sf_trading.sales_order_governance.validate_b2b_phone_requirements_at_transaction",
 		],
 		"before_cancel": [
 			# GS Issue 17: a remark is mandatory, and only a Branch Head may cancel -- both

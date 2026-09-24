@@ -1,7 +1,7 @@
 from erpnext.accounts.doctype.sales_invoice.sales_invoice import SalesInvoice
 
 from sf_trading.sbnd import get_sbnd_gl_entries
-from sf_trading.credit_limit import skip_credit_limit
+from sf_trading.credit_limit import check_branch_credit_limit, skip_credit_limit
 from sf_trading.sdbnb import get_sdbnb_gl_entries
 
 
@@ -12,6 +12,8 @@ class CustomSalesInvoice(SalesInvoice):
 		if skip_credit_limit(self):
 			return
 		super().check_credit_limit()
+		# on top of core's company-wide check above: GS Issue 19's optional per-branch sub-limit
+		check_branch_credit_limit(self)
 
 	def get_gl_entries(self, warehouse_account=None):
 		"""Core entries, plus whichever stock-timing account this invoice touches.
