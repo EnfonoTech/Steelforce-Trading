@@ -52,6 +52,18 @@ class TestCustomerOverrideVatAttachment(FrappeTestCase):
 		customer.save(ignore_permissions=True)  # must not raise
 		self.assertEqual(frappe.db.get_value("Customer", customer.name, "disabled"), 1)
 
+	def test_allows_freezing_when_a_float_field_round_trips_as_int(self):
+		"""The exact live bug on prod (313 Contracting, 2026-09-26): a real desk save submits an
+		untouched Float field (default_commission_rate) as a bare JSON int 0, while
+		get_doc_before_save()'s DB fetch reads back float 0.0 for that same column --
+		cstr(0) == "0" != "0.0" == cstr(0.0), so the status-only check never actually fired even
+		though nothing but is_frozen changed. Numeric fieldtypes must compare via flt(), not cstr()."""
+		customer = self._make_vat_customer("Test VAT Customer Float Roundtrip")
+		customer.reload()
+		customer.is_frozen = 1
+		customer.default_commission_rate = 0  # int, exactly as a form payload round-trips it
+		customer.save(ignore_permissions=True)  # must not raise
+
 	def test_still_blocks_other_field_edit_alongside_freeze(self):
 		"""Freezing does not blanket-exempt the whole save -- only is_frozen/disabled changes are
 		exempt. Changing something else in the SAME save is still blocked."""
