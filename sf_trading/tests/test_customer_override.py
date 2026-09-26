@@ -13,7 +13,8 @@ class TestCustomerOverrideVatAttachment(FrappeTestCase):
 		# same Customer validate chain) never fires here -- this suite is only about
 		# customer_override's own attachment rule. customer_group looked up rather than hardcoded --
 		# core's own validate_customer_group refuses a GROUP-type node, and the leaf name varies
-		# by site.
+		# by site. mobile_no filled in too -- mandatory on this site's Customer (a Property
+		# Setter, not present on every bench), and this suite has no phone cache to fill it from.
 		leaf_group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
 		return frappe.get_doc(
 			{
@@ -21,6 +22,7 @@ class TestCustomerOverrideVatAttachment(FrappeTestCase):
 				"customer_name": name,
 				"customer_type": "Company",
 				"customer_group": leaf_group,
+				"mobile_no": "33445566",
 				"custom_vat_registration_number": "200013075500002",
 				"custom_commercial_registration_number": "CR-99999",
 			}
@@ -68,6 +70,7 @@ class TestCustomerOverrideVatAttachment(FrappeTestCase):
 				"customer_name": "Test No VAT Customer",
 				"customer_type": "Individual",
 				"customer_group": leaf_group,
+				"mobile_no": "33445566",
 			}
 		).insert(ignore_permissions=True)
 		customer.reload()
