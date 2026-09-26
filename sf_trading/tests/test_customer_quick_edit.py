@@ -74,6 +74,7 @@ class TestGetQuickEditData(FrappeTestCase):
 
 		self.assertEqual(data["customer_name"], "Acme")
 		self.assertTrue(data["is_company"])
+		self.assertTrue(data["is_b2b"])
 		self.assertEqual(data["phone_1"], "33445566")
 		self.assertEqual(data["phone_2"], "")
 		self.assertFalse(data["has_attachment"])
@@ -82,9 +83,12 @@ class TestGetQuickEditData(FrappeTestCase):
 		self.assertTrue(data["missing"]["b2b_phone"])
 		self.assertEqual(data["missing"]["any_phone"], [])
 
-	def test_an_individual_typed_customer_with_a_vat_number_is_still_flagged_b2b(self):
-		"""2026-09-26: is_company must widen to "has a VAT number", not just customer_type --
-		the exact real case is a customer_type "Individual" record that is genuinely a business."""
+	def test_an_individual_typed_customer_with_a_vat_number_is_flagged_b2b_but_not_company(self):
+		"""is_b2b (VAT-only, party_completeness.is_b2b_customer) and is_company (customer_type==
+		"Company", mirrors missing_company_fields/GS Issue 1) are independent flags -- a
+		customer_type "Individual" record with a VAT number on file is is_b2b=True (so the dialog
+		requires a 2nd phone number) but is_company=False (so the dialog does NOT show CR/VAT
+		fields -- missing_company_fields never applies to a non-Company customer either)."""
 		customer_doc = StubDoc(
 			"Customer",
 			name="CUST-0002",
@@ -104,7 +108,36 @@ class TestGetQuickEditData(FrappeTestCase):
 										with patch(f"{MOD}.frappe.db.exists", return_value=False):
 											data = qe.get_quick_edit_data("CUST-0002")
 
+		self.assertFalse(data["is_company"])
+		self.assertTrue(data["is_b2b"])
+
+	def test_a_company_typed_customer_with_no_vat_yet_shows_cr_vat_fields_regardless(self):
+		"""The exact bug reported live (2026-09-26): "Havelock One Interiors WLL" is customer_type
+		"Company" with a blank VAT. missing_company_fields (GS Issue 1) still names CR+VAT as
+		blocking billing -- so the dialog MUST still show is_company=True (CR/VAT fields visible)
+		even though is_b2b (VAT-only) is False here. Before this fix, a single conflated
+		is_company=is_b2b_customer(doc) flag hid the very fields the banner said were missing."""
+		customer_doc = StubDoc(
+			"Customer",
+			name="CUST-0003",
+			customer_name="Havelock One Interiors WLL",
+			customer_type="Company",
+			custom_commercial_registration_number="",
+			custom_vat_registration_number="",
+		)
+		with patch(f"{MOD}.frappe.has_permission"):
+			with patch(f"{MOD}.frappe.get_cached_doc", return_value=customer_doc):
+				with patch.object(qe, "_primary_contact", return_value=None):
+					with patch.object(qe, "_primary_address", return_value=None):
+						with patch(f"{MOD}.party_phone_numbers", return_value=["33445566"]):
+							with patch(f"{MOD}.missing_company_fields", return_value=["Commercial Registration Number", "VAT Registration Number"]):
+								with patch(f"{MOD}.missing_credit_customer_requirements", return_value=[]):
+									with patch(f"{MOD}.missing_b2b_phone_requirements", return_value=[]):
+										with patch(f"{MOD}.frappe.db.exists", return_value=False):
+											data = qe.get_quick_edit_data("CUST-0003")
+
 		self.assertTrue(data["is_company"])
+		self.assertFalse(data["is_b2b"])
 
 
 class TestSaveQuickEditData(FrappeTestCase):

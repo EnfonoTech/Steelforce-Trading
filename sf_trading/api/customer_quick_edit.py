@@ -49,12 +49,21 @@ def _primary_address(customer: str) -> str | None:
 
 @frappe.whitelist()
 def get_quick_edit_data(customer: str) -> dict:
-	"""Everything the dialog needs: current values, plus which of the four gates is failing right
-	now, so the form can point at only what actually needs fixing."""
+	"""Everything the dialog needs: current values, which of the four gates is failing right now,
+	and two independent field-visibility flags (is_company, is_b2b -- see below) so the form shows
+	exactly the inputs needed to fix whatever the banner names, no more and no less."""
 	frappe.has_permission("Customer", "read", doc=customer, throw=True)
 
 	doc = frappe.get_cached_doc("Customer", customer)
-	is_company = is_b2b_customer(doc)
+	# Two DIFFERENT gates, not one -- conflating them under a single is_company flag (pre-2026-09-26)
+	# made the dialog hide the CR/VAT fields for a Company-type customer with no VAT yet, while the
+	# banner right above still listed CR+VAT as blocking billing (missing_company_fields, GS Issue 1,
+	# keys off customer_type alone and was never changed): the user had no way to fix what the banner
+	# said was wrong. is_company below mirrors missing_company_fields's own gate exactly, so the CR/VAT
+	# fields show whenever that check can fire; is_b2b mirrors missing_b2b_phone_requirements's own
+	# gate (VAT-only, party_completeness.is_b2b_customer) for the 2nd-phone requirement.
+	is_company = doc.customer_type == "Company"
+	is_b2b = is_b2b_customer(doc)
 
 	contact = _primary_contact(customer)
 	address = _primary_address(customer)
@@ -64,6 +73,7 @@ def get_quick_edit_data(customer: str) -> dict:
 		"customer_name": doc.customer_name,
 		"customer_type": doc.customer_type,
 		"is_company": is_company,
+		"is_b2b": is_b2b,
 		CR_FIELD: doc.get(CR_FIELD),
 		VAT_FIELD: doc.get(VAT_FIELD),
 		"contact": contact,

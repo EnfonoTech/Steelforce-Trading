@@ -73,7 +73,14 @@ function open_customer_quick_edit_dialog(customer, on_saved) {
 }
 
 function render_quick_edit_dialog(customer, data, on_saved) {
+	// Two DIFFERENT gates (2026-09-26 fix): is_company mirrors missing_company_fields (GS Issue 1,
+	// customer_type=="Company" alone) and drives the CR/VAT fields; is_b2b mirrors
+	// missing_b2b_phone_requirements (party_completeness.is_b2b_customer, VAT-only) and drives the
+	// 2nd mobile number. A Company customer with no VAT yet is is_company=true / is_b2b=false --
+	// CR/VAT fields show (so the banner's "CR, VAT" complaint is fixable), 2nd phone does not
+	// (VAT isn't on file yet, so that rule hasn't engaged).
 	const is_company = !!data.is_company;
+	const is_b2b = !!data.is_b2b;
 	const missing = data.missing || {};
 	const all_missing = [].concat(
 		missing.company_fields || [],
@@ -94,7 +101,7 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 		{ fieldname: "phone_1", fieldtype: "Data", label: __("Mobile No (1)"), default: data.phone_1 },
 	];
 
-	if (is_company) {
+	if (is_b2b) {
 		fields.push({
 			fieldname: "phone_2",
 			fieldtype: "Data",
@@ -111,7 +118,7 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 
 	if (is_company) {
 		fields.push(
-			{ fieldtype: "Section Break", label: __("B2B (Company)") },
+			{ fieldtype: "Section Break", label: __("Company (CR / VAT)") },
 			{
 				fieldname: "custom_commercial_registration_number",
 				fieldtype: "Data",
