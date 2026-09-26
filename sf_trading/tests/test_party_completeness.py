@@ -74,24 +74,29 @@ class TestPartyCompleteness(FrappeTestCase):
 
 
 class TestIsB2BCustomer(FrappeTestCase):
-	"""2026-09-26: B2B widened to "customer_type == Company OR a VAT number is on file" -- a
-	VAT-bearing customer must count as B2B even when customer_type was left at "Individual" by
-	old migrated data (confirmed live the same day: "Arab United Trading & Marketing (000752)").
-	missing_company_fields (GS Issue 1's own Company-only CR/VAT rule, above) is untouched --
-	these two functions answer different questions on purpose."""
+	"""2026-09-26: B2B = VAT Registration Number on file. Full stop -- customer_type is NOT
+	consulted (client correction, same day, after live UAT test surfaced "Havelock One Interiors
+	WLL": customer_type "Company" with a blank VAT was still reading as B2B under the earlier
+	widened OR-with-customer_type version). missing_company_fields (GS Issue 1's own Company-only
+	CR/VAT rule, above) is a SEPARATE, untouched rule -- it still keys off customer_type=="Company"
+	alone and still blocks that customer's own save until CR+VAT are filled in."""
 
-	def test_company_type_is_b2b_even_with_no_vat_yet(self):
+	def test_company_type_with_no_vat_is_b2c(self):
+		"""The exact real case: customer_type "Company" but VAT still blank -- must NOT be B2B."""
 		doc = StubDoc("Customer", customer_type="Company", **{pc.VAT_FIELD: ""})
-		self.assertTrue(pc.is_b2b_customer(doc))
+		self.assertFalse(pc.is_b2b_customer(doc))
 
 	def test_individual_with_no_vat_is_b2c(self):
 		doc = StubDoc("Customer", customer_type="Individual", **{pc.VAT_FIELD: ""})
 		self.assertFalse(pc.is_b2b_customer(doc))
 
-	def test_individual_with_a_vat_number_is_still_b2b(self):
-		"""The exact real case: customer_type stuck at "Individual", but a genuine VAT-bearing
-		business."""
+	def test_individual_with_a_vat_number_is_b2b(self):
+		"""customer_type stuck at "Individual" by old migrated data, but a VAT number is on file."""
 		doc = StubDoc("Customer", customer_type="Individual", **{pc.VAT_FIELD: "200012345600003"})
+		self.assertTrue(pc.is_b2b_customer(doc))
+
+	def test_company_type_with_a_vat_number_is_b2b(self):
+		doc = StubDoc("Customer", customer_type="Company", **{pc.VAT_FIELD: "200012345600003"})
 		self.assertTrue(pc.is_b2b_customer(doc))
 
 	def test_blank_customer_type_with_a_vat_number_is_b2b(self):
@@ -99,11 +104,11 @@ class TestIsB2BCustomer(FrappeTestCase):
 		self.assertTrue(pc.is_b2b_customer(doc))
 
 	def test_accepts_a_customer_name_string_too(self):
-		with patch(GET_VALUE, return_value=frappe._dict({"customer_type": "Individual", pc.VAT_FIELD: "200012345600003"})):
+		with patch(GET_VALUE, return_value="200012345600003"):
 			self.assertTrue(pc.is_b2b_customer("CUST-0001"))
 
-	def test_a_customer_name_string_with_neither_signal_is_b2c(self):
-		with patch(GET_VALUE, return_value=frappe._dict({"customer_type": "Individual", pc.VAT_FIELD: ""})):
+	def test_a_customer_name_string_with_no_vat_is_b2c(self):
+		with patch(GET_VALUE, return_value=""):
 			self.assertFalse(pc.is_b2b_customer("CUST-0001"))
 
 	def test_a_nonexistent_customer_name_is_b2c_not_an_error(self):

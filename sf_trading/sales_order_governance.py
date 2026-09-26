@@ -136,10 +136,9 @@ def validate_credit_customer_requirements_at_transaction(doc, _method=None):
 
 def missing_b2b_phone_requirements(customer: str) -> list[str]:
 	"""A B2B customer needs at least 2 contact numbers on file. "B2B" here is
-	party_completeness.is_b2b_customer -- customer_type == "Company", OR a VAT Registration
-	Number already on file (2026-09-26: widened so a VAT-bearing customer isn't missed just
-	because customer_type was left at "Individual" by old data) -- so a genuine B2C customer
-	(no VAT, not customer_type Company) is exempt.
+	party_completeness.is_b2b_customer -- a VAT Registration Number on file, full stop
+	(2026-09-26: customer_type is NOT consulted) -- so a customer with no VAT number is exempt
+	regardless of customer_type.
 
 	Deliberately independent of missing_credit_customer_requirements's own trigger (a Customer
 	Credit Limit row): that check keeps meaning exactly what it always has -- a B2C credit
