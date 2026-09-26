@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
+from frappe.utils import cstr
 
 #: Fields an account-status save is allowed to touch without tripping the VAT-document
 #: requirement below -- see _only_status_fields_changed.
@@ -16,7 +17,14 @@ def _only_status_fields_changed(doc) -> bool:
 	"""True if every OTHER field on the doc (child tables excluded) is identical to the version
 	before this save -- i.e. this save touches nothing but is_frozen/disabled. A doc with no
 	before-save snapshot (shouldn't happen once in_insert is already excluded) is treated as "not
-	status-only", the safer default."""
+	status-only", the safer default.
+
+	Compares through ``cstr`` rather than bare ``!=`` -- an unset Link/Data field reads back as
+	``None`` from ``get_doc_before_save()``'s fresh DB fetch but as ``""`` on an in-memory doc built
+	from a plain dict (e.g. ``represents_company``, on every single customer, verified live) -- a
+	false diff on every save that would make this check never fire at all. ``cstr(None) ==
+	cstr("") == ""``, so this collapses without needing a fieldtype-by-fieldtype allowlist.
+	"""
 	before = doc.get_doc_before_save()
 	if not before:
 		return False
@@ -24,7 +32,7 @@ def _only_status_fields_changed(doc) -> bool:
 	for df in doc.meta.fields:
 		if df.fieldname in _STATUS_FIELDS or df.fieldtype in ("Table", "Table MultiSelect"):
 			continue
-		if doc.get(df.fieldname) != before.get(df.fieldname):
+		if cstr(doc.get(df.fieldname)) != cstr(before.get(df.fieldname)):
 			return False
 	return True
 
