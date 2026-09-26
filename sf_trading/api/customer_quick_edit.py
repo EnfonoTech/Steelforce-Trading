@@ -55,13 +55,13 @@ def get_quick_edit_data(customer: str) -> dict:
 	frappe.has_permission("Customer", "read", doc=customer, throw=True)
 
 	doc = frappe.get_cached_doc("Customer", customer)
-	# Two DIFFERENT gates, not one -- conflating them under a single is_company flag (pre-2026-09-26)
-	# made the dialog hide the CR/VAT fields for a Company-type customer with no VAT yet, while the
-	# banner right above still listed CR+VAT as blocking billing (missing_company_fields, GS Issue 1,
-	# keys off customer_type alone and was never changed): the user had no way to fix what the banner
-	# said was wrong. is_company below mirrors missing_company_fields's own gate exactly, so the CR/VAT
-	# fields show whenever that check can fire; is_b2b mirrors missing_b2b_phone_requirements's own
-	# gate (VAT-only, party_completeness.is_b2b_customer) for the 2nd-phone requirement.
+	# Two DIFFERENT flags, kept deliberately independent even though missing_company_fields (GS
+	# Issue 1) and missing_b2b_phone_requirements now share ONE gate (is_b2b_customer, VAT-presence,
+	# 2026-09-26 second correction). is_company here is field-VISIBILITY, not the blocking rule: a
+	# Company-type customer with no VAT yet is not blocked any more, but the dialog still shows the
+	# CR/VAT inputs for it (is_company stays customer_type-based) so staff can fill VAT in and
+	# thereby promote the customer to B2B -- hiding the fields would make that impossible. is_b2b
+	# mirrors both billing gates' own shared criterion for the 2nd-phone requirement.
 	is_company = doc.customer_type == "Company"
 	is_b2b = is_b2b_customer(doc)
 
