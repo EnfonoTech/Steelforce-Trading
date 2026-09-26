@@ -11,12 +11,16 @@ class TestCustomerOverrideVatAttachment(FrappeTestCase):
 	def _make_vat_customer(self, name):
 		# CR filled in too, so party_completeness.validate_company_fields (a separate hook in the
 		# same Customer validate chain) never fires here -- this suite is only about
-		# customer_override's own attachment rule.
+		# customer_override's own attachment rule. customer_group looked up rather than hardcoded --
+		# core's own validate_customer_group refuses a GROUP-type node, and the leaf name varies
+		# by site.
+		leaf_group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
 		return frappe.get_doc(
 			{
 				"doctype": "Customer",
 				"customer_name": name,
 				"customer_type": "Company",
+				"customer_group": leaf_group,
 				"custom_vat_registration_number": "200013075500002",
 				"custom_commercial_registration_number": "CR-99999",
 			}
@@ -57,8 +61,14 @@ class TestCustomerOverrideVatAttachment(FrappeTestCase):
 			customer.save(ignore_permissions=True)
 
 	def test_no_vat_number_is_never_checked(self):
+		leaf_group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
 		customer = frappe.get_doc(
-			{"doctype": "Customer", "customer_name": "Test No VAT Customer", "customer_type": "Individual"}
+			{
+				"doctype": "Customer",
+				"customer_name": "Test No VAT Customer",
+				"customer_type": "Individual",
+				"customer_group": leaf_group,
+			}
 		).insert(ignore_permissions=True)
 		customer.reload()
 		customer.website = "https://example.com"
