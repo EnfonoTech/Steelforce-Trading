@@ -172,18 +172,24 @@ class TestSaveQuickEditData(FrappeTestCase):
 
 	def test_a_still_incomplete_cr_vat_save_is_downgraded_to_a_warning(self):
 		"""A ValidationError from the Customer's own save() must not wipe out a phone/address fix
-		made in the same call -- Frappe rolls back the WHOLE request on an uncaught exception."""
+		made in the same call -- Frappe rolls back the WHOLE request on an uncaught exception. Must
+		also call frappe.clear_messages() -- frappe.throw() queues its text into
+		frappe.local.message_log for the "_server_messages" auto-popup the instant it's called,
+		before the exception is even caught, so without this the client shows Frappe's own raw
+		error dialog for exactly the text this except clause just downgraded to a warning."""
 		customer_doc = StubDoc("Customer", name="CUST-0001")
 		customer_doc.save = MagicMock(side_effect=frappe.ValidationError("Customer CUST-0001 is missing required field(s): VAT Registration Number"))
 
 		with patch(f"{MOD}.frappe.has_permission"):
 			with patch.object(qe, "_save_contact_phones") as save_phones:
 				with patch(f"{MOD}.frappe.get_doc", return_value=customer_doc):
-					result = qe.save_quick_edit_data(
-						"CUST-0001",
-						{"phone_1": "33445566", "custom_commercial_registration_number": "CR-123"},
-					)
+					with patch(f"{MOD}.frappe.clear_messages") as clear_messages:
+						result = qe.save_quick_edit_data(
+							"CUST-0001",
+							{"phone_1": "33445566", "custom_commercial_registration_number": "CR-123"},
+						)
 
+		clear_messages.assert_called_once()
 		save_phones.assert_called_once_with("CUST-0001", "33445566", "")
 		self.assertTrue(result["saved"])
 		self.assertEqual(len(result["warnings"]), 1)

@@ -133,6 +133,15 @@ def save_quick_edit_data(customer: str, values) -> dict:
 			doc.save()
 		except frappe.ValidationError as e:
 			result["warnings"].append(str(e))
+			# frappe.throw() queues its text into frappe.local.message_log the moment it's
+			# called, for the "_server_messages" auto-popup every frappe.call() response
+			# carries -- catching the exception here does NOT retroactively un-queue it, so
+			# without this the client shows Frappe's own raw "Message" popup for the exact
+			# text this except clause just downgraded to a warning (confirmed live, 2026-09-26:
+			# customer_override.validate's VAT-attachment throw leaking through as a bare error
+			# dialog even though save_quick_edit_data returned saved=true with the same text
+			# in "warnings").
+			frappe.clear_messages()
 
 	return result
 
