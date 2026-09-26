@@ -120,17 +120,17 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 		fields.push(
 			{ fieldtype: "Section Break", label: __("Company (CR / VAT)") },
 			{
-				fieldname: "custom_commercial_registration_number",
-				fieldtype: "Data",
-				label: __("Commercial Registration Number"),
-				default: data.custom_commercial_registration_number,
-			},
-			{ fieldtype: "Column Break" },
-			{
 				fieldname: "custom_vat_registration_number",
 				fieldtype: "Data",
 				label: __("VAT Registration Number"),
 				default: data.custom_vat_registration_number,
+			},
+			{ fieldtype: "Column Break" },
+			{
+				fieldname: "custom_commercial_registration_number",
+				fieldtype: "Data",
+				label: __("Commercial Registration Number"),
+				default: data.custom_commercial_registration_number,
 			}
 		);
 	}
