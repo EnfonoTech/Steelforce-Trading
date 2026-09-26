@@ -66,6 +66,8 @@ doctype_js = {
 		"public/js/sales_invoice.js",
 		# declines to paint Return / Credit Note once the return window has closed, and says why
 		"public/js/sales_return_window.js",
+		# fix the customer's own phone/CR/VAT from inside the draft invoice, without navigating away
+		"public/js/customer_quick_edit.js",
 	],
 	"Stock Entry":      "public/js/stock_entry.js",
 	"Material Request": "public/js/material_request.js",

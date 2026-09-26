@@ -3,10 +3,14 @@
     bench --site <scratch-site> run-tests --module sf_trading.tests.test_customer_permission
 """
 
+from unittest.mock import patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from sf_trading import customer_permission as cp
+
+DB_SQL = "sf_trading.customer_permission.frappe.db.sql"
 
 
 def _doc(credit_limits=None, branch_access=None):
@@ -72,3 +76,29 @@ class TestValidateBranchCreditLimitAllocation(FrappeTestCase):
 		doc = _doc(credit_limits=[], branch_access=[{"branch": "Branch A", "credit_limit": 1000}])
 		with self.assertRaises(frappe.ValidationError):
 			cp.validate_branch_credit_limit_allocation(doc)
+
+
+class TestCustomerQueryCreditBranch(FrappeTestCase):
+	"""A fresh Sales Invoice starts with Branch blank -- confirmed live, this used to zero out
+	every credit customer from the search with no explanation. It must now widen instead."""
+
+	def test_blank_branch_does_not_hard_zero_the_query(self):
+		with patch(DB_SQL, return_value=[]) as sql:
+			cp.customer_query_credit_branch("Customer", "acme", "name", 0, 20, {"company": "Steel Force Trading WLL"})
+		query = sql.call_args[0][0]
+		self.assertNotIn("1=0", query)
+
+	def test_blank_branch_still_scopes_to_company_and_credit_customers(self):
+		with patch(DB_SQL, return_value=[]) as sql:
+			cp.customer_query_credit_branch("Customer", "acme", "name", 0, 20, {"company": "Steel Force Trading WLL"})
+		query = sql.call_args[0][0]
+		self.assertIn("Customer Credit Limit", query)
+		self.assertIn("custom_company", query)
+
+	def test_a_real_branch_narrows_to_that_branch(self):
+		with patch(DB_SQL, return_value=[]) as sql:
+			cp.customer_query_credit_branch("Customer", "acme", "name", 0, 20, {"branch": "Branch A"})
+		query = sql.call_args[0][0]
+		params = sql.call_args[0][1]
+		self.assertIn("Customer Branch Access", query)
+		self.assertEqual(params["branch"], "Branch A")

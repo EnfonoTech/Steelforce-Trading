@@ -103,8 +103,13 @@ def validate_branch_credit_limit_allocation(doc, _method=None):
 def customer_query_credit_branch(doctype, txt, searchfield, start, page_len, filters, as_dict=False):
 	"""Custom search query for the customer link on Sales Invoice.
 
-	Returns only credit customers (credit_limit > 0) that have the invoice's
-	branch in their Branch Access table. If no branch is passed, returns nothing.
+	Returns credit customers (credit_limit > 0), narrowed to the invoice's own branch once one is
+	chosen. Before that -- a fresh Sales Invoice starts with Branch blank -- this used to return
+	nothing at all for every credit customer, with no hint why (confirmed live: an existing,
+	fully-branch-accessed customer produced an empty dropdown, "Filters applied for Company = ..."
+	and no rows, on a brand new invoice). Branch-scoped enforcement still runs at submit time
+	regardless (sf_trading.credit_limit.check_branch_credit_limit); this is only the search box,
+	and an empty Branch here should widen the search, not zero it out.
 	"""
 	branch = (filters or {}).get("branch") or ""
 	company = (filters or {}).get("company") or ""
@@ -112,7 +117,7 @@ def customer_query_credit_branch(doctype, txt, searchfield, start, page_len, fil
 	if branch:
 		branch_cond = "AND `tabCustomer`.name IN (SELECT parent FROM `tabCustomer Branch Access` WHERE branch = %(branch)s)"
 	else:
-		branch_cond = "AND 1=0"
+		branch_cond = ""
 
 	if company:
 		company_cond = "AND `tabCustomer`.custom_company = %(company)s"
