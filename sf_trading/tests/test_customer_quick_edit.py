@@ -153,6 +153,31 @@ class TestSaveQuickEditData(FrappeTestCase):
 		get_doc.assert_not_called()
 		self.assertEqual(result["warnings"], [])
 
+	def test_attachment_is_linked_before_the_cr_vat_save(self):
+		"""Order matters: customer_override.validate (Customer's own validate hook) checks for an
+		existing attachment DURING doc.save() below -- an attachment uploaded in the SAME call must
+		already be linked by then, or the VAT save it was meant to unblock still rolls back."""
+		customer_doc = StubDoc("Customer", name="CUST-0001")
+		calls = []
+		with patch(f"{MOD}.frappe.has_permission"):
+			with patch.object(qe, "_link_attachment", side_effect=lambda *a: calls.append("link_attachment")):
+				with patch(f"{MOD}.frappe.get_doc", return_value=customer_doc):
+					customer_doc.save = MagicMock(side_effect=lambda: calls.append("doc.save"))
+					qe.save_quick_edit_data(
+						"CUST-0001",
+						{"attachment": "/private/files/vat-copy.pdf", "custom_vat_registration_number": "VAT-456"},
+					)
+
+		self.assertEqual(calls, ["link_attachment", "doc.save"])
+
+	def test_no_attachment_value_never_calls_link_attachment(self):
+		with patch(f"{MOD}.frappe.has_permission"):
+			with patch.object(qe, "_link_attachment") as link_attachment:
+				with patch.object(qe, "_save_contact_phones"):
+					qe.save_quick_edit_data("CUST-0001", {"phone_1": "33445566"})
+
+		link_attachment.assert_not_called()
+
 	def test_cr_vat_update_saves_the_customer(self):
 		customer_doc = StubDoc("Customer", name="CUST-0001")
 		with patch(f"{MOD}.frappe.has_permission"):
@@ -203,6 +228,25 @@ class TestSaveQuickEditData(FrappeTestCase):
 		save_phones.assert_not_called()
 		save_address.assert_not_called()
 		get_doc.assert_not_called()
+
+
+class TestLinkAttachment(FrappeTestCase):
+	def test_links_an_uploaded_file_to_the_customer(self):
+		with patch(f"{MOD}.frappe.db.get_value", return_value="FILE-0001") as get_value:
+			with patch(f"{MOD}.frappe.db.set_value") as set_value:
+				qe._link_attachment("CUST-0001", "/private/files/vat-copy.pdf")
+
+		get_value.assert_called_once_with("File", {"file_url": "/private/files/vat-copy.pdf"}, "name")
+		set_value.assert_called_once_with(
+			"File", "FILE-0001", {"attached_to_doctype": "Customer", "attached_to_name": "CUST-0001"}
+		)
+
+	def test_a_file_url_that_matches_nothing_is_a_silent_no_op(self):
+		with patch(f"{MOD}.frappe.db.get_value", return_value=None):
+			with patch(f"{MOD}.frappe.db.set_value") as set_value:
+				qe._link_attachment("CUST-0001", "/private/files/does-not-exist.pdf")
+
+		set_value.assert_not_called()
 
 
 class TestSaveContactPhones(FrappeTestCase):

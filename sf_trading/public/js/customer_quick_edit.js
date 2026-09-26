@@ -9,11 +9,12 @@
 // missing_b2b_phone_requirements, party_phone_numbers, and now party_completeness.is_b2b_customer
 // for "is this B2B"), so this and those gates never disagree about what "complete" means.
 //
-// An attachment (GS Issue 13, credit customers) is NOT editable here -- Frappe's own Attach
-// fieldtype uploads straight to the File doctype with no attached_to_name until the parent is
-// saved, and re-parenting it correctly from a dialog on a DIFFERENT open document (a draft Sales
-// Invoice) is more moving parts than this pass buys; the dialog names it as still missing and
-// points at the Customer record's own Attachments panel instead.
+// An attachment IS editable here (2026-09-26, second pass): both launch points only ever open
+// this dialog against an ALREADY-SAVED Customer, so a bare Attach control's upload -- which lands
+// unassociated in the File doctype, with no live frm to bind it to attached_to_doctype/name --
+// gets explicitly linked to that Customer server-side (sf_trading.api.customer_quick_edit.
+// _link_attachment), before the CR/VAT save, so customer_override.validate's own VAT-needs-a-
+// document rule sees it in the same request.
 
 frappe.ui.form.on("Sales Invoice", {
 	refresh: add_sales_invoice_quick_edit_button,
@@ -136,18 +137,18 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 		);
 	}
 
-	if ((missing.credit_customer || []).some((m) => m.indexOf("attachment") !== -1)) {
+	// Shown whenever nothing is attached yet -- covers BOTH missing_credit_customer_requirements'
+	// own attachment rule (GS Issue 13) and customer_override.validate's separate "a VAT number
+	// needs a document" rule, since both simply check whether any File is attached to this
+	// Customer. One upload here satisfies whichever (or both) of them applied.
+	if (!data.has_attachment) {
 		fields.push(
-			{ fieldtype: "Section Break", label: __("Credit Customer") },
+			{ fieldtype: "Section Break", label: __("Attachment") },
 			{
-				fieldname: "attachment_note",
-				fieldtype: "HTML",
-				options:
-					'<p class="text-muted">' +
-					__(
-						"This credit customer still needs at least one attachment (e.g. CR copy). Add it from the Customer record's own Attachments panel -- not editable from this dialog."
-					) +
-					"</p>",
+				fieldname: "attachment",
+				fieldtype: "Attach",
+				label: __("Attachment (e.g. CR / VAT copy)"),
+				description: __("Needed if this customer is a credit customer, or has a VAT Registration Number."),
 			}
 		);
 	}

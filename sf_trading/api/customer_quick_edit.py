@@ -1,8 +1,16 @@
 # sf_trading/api/customer_quick_edit.py
 """Quick-edit provision on the Sales Invoice Customer field (client ask, 2026-09-26): fix exactly
 the fields that gate billing for a customer -- CR/VAT (GS Issue 1), a phone number (GS Issue 20),
-a second phone number for B2B (GS Issue 19's B2B rule), and an attachment for credit customers (GS
-Issue 13) -- without leaving the draft invoice.
+a second phone number for B2B (GS Issue 19's B2B rule), and an attachment (GS Issue 13's credit-
+customer requirement, and -- 2026-09-26, second pass -- customer_override.validate's own
+VAT-registration-needs-a-document rule) -- without leaving the draft invoice.
+
+The attachment field IS editable here (2026-09-26, second pass): a bare Attach control in a
+frappe.ui.Dialog uploads to the File doctype unassociated (no attached_to_doctype/name) since
+there is no live frm to bind it to, so save_quick_edit_data links it to this Customer explicitly,
+before the CR/VAT save -- both launch points (Customer master, Sales Invoice Customer field) only
+ever open this dialog against an ALREADY-SAVED Customer, so there is no "parent doesn't exist yet"
+problem to work around.
 
 Deliberately reuses the SAME check functions the billing gates themselves call
 (party_completeness.missing_company_fields, sales_order_governance.missing_credit_customer_requirements /
@@ -111,6 +119,15 @@ def save_quick_edit_data(customer: str, values) -> dict:
 
 	result = {"saved": True, "warnings": []}
 
+	# Linked BEFORE the CR/VAT save below, deliberately -- customer_override.validate (Customer's
+	# own validate hook) refuses to save a VAT Registration Number with no attachment on file, so
+	# an attachment uploaded in THIS SAME call must already be linked by the time doc.save() below
+	# runs its validate, or the save rolls back the VAT/CR write for want of a document that in
+	# fact was just supplied.
+	attachment = (values.get("attachment") or "").strip()
+	if attachment:
+		_link_attachment(customer, attachment)
+
 	phone_1 = (values.get("phone_1") or "").strip()
 	phone_2 = (values.get("phone_2") or "").strip()
 	if phone_1 or phone_2:
@@ -188,3 +205,25 @@ def _save_address(customer: str, address_line1: str, city: str) -> None:
 
 	if not frappe.db.get_value("Customer", customer, "customer_primary_address"):
 		frappe.db.set_value("Customer", customer, "customer_primary_address", address.name)
+
+
+def _link_attachment(customer: str, file_url: str) -> None:
+	"""Attach an already-uploaded (but unassociated) File to this Customer.
+
+	The dialog's Attach control has no live frm to bind to, so Frappe uploads the file straight to
+	the File doctype with attached_to_doctype/attached_to_name left blank -- this is what turns
+	that floating upload into a real Customer attachment, the same shape
+	missing_credit_customer_requirements and customer_override.validate both look for
+	(frappe.get_all("File", filters={"attached_to_doctype": ..., "attached_to_name": ...})).
+
+	Silently a no-op if the file_url doesn't resolve to a File row -- the field is optional and a
+	stale/malformed value here must not block the phone/address/CR/VAT fixes in the same call.
+	"""
+	file_name = frappe.db.get_value("File", {"file_url": file_url}, "name")
+	if not file_name:
+		return
+	frappe.db.set_value(
+		"File",
+		file_name,
+		{"attached_to_doctype": "Customer", "attached_to_name": customer},
+	)
