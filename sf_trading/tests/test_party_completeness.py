@@ -101,8 +101,13 @@ class TestValidateCompanyFieldsStatusOnlyExemption(FrappeTestCase):
 	get_doc_before_save, so it can never exercise this exemption at all (see the class above)."""
 
 	def _make_incomplete_b2b_customer(self, name):
+		"""ignore_validate on the insert -- the incompleteness under test is exactly what a normal
+		insert would already refuse; this needs an already-existing record sitting in that state,
+		the same way real migrated/legacy data would arrive at it without ever passing through this
+		rule. Reset immediately after -- it must not leak into the caller's own later .save() and
+		silently skip the very validation that save is meant to exercise."""
 		leaf_group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
-		return frappe.get_doc(
+		customer = frappe.get_doc(
 			{
 				"doctype": "Customer",
 				"customer_name": name,
@@ -112,7 +117,11 @@ class TestValidateCompanyFieldsStatusOnlyExemption(FrappeTestCase):
 				pc.VAT_FIELD: "200013075500002",
 				# CR deliberately left blank
 			}
-		).insert(ignore_permissions=True)
+		)
+		customer.flags.ignore_validate = True
+		customer.insert(ignore_permissions=True)
+		customer.flags.ignore_validate = False
+		return customer
 
 	def test_blocks_a_normal_edit_with_cr_still_missing(self):
 		customer = self._make_incomplete_b2b_customer("Test 313 Contracting Style Customer")

@@ -100,6 +100,9 @@ class TestCreditLimitGatesStatusOnlyExemption(FrappeTestCase):
 		)
 		customer.flags.ignore_validate = True
 		customer.insert(ignore_permissions=True)
+		# Reset immediately -- it must not leak into the caller's own later .save() and silently
+		# skip the very validation that save is meant to exercise.
+		customer.flags.ignore_validate = False
 		return customer
 
 	def test_blocks_a_normal_edit_with_credit_set_and_no_branch_access(self):
