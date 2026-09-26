@@ -84,6 +84,52 @@ class TestPartyCompleteness(FrappeTestCase):
 			pc.validate_company_fields(existing)
 
 
+class TestOnlyStatusFieldsChanged(FrappeTestCase):
+	def test_a_plain_stub_with_no_get_doc_before_save_is_never_status_only(self):
+		"""only_status_fields_changed must not crash on an object that isn't a real Document --
+		every unit test in this file (and customer_permission's) passes a plain StubDoc/_dict with
+		no get_doc_before_save at all, and existing behaviour for those must not change."""
+		doc = StubDoc("Customer", customer_type="Company", is_frozen=1)
+		self.assertFalse(pc.only_status_fields_changed(doc))
+
+
+class TestValidateCompanyFieldsStatusOnlyExemption(FrappeTestCase):
+	"""2026-09-26, third round on the same live bug: "313 Contracting" (B2B via VAT on file, CR
+	still blank) kept failing THIS gate right after customer_override's own VAT-attachment check
+	was fixed to skip on a status-only save -- validate_company_fields is a separate hook and had
+	no such exemption of its own. Real Documents + real .save(), not StubDoc -- StubDoc has no
+	get_doc_before_save, so it can never exercise this exemption at all (see the class above)."""
+
+	def _make_incomplete_b2b_customer(self, name):
+		leaf_group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
+		return frappe.get_doc(
+			{
+				"doctype": "Customer",
+				"customer_name": name,
+				"customer_type": "Company",
+				"customer_group": leaf_group,
+				"mobile_no": "33445566",
+				pc.VAT_FIELD: "200013075500002",
+				# CR deliberately left blank
+			}
+		).insert(ignore_permissions=True)
+
+	def test_blocks_a_normal_edit_with_cr_still_missing(self):
+		customer = self._make_incomplete_b2b_customer("Test 313 Contracting Style Customer")
+		customer.reload()
+		customer.website = "https://example.com"
+		with self.assertRaises(frappe.ValidationError):
+			customer.save(ignore_permissions=True)
+
+	def test_allows_freezing_with_cr_still_missing(self):
+		"""The exact live case: 313 Contracting, VAT on file, CR blank, freezing it."""
+		customer = self._make_incomplete_b2b_customer("Test 313 Contracting Style Freeze")
+		customer.reload()
+		customer.is_frozen = 1
+		customer.save(ignore_permissions=True)  # must not raise
+		self.assertEqual(frappe.db.get_value("Customer", customer.name, "is_frozen"), 1)
+
+
 class TestIsB2BCustomer(FrappeTestCase):
 	"""2026-09-26: B2B = VAT Registration Number on file. Full stop -- customer_type is NOT
 	consulted (client correction, same day, after live UAT test surfaced "Havelock One Interiors

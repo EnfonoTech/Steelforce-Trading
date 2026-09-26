@@ -2,6 +2,8 @@ import frappe
 from frappe import _
 from frappe.utils import flt, fmt_money
 
+from sf_trading.party_completeness import only_status_fields_changed
+
 
 def permission_query_conditions_for_customer(user):
 	"""
@@ -50,7 +52,14 @@ def permission_query_conditions_for_customer(user):
 
 
 def validate_credit_branch_access(doc, _method=None):
-	"""Require at least one branch access row when a credit limit is set."""
+	"""Require at least one branch access row when a credit limit is set.
+
+	Skipped when the save changes only is_frozen/disabled -- see
+	party_completeness.only_status_fields_changed.
+	"""
+	if only_status_fields_changed(doc):
+		return
+
 	has_credit = any(flt(row.get("credit_limit")) > 0 for row in (doc.credit_limits or []))
 	if has_credit and not doc.get("custom_branch_access"):
 		frappe.throw(
@@ -82,8 +91,12 @@ def validate_branch_credit_limit_allocation(doc, _method=None):
 	This is a setup-time sanity check only. The actual point-of-sale enforcement -- refusing a
 	Sales Order/Invoice that would push one branch's own live exposure past its sub-limit -- is
 	sf_trading.credit_limit.check_branch_credit_limit, called from both override classes'
-	check_credit_limit().
+	check_credit_limit(). Skipped when the save changes only is_frozen/disabled -- see
+	party_completeness.only_status_fields_changed.
 	"""
+	if only_status_fields_changed(doc):
+		return
+
 	allocated = _sum_positive_branch_credit_limits(doc)
 	if allocated <= 0:
 		return

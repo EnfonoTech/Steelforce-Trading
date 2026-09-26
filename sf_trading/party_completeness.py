@@ -38,10 +38,67 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from frappe.utils import cstr
+from frappe.utils import cstr, flt
 
 CR_FIELD = "custom_commercial_registration_number"
 VAT_FIELD = "custom_vat_registration_number"
+
+#: Fields an account-status save is allowed to touch without tripping ANY of this app's own
+#: Customer completeness/governance gates -- see only_status_fields_changed.
+_STATUS_ONLY_FIELDS = ("is_frozen", "disabled")
+
+#: Fieldtypes compared numerically (flt) rather than as strings -- see only_status_fields_changed.
+_NUMERIC_FIELDTYPES = ("Int", "Float", "Currency", "Percent", "Check")
+
+
+def _fields_equal(fieldtype: str, a, b) -> bool:
+	"""Same value, tolerant of two representation mismatches that are NOT real changes:
+
+	- None vs "" -- an unset Link/Data field reads back as ``None`` from get_doc_before_save()'s
+	  fresh DB fetch but as ``""`` on an in-memory doc built from a plain dict.
+	- int vs float -- a real desk save submits an untouched whole-number Float/Currency/Percent
+	  field as a bare JSON int, while the DB's own column reads back a float for the same value
+	  (``default_commission_rate``, live on prod, 2026-09-26 -- confirmed this is why the
+	  freeze/disable exemption below never actually fired for any real save).
+
+	cstr() alone fixes the first; flt() is needed for the second, since cstr(0) == "0" != "0.0"
+	== cstr(0.0) despite being the same number.
+	"""
+	if fieldtype in _NUMERIC_FIELDTYPES:
+		return flt(a) == flt(b)
+	return cstr(a) == cstr(b)
+
+
+def only_status_fields_changed(doc) -> bool:
+	"""True if every OTHER field on the doc (child tables excluded) is identical to the version
+	before this save -- i.e. this save touches nothing but is_frozen/disabled.
+
+	Shared by every one of this app's own Customer-validate gates (this module's own
+	validate_company_fields, customer_override.validate, customer_permission's two credit-limit
+	checks) so an admin freezing/disabling a customer is never blocked by ANY of them -- only by
+	core Frappe's own native validation, which this does not and cannot touch. 2026-09-26, third
+	round on the same live bug: 313 Contracting kept failing validate_company_fields (missing CR)
+	right after customer_override's own attachment check was fixed to skip -- the client's call was
+	that a status-only save should clear every custom gate, not one at a time as each is reported.
+
+	A doc with no before-save snapshot -- including a plain stub/dict passed by a unit test, which
+	has no get_doc_before_save at all -- is treated as "not status-only", the safer default; this
+	must never raise for an object that isn't a real Document.
+	"""
+	get_before = getattr(doc, "get_doc_before_save", None)
+	if not callable(get_before):
+		return False
+
+	before = get_before()
+	if not before:
+		return False
+
+	for df in doc.meta.fields:
+		if df.fieldname in _STATUS_ONLY_FIELDS or df.fieldtype in ("Table", "Table MultiSelect"):
+			continue
+		if not _fields_equal(df.fieldtype, doc.get(df.fieldname), before.get(df.fieldname)):
+			return False
+	return True
 
 
 def is_b2b_customer(doc_or_customer) -> bool:
@@ -95,8 +152,12 @@ def validate_company_fields(doc, _method=None):
 
 	Applies to an existing record being edited exactly as much as a new one -- there is no
 	``is_new()`` guard -- which is what the client asked for ("must apply to EXISTING customers
-	too... fill first, then entry passes").
+	too... fill first, then entry passes"). Skipped when the save changes only is_frozen/disabled
+	-- see only_status_fields_changed.
 	"""
+	if only_status_fields_changed(doc):
+		return
+
 	missing = missing_company_fields(doc)
 	if not missing:
 		return

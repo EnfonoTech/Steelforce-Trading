@@ -78,6 +78,45 @@ class TestValidateBranchCreditLimitAllocation(FrappeTestCase):
 			cp.validate_branch_credit_limit_allocation(doc)
 
 
+class TestCreditLimitGatesStatusOnlyExemption(FrappeTestCase):
+	"""2026-09-26, same live bug as party_completeness's own status-only exemption (313
+	Contracting): these two credit-limit gates can equally block an unrelated freeze/disable
+	toggle on a customer whose credit-limit setup already violates one of them. ignore_validate on
+	the initial insert -- the violation being tested for is exactly what THIS SAME insert would
+	otherwise refuse; the fixture needs an already-existing violating record, the same way a
+	migrated-data customer would arrive at this state without ever passing through this rule."""
+
+	def _make_customer_with_credit_no_branch_access(self, name):
+		leaf_group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
+		customer = frappe.get_doc(
+			{
+				"doctype": "Customer",
+				"customer_name": name,
+				"customer_type": "Company",
+				"customer_group": leaf_group,
+				"mobile_no": "33445566",
+				"credit_limits": [{"credit_limit": 5000}],
+			}
+		)
+		customer.flags.ignore_validate = True
+		customer.insert(ignore_permissions=True)
+		return customer
+
+	def test_blocks_a_normal_edit_with_credit_set_and_no_branch_access(self):
+		customer = self._make_customer_with_credit_no_branch_access("Test Credit No Branch Access")
+		customer.reload()
+		customer.website = "https://example.com"
+		with self.assertRaises(frappe.ValidationError):
+			customer.save(ignore_permissions=True)
+
+	def test_allows_freezing_with_credit_set_and_no_branch_access(self):
+		customer = self._make_customer_with_credit_no_branch_access("Test Credit No Branch Access Freeze")
+		customer.reload()
+		customer.is_frozen = 1
+		customer.save(ignore_permissions=True)  # must not raise
+		self.assertEqual(frappe.db.get_value("Customer", customer.name, "is_frozen"), 1)
+
+
 class TestCustomerQueryCreditBranch(FrappeTestCase):
 	"""A fresh Sales Invoice starts with Branch blank -- confirmed live, this used to zero out
 	every credit customer from the search with no explanation. It must now widen instead."""
