@@ -20,6 +20,7 @@ from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.utils import cstr
 
+from sf_trading.party_completeness import is_b2b_customer
 from sf_trading.party_contact_cache import party_phone_numbers
 
 #: Role allowed to cancel a submitted Sales Order. Reuses the same role name the account's
@@ -134,16 +135,18 @@ def validate_credit_customer_requirements_at_transaction(doc, _method=None):
 
 
 def missing_b2b_phone_requirements(customer: str) -> list[str]:
-	"""A B2B customer needs at least 2 contact numbers on file. "B2B" here is core's own
-	`customer_type == "Company"` -- the same marker party_completeness.py already uses for the CR
-	+ VAT rule (GS Issue 1) -- so B2C ("Individual", or blank) customers are exempt.
+	"""A B2B customer needs at least 2 contact numbers on file. "B2B" here is
+	party_completeness.is_b2b_customer -- customer_type == "Company", OR a VAT Registration
+	Number already on file (2026-09-26: widened so a VAT-bearing customer isn't missed just
+	because customer_type was left at "Individual" by old data) -- so a genuine B2C customer
+	(no VAT, not customer_type Company) is exempt.
 
 	Deliberately independent of missing_credit_customer_requirements's own trigger (a Customer
 	Credit Limit row): that check keeps meaning exactly what it always has -- a B2C credit
 	customer still only needs what IT asks for, and a B2B customer needs this regardless of
 	whether they are on credit at all.
 	"""
-	if frappe.db.get_value("Customer", customer, "customer_type") != "Company":
+	if not is_b2b_customer(customer):
 		return []
 
 	phone_count = len(party_phone_numbers("Customer", customer))

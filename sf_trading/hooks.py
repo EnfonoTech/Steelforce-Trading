@@ -76,6 +76,8 @@ doctype_js = {
 		# core's own mobile_no can be made mandatory from Customize Form with no auto-fill of its
 		# own; this fills it from the G11 phone cache instead of demanding a retype
 		"public/js/party_mobile_no_prefill.js",
+		# "Quick Edit Billing Fields" button -- same dialog the Sales Invoice Customer field uses
+		"public/js/customer_quick_edit.js",
 	],
 	"Supplier":         "public/js/party_mobile_no_prefill.js",
 	"Quotation":        "public/js/quotation.js",

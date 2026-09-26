@@ -82,6 +82,30 @@ class TestGetQuickEditData(FrappeTestCase):
 		self.assertTrue(data["missing"]["b2b_phone"])
 		self.assertEqual(data["missing"]["any_phone"], [])
 
+	def test_an_individual_typed_customer_with_a_vat_number_is_still_flagged_b2b(self):
+		"""2026-09-26: is_company must widen to "has a VAT number", not just customer_type --
+		the exact real case is a customer_type "Individual" record that is genuinely a business."""
+		customer_doc = StubDoc(
+			"Customer",
+			name="CUST-0002",
+			customer_name="Legacy Trading",
+			customer_type="Individual",
+			custom_commercial_registration_number="",
+			custom_vat_registration_number="200098765400003",
+		)
+		with patch(f"{MOD}.frappe.has_permission"):
+			with patch(f"{MOD}.frappe.get_cached_doc", return_value=customer_doc):
+				with patch.object(qe, "_primary_contact", return_value=None):
+					with patch.object(qe, "_primary_address", return_value=None):
+						with patch(f"{MOD}.party_phone_numbers", return_value=[]):
+							with patch(f"{MOD}.missing_company_fields", return_value=[]):
+								with patch(f"{MOD}.missing_credit_customer_requirements", return_value=[]):
+									with patch(f"{MOD}.missing_b2b_phone_requirements", return_value=[]):
+										with patch(f"{MOD}.frappe.db.exists", return_value=False):
+											data = qe.get_quick_edit_data("CUST-0002")
+
+		self.assertTrue(data["is_company"])
+
 
 class TestSaveQuickEditData(FrappeTestCase):
 	def test_phone_only_update_does_not_touch_address_or_customer(self):

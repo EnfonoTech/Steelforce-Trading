@@ -128,31 +128,29 @@ class TestCreditCustomerRequirements(FrappeTestCase):
 
 
 class TestB2BPhoneRequirements(FrappeTestCase):
-	CUSTOMER_TYPE = "sf_trading.sales_order_governance.frappe.db.get_value"
+	"""missing_b2b_phone_requirements delegates its "is this B2B" question to
+	party_completeness.is_b2b_customer -- these tests only need to prove the delegation and the
+	phone-count logic on top of it. is_b2b_customer's own customer_type/VAT widening logic is
+	tested directly in test_party_completeness.py."""
+
+	IS_B2B = "sf_trading.sales_order_governance.is_b2b_customer"
 	PHONE_NUMBERS = "sf_trading.sales_order_governance.party_phone_numbers"
 
-	def test_a_b2c_individual_customer_is_never_checked(self):
-		with patch(self.CUSTOMER_TYPE, return_value="Individual"):
+	def test_a_non_b2b_customer_is_never_checked(self):
+		with patch(self.IS_B2B, return_value=False):
 			with patch(self.PHONE_NUMBERS) as phones:
 				missing = gov.missing_b2b_phone_requirements("CUST-0001")
 		self.assertEqual(missing, [])
 		phones.assert_not_called()
 
-	def test_a_blank_customer_type_is_treated_as_b2c(self):
-		with patch(self.CUSTOMER_TYPE, return_value=None):
-			with patch(self.PHONE_NUMBERS) as phones:
-				missing = gov.missing_b2b_phone_requirements("CUST-0001")
-		self.assertEqual(missing, [])
-		phones.assert_not_called()
-
-	def test_a_b2b_company_customer_with_one_phone_is_incomplete(self):
-		with patch(self.CUSTOMER_TYPE, return_value="Company"):
+	def test_a_b2b_customer_with_one_phone_is_incomplete(self):
+		with patch(self.IS_B2B, return_value=True):
 			with patch(self.PHONE_NUMBERS, return_value=["33445566"]):
 				missing = gov.missing_b2b_phone_requirements("CUST-0001")
 		self.assertEqual(len(missing), 1)
 
-	def test_a_b2b_company_customer_with_two_phones_passes(self):
-		with patch(self.CUSTOMER_TYPE, return_value="Company"):
+	def test_a_b2b_customer_with_two_phones_passes(self):
+		with patch(self.IS_B2B, return_value=True):
 			with patch(self.PHONE_NUMBERS, return_value=["33445566", "17001122"]):
 				missing = gov.missing_b2b_phone_requirements("CUST-0001")
 		self.assertEqual(missing, [])

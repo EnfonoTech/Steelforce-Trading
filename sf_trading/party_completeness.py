@@ -43,6 +43,34 @@ CR_FIELD = "custom_commercial_registration_number"
 VAT_FIELD = "custom_vat_registration_number"
 
 
+def is_b2b_customer(doc_or_customer) -> bool:
+	"""B2B if EITHER core's own customer_type says "Company", OR a VAT Registration Number is
+	already on file (client instruction, 2026-09-26) -- the second signal catches a customer
+	whose customer_type was left at "Individual" by old migrated data (confirmed live the same
+	day: "Arab United Trading & Marketing (000752)" is a real, VAT-bearing business filed as
+	customer_type "Individual") but plainly is a business. This only WIDENS the existing
+	customer_type=="Company" signal, never narrows it -- missing_company_fields's own
+	Company-only CR/VAT-mandatory rule just above (GS Issue 1) is untouched by this and still
+	keys off customer_type alone, deliberately: that rule's own module docstring already explains
+	why it stays narrower than the general B2B concept used elsewhere (missing_b2b_phone_
+	requirements, the Sales Invoice Customer quick-edit dialog).
+
+	Accepts either a customer name (str) or an already-loaded Customer doc/dict -- callers that
+	already hold the doc (e.g. a validate hook) should pass it directly rather than pay for a
+	second query."""
+	if isinstance(doc_or_customer, str):
+		row = frappe.db.get_value("Customer", doc_or_customer, ["customer_type", VAT_FIELD], as_dict=True)
+		customer_type = row.customer_type if row else None
+		vat = row.get(VAT_FIELD) if row else None
+	else:
+		customer_type = doc_or_customer.get("customer_type")
+		vat = doc_or_customer.get(VAT_FIELD)
+
+	if customer_type == "Company":
+		return True
+	return bool(cstr(vat).strip())
+
+
 def missing_company_fields(doc) -> list[str]:
 	"""For a Company-type Customer: which of CR / VAT is blank. Empty list = complete or not a Company."""
 	if doc.get("customer_type") != "Company":

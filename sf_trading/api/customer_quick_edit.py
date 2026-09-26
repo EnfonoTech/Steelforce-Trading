@@ -15,7 +15,7 @@ from __future__ import annotations
 import frappe
 from frappe import _
 
-from sf_trading.party_completeness import CR_FIELD, VAT_FIELD, missing_company_fields
+from sf_trading.party_completeness import CR_FIELD, VAT_FIELD, is_b2b_customer, missing_company_fields
 from sf_trading.party_contact_cache import party_phone_numbers
 from sf_trading.sales_order_governance import (
 	missing_b2b_phone_requirements,
@@ -54,7 +54,7 @@ def get_quick_edit_data(customer: str) -> dict:
 	frappe.has_permission("Customer", "read", doc=customer, throw=True)
 
 	doc = frappe.get_cached_doc("Customer", customer)
-	is_company = doc.customer_type == "Company"
+	is_company = is_b2b_customer(doc)
 
 	contact = _primary_contact(customer)
 	address = _primary_address(customer)

@@ -1,23 +1,30 @@
 // sf_trading/public/js/customer_quick_edit.js
-// Quick-edit provision on the Sales Invoice Customer field (client ask, 2026-09-26): fix exactly
-// the fields that gate billing -- phone via Contact, a second number for B2B, CR/VAT for B2B --
-// without leaving the draft invoice. Backed by sf_trading.api.customer_quick_edit; the dialog
-// reads the SAME completeness checks the billing gates call (missing_company_fields,
-// missing_credit_customer_requirements, missing_b2b_phone_requirements, party_phone_numbers), so
-// this and those gates never disagree about what "complete" means.
+// Quick-edit provision for a customer's own billing-blocking fields -- phone via Contact, a
+// second number for B2B, CR/VAT for B2B -- from two launch points: the Sales Invoice Customer
+// field (without leaving the draft invoice) and the Customer master itself (2026-09-26: added so
+// the same convenience -- fixing phone/address without navigating to a separate Contact/Address
+// record -- is available while looking at the customer record directly, not only mid-invoice).
+// Backed by sf_trading.api.customer_quick_edit; the dialog reads the SAME completeness checks the
+// billing gates call (missing_company_fields, missing_credit_customer_requirements,
+// missing_b2b_phone_requirements, party_phone_numbers, and now party_completeness.is_b2b_customer
+// for "is this B2B"), so this and those gates never disagree about what "complete" means.
 //
 // An attachment (GS Issue 13, credit customers) is NOT editable here -- Frappe's own Attach
 // fieldtype uploads straight to the File doctype with no attached_to_name until the parent is
-// saved, and re-parenting it correctly from a dialog on a DIFFERENT document (Sales Invoice) is
-// more moving parts than this pass buys; the dialog names it as still missing and points at the
-// Customer record's own Attachments panel instead.
+// saved, and re-parenting it correctly from a dialog on a DIFFERENT open document (a draft Sales
+// Invoice) is more moving parts than this pass buys; the dialog names it as still missing and
+// points at the Customer record's own Attachments panel instead.
 
 frappe.ui.form.on("Sales Invoice", {
-	refresh: add_customer_quick_edit_button,
-	customer: add_customer_quick_edit_button,
+	refresh: add_sales_invoice_quick_edit_button,
+	customer: add_sales_invoice_quick_edit_button,
 });
 
-function add_customer_quick_edit_button(frm) {
+frappe.ui.form.on("Customer", {
+	refresh: add_customer_master_quick_edit_button,
+});
+
+function add_sales_invoice_quick_edit_button(frm) {
 	frm.fields_dict.customer.$wrapper.find(".sf-customer-quick-edit").remove();
 
 	if (!frm.doc.customer) {
@@ -30,24 +37,42 @@ function add_customer_quick_edit_button(frm) {
 			'<i class="fa fa-pencil"></i> ' + __("Quick Edit") +
 			"</button>"
 	);
-	$btn.on("click", () => open_customer_quick_edit_dialog(frm));
+	// A Sales Invoice's own modified timestamp is untouched by editing a DIFFERENT record
+	// (Customer) behind the scenes, so no reload is needed here the way the Customer master
+	// launch point below needs one.
+	$btn.on("click", () => open_customer_quick_edit_dialog(frm.doc.customer));
 	frm.fields_dict.customer.$wrapper.append($btn);
 }
 
-function open_customer_quick_edit_dialog(frm) {
+function add_customer_master_quick_edit_button(frm) {
+	if (frm.is_new()) {
+		return; // nothing to link a Contact/Address against yet
+	}
+
+	frm.add_custom_button(__("Quick Edit Billing Fields"), () => {
+		// The dialog's own save writes to THIS SAME Customer record via a separate server call,
+		// bumping `modified` behind the currently-open form's back -- reload_doc() afterwards is
+		// what keeps the next ordinary Save on this form from hitting a stale-timestamp conflict
+		// ("Document has been modified after you have opened it"), the exact trap this account's
+		// own coding standard already calls out for db_set-style writes to an in-memory doc.
+		open_customer_quick_edit_dialog(frm.doc.name, () => frm.reload_doc());
+	});
+}
+
+function open_customer_quick_edit_dialog(customer, on_saved) {
 	frappe.call({
 		method: "sf_trading.api.customer_quick_edit.get_quick_edit_data",
-		args: { customer: frm.doc.customer },
+		args: { customer: customer },
 		freeze: true,
 		callback: (r) => {
 			if (r.message) {
-				render_quick_edit_dialog(frm, r.message);
+				render_quick_edit_dialog(customer, r.message, on_saved);
 			}
 		},
 	});
 }
 
-function render_quick_edit_dialog(frm, data) {
+function render_quick_edit_dialog(customer, data, on_saved) {
 	const is_company = !!data.is_company;
 	const missing = data.missing || {};
 	const all_missing = [].concat(
@@ -126,7 +151,7 @@ function render_quick_edit_dialog(frm, data) {
 		primary_action: (values) => {
 			frappe.call({
 				method: "sf_trading.api.customer_quick_edit.save_quick_edit_data",
-				args: { customer: frm.doc.customer, values: values },
+				args: { customer: customer, values: values },
 				freeze: true,
 				callback: (r) => {
 					dialog.hide();
@@ -138,6 +163,9 @@ function render_quick_edit_dialog(frm, data) {
 						});
 					} else {
 						frappe.show_alert({ message: __("Customer details updated"), indicator: "green" });
+					}
+					if (on_saved) {
+						on_saved();
 					}
 				},
 			});
