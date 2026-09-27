@@ -22,13 +22,22 @@ class StubDoc:
 		return self.__dict__.get(key, default)
 
 
-def _fake_get_all(contacts=None, contact_phones=None, addresses=None, address_phones=None):
+def _fake_get_all(
+	contacts=None,
+	contact_phones=None,
+	addresses=None,
+	address_phones=None,
+	contact_emails=None,
+	address_emails=None,
+):
 	"""Route a mocked frappe.get_all call by which table it's reading -- Contact and Address need
 	independent answers for the priority/fallback tests, not just a fixed call-order list."""
 	contacts = contacts or []
 	contact_phones = contact_phones or []
 	addresses = addresses or []
 	address_phones = address_phones or []
+	contact_emails = contact_emails or []
+	address_emails = address_emails or []
 
 	def fake(doctype, filters=None, pluck=None, **kwargs):
 		filters = filters or {}
@@ -36,8 +45,10 @@ def _fake_get_all(contacts=None, contact_phones=None, addresses=None, address_ph
 			return contacts if filters.get("parenttype") == "Contact" else addresses
 		if doctype == "Contact Phone":
 			return contact_phones
+		if doctype == "Contact Email":
+			return contact_emails
 		if doctype == "Address":
-			return address_phones
+			return address_phones if "phone" in filters else address_emails
 		raise AssertionError(f"unexpected doctype {doctype}")
 
 	return fake
@@ -81,6 +92,50 @@ class TestPartyPhoneNumbers(FrappeTestCase):
 		with patch(GET_ALL, side_effect=fake):
 			numbers = pcc.party_phone_numbers("Customer", "CUST-0001")
 		self.assertEqual(numbers, ["33445566", "99887766"])
+
+
+class TestPartyEmailAddresses(FrappeTestCase):
+	"""2026-09-27, client call: email is now mandatory for a credit customer (sales_order_governance.
+	missing_credit_customer_requirements) -- same Contact-then-Address reasoning as
+	party_phone_numbers above, and for the same reason: the party's own fetch_from `email_id`
+	column can sit blank even when a linked Contact/Address carries a real address."""
+
+	def test_no_links_at_all_returns_empty(self):
+		with patch(GET_ALL, side_effect=_fake_get_all()):
+			self.assertEqual(pcc.party_email_addresses("Customer", "CUST-0001"), [])
+
+	def test_no_party_name_returns_empty_without_a_query(self):
+		with patch(GET_ALL) as get_all:
+			self.assertEqual(pcc.party_email_addresses("Customer", None), [])
+		get_all.assert_not_called()
+
+	def test_falls_back_to_address_when_there_is_no_contact(self):
+		fake = _fake_get_all(addresses=["ADDR-0001"], address_emails=["acme@example.com"])
+		with patch(GET_ALL, side_effect=fake):
+			emails = pcc.party_email_addresses("Customer", "CUST-0001")
+		self.assertEqual(emails, ["acme@example.com"])
+
+	def test_contact_emails_come_before_address_emails(self):
+		fake = _fake_get_all(
+			contacts=["CONTACT-0001"],
+			contact_emails=["contact@example.com"],
+			addresses=["ADDR-0001"],
+			address_emails=["address@example.com"],
+		)
+		with patch(GET_ALL, side_effect=fake):
+			emails = pcc.party_email_addresses("Customer", "CUST-0001")
+		self.assertEqual(emails, ["contact@example.com", "address@example.com"])
+
+	def test_emails_are_deduplicated_in_order(self):
+		fake = _fake_get_all(
+			contacts=["CONTACT-0001"],
+			contact_emails=["acme@example.com"],
+			addresses=["ADDR-0001"],
+			address_emails=["acme@example.com"],
+		)
+		with patch(GET_ALL, side_effect=fake):
+			emails = pcc.party_email_addresses("Customer", "CUST-0001")
+		self.assertEqual(emails, ["acme@example.com"])
 
 
 class TestSyncFromContact(FrappeTestCase):

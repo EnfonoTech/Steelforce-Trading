@@ -20,7 +20,7 @@ from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.utils import cstr
 
-from sf_trading.party_contact_cache import party_phone_numbers
+from sf_trading.party_contact_cache import party_email_addresses, party_phone_numbers
 
 #: Role allowed to cancel a submitted Sales Order. Reuses the same role name the account's
 #: existing Payment Advice workflow already uses for "the person in charge of one branch" --
@@ -102,12 +102,16 @@ def is_credit_customer(customer: str) -> bool:
 
 
 def missing_credit_customer_requirements(customer: str) -> list[str]:
-	"""GS Issue 13: a credit customer needs 2 contact numbers and at least one attachment.
+	"""GS Issue 13: a credit customer needs 2 contact numbers, an email address, and at least one
+	attachment.
 
 	2026-09-27: the 2-contact-number requirement used to ALSO apply separately to any B2B (VAT-
 	bearing) customer via missing_b2b_phone_requirements -- dropped, client call: a B2B customer
 	with no credit standing no longer needs a 2nd number; this is now the ONLY 2-contact-number
-	rule. Attachment is checked via the generic File-attached-to mechanism api/customer_override.py
+	rule. The same call also made email mandatory for a credit customer specifically (not every
+	customer) -- checked via party_email_addresses (the linked Contact/Address, same reasoning as
+	party_phone_numbers: the party's own fetch_from `email_id` column can lag the real value).
+	Attachment is checked via the generic File-attached-to mechanism api/customer_override.py
 	already uses for the VAT-document rule -- not yet the classified document_type + expiry_date
 	child table GS Issue 12 asks for, which needs its own new DocType and is still pending
 	separately.
@@ -119,6 +123,8 @@ def missing_credit_customer_requirements(customer: str) -> list[str]:
 	phone_count = len(party_phone_numbers("Customer", customer))
 	if phone_count < 2:
 		missing.append(_("at least 2 contact numbers (found %d)") % phone_count)
+	if not party_email_addresses("Customer", customer):
+		missing.append(_("an email address"))
 	if not frappe.db.exists("File", {"attached_to_doctype": "Customer", "attached_to_name": customer}):
 		missing.append(_("at least one attachment"))
 	return missing

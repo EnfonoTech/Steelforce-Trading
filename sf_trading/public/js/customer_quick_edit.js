@@ -1,6 +1,7 @@
 // sf_trading/public/js/customer_quick_edit.js
 // Quick-edit provision for a customer's own billing-blocking fields -- phone via Contact, a
-// second number for credit customers, CR/VAT for B2B -- from three launch points: the Sales
+// second number AND an email address for credit customers, CR/VAT for B2B -- from three launch
+// points: the Sales
 // Invoice Customer field, the Sales Order Customer field (2026-09-27: same button, same dialog,
 // added because a Sales Order hits the identical "customer details incomplete" wall at submit --
 // see sales_order_governance.py's own before_submit hooks -- and until now only the Invoice side
@@ -113,12 +114,21 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 	];
 
 	if (is_credit) {
-		fields.push({
-			fieldname: "phone_2",
-			fieldtype: "Data",
-			label: __("Mobile No (2) -- required for a credit customer"),
-			default: data.phone_2,
-		});
+		fields.push(
+			{
+				fieldname: "phone_2",
+				fieldtype: "Data",
+				label: __("Mobile No (2) -- required for a credit customer"),
+				default: data.phone_2,
+			},
+			{
+				fieldname: "email",
+				fieldtype: "Data",
+				options: "Email",
+				label: __("Email -- required for a credit customer"),
+				default: data.email,
+			}
+		);
 	}
 
 	fields.push(

@@ -66,17 +66,19 @@ class TestGetQuickEditData(FrappeTestCase):
 				with patch.object(qe, "_primary_contact", return_value="CONTACT-0001"):
 					with patch.object(qe, "_primary_address", return_value=None):
 						with patch(f"{MOD}.party_phone_numbers", return_value=["33445566"]):
-							with patch(f"{MOD}.missing_company_fields", return_value=["Commercial Registration Number"]):
-								with patch(f"{MOD}.missing_credit_customer_requirements", return_value=["at least 2 contact numbers (found 1)"]):
-									with patch(f"{MOD}.is_credit_customer", return_value=True):
-										with patch(f"{MOD}.frappe.db.exists", return_value=False):
-											data = qe.get_quick_edit_data("CUST-0001")
+							with patch(f"{MOD}.party_email_addresses", return_value=[]):
+								with patch(f"{MOD}.missing_company_fields", return_value=["Commercial Registration Number"]):
+									with patch(f"{MOD}.missing_credit_customer_requirements", return_value=["at least 2 contact numbers (found 1)"]):
+										with patch(f"{MOD}.is_credit_customer", return_value=True):
+											with patch(f"{MOD}.frappe.db.exists", return_value=False):
+												data = qe.get_quick_edit_data("CUST-0001")
 
 		self.assertEqual(data["customer_name"], "Acme")
 		self.assertTrue(data["is_company"])
 		self.assertTrue(data["is_credit"])
 		self.assertEqual(data["phone_1"], "33445566")
 		self.assertEqual(data["phone_2"], "")
+		self.assertEqual(data["email"], "")
 		self.assertFalse(data["has_attachment"])
 		self.assertIn("Commercial Registration Number", data["missing"]["company_fields"])
 		self.assertTrue(data["missing"]["credit_customer"])
@@ -103,11 +105,12 @@ class TestGetQuickEditData(FrappeTestCase):
 				with patch.object(qe, "_primary_contact", return_value=None):
 					with patch.object(qe, "_primary_address", return_value=None):
 						with patch(f"{MOD}.party_phone_numbers", return_value=[]):
-							with patch(f"{MOD}.missing_company_fields", return_value=[]):
-								with patch(f"{MOD}.missing_credit_customer_requirements", return_value=[]):
-									with patch(f"{MOD}.is_credit_customer", return_value=True):
-										with patch(f"{MOD}.frappe.db.exists", return_value=False):
-											data = qe.get_quick_edit_data("CUST-0002")
+							with patch(f"{MOD}.party_email_addresses", return_value=[]):
+								with patch(f"{MOD}.missing_company_fields", return_value=[]):
+									with patch(f"{MOD}.missing_credit_customer_requirements", return_value=[]):
+										with patch(f"{MOD}.is_credit_customer", return_value=True):
+											with patch(f"{MOD}.frappe.db.exists", return_value=False):
+												data = qe.get_quick_edit_data("CUST-0002")
 
 		self.assertFalse(data["is_company"])
 		self.assertTrue(data["is_credit"])
@@ -130,11 +133,12 @@ class TestGetQuickEditData(FrappeTestCase):
 				with patch.object(qe, "_primary_contact", return_value=None):
 					with patch.object(qe, "_primary_address", return_value=None):
 						with patch(f"{MOD}.party_phone_numbers", return_value=["33445566"]):
-							with patch(f"{MOD}.missing_company_fields", return_value=["Commercial Registration Number", "VAT Registration Number"]):
-								with patch(f"{MOD}.missing_credit_customer_requirements", return_value=[]):
-									with patch(f"{MOD}.is_credit_customer", return_value=False):
-										with patch(f"{MOD}.frappe.db.exists", return_value=False):
-											data = qe.get_quick_edit_data("CUST-0003")
+							with patch(f"{MOD}.party_email_addresses", return_value=[]):
+								with patch(f"{MOD}.missing_company_fields", return_value=["Commercial Registration Number", "VAT Registration Number"]):
+									with patch(f"{MOD}.missing_credit_customer_requirements", return_value=[]):
+										with patch(f"{MOD}.is_credit_customer", return_value=False):
+											with patch(f"{MOD}.frappe.db.exists", return_value=False):
+												data = qe.get_quick_edit_data("CUST-0003")
 
 		self.assertTrue(data["is_company"])
 		self.assertFalse(data["is_credit"])
@@ -143,14 +147,24 @@ class TestGetQuickEditData(FrappeTestCase):
 class TestSaveQuickEditData(FrappeTestCase):
 	def test_phone_only_update_does_not_touch_address_or_customer(self):
 		with patch(f"{MOD}.frappe.has_permission"):
-			with patch.object(qe, "_save_contact_phones") as save_phones:
+			with patch.object(qe, "_save_contact_phones_and_email") as save_contact:
 				with patch.object(qe, "_save_address") as save_address:
 					with patch(f"{MOD}.frappe.get_doc") as get_doc:
 						result = qe.save_quick_edit_data("CUST-0001", {"phone_1": "33445566"})
 
-		save_phones.assert_called_once_with("CUST-0001", "33445566", "")
+		save_contact.assert_called_once_with("CUST-0001", "33445566", "", "")
 		save_address.assert_not_called()
 		get_doc.assert_not_called()
+		self.assertEqual(result["warnings"], [])
+
+	def test_email_only_update_calls_the_contact_saver_too(self):
+		"""2026-09-27, client call: email is now mandatory for a credit customer, editable in this
+		same dialog -- an email-only submission (no phone typed) must still reach the Contact."""
+		with patch(f"{MOD}.frappe.has_permission"):
+			with patch.object(qe, "_save_contact_phones_and_email") as save_contact:
+				result = qe.save_quick_edit_data("CUST-0001", {"email": "acme@example.com"})
+
+		save_contact.assert_called_once_with("CUST-0001", "", "", "acme@example.com")
 		self.assertEqual(result["warnings"], [])
 
 	def test_attachment_is_linked_before_the_cr_vat_save(self):
@@ -173,7 +187,7 @@ class TestSaveQuickEditData(FrappeTestCase):
 	def test_no_attachment_value_never_calls_link_attachment(self):
 		with patch(f"{MOD}.frappe.has_permission"):
 			with patch.object(qe, "_link_attachment") as link_attachment:
-				with patch.object(qe, "_save_contact_phones"):
+				with patch.object(qe, "_save_contact_phones_and_email"):
 					qe.save_quick_edit_data("CUST-0001", {"phone_1": "33445566"})
 
 		link_attachment.assert_not_called()
@@ -181,7 +195,7 @@ class TestSaveQuickEditData(FrappeTestCase):
 	def test_cr_vat_update_saves_the_customer(self):
 		customer_doc = StubDoc("Customer", name="CUST-0001")
 		with patch(f"{MOD}.frappe.has_permission"):
-			with patch.object(qe, "_save_contact_phones") as save_phones:
+			with patch.object(qe, "_save_contact_phones_and_email") as save_contact:
 				with patch.object(qe, "_save_address") as save_address:
 					with patch(f"{MOD}.frappe.get_doc", return_value=customer_doc):
 						result = qe.save_quick_edit_data(
@@ -189,7 +203,7 @@ class TestSaveQuickEditData(FrappeTestCase):
 							{"custom_commercial_registration_number": "CR-123", "custom_vat_registration_number": "VAT-456"},
 						)
 
-		save_phones.assert_not_called()
+		save_contact.assert_not_called()
 		save_address.assert_not_called()
 		self.assertEqual(customer_doc.custom_commercial_registration_number, "CR-123")
 		self.assertEqual(customer_doc.custom_vat_registration_number, "VAT-456")
@@ -206,7 +220,7 @@ class TestSaveQuickEditData(FrappeTestCase):
 		customer_doc.save = MagicMock(side_effect=frappe.ValidationError("Customer CUST-0001 is missing required field(s): VAT Registration Number"))
 
 		with patch(f"{MOD}.frappe.has_permission"):
-			with patch.object(qe, "_save_contact_phones") as save_phones:
+			with patch.object(qe, "_save_contact_phones_and_email") as save_contact:
 				with patch(f"{MOD}.frappe.get_doc", return_value=customer_doc):
 					with patch(f"{MOD}.frappe.clear_messages") as clear_messages:
 						result = qe.save_quick_edit_data(
@@ -215,17 +229,17 @@ class TestSaveQuickEditData(FrappeTestCase):
 						)
 
 		clear_messages.assert_called_once()
-		save_phones.assert_called_once_with("CUST-0001", "33445566", "")
+		save_contact.assert_called_once_with("CUST-0001", "33445566", "", "")
 		self.assertTrue(result["saved"])
 		self.assertEqual(len(result["warnings"]), 1)
 
 	def test_no_values_at_all_is_a_no_op(self):
 		with patch(f"{MOD}.frappe.has_permission"):
-			with patch.object(qe, "_save_contact_phones") as save_phones:
+			with patch.object(qe, "_save_contact_phones_and_email") as save_contact:
 				with patch.object(qe, "_save_address") as save_address:
 					with patch(f"{MOD}.frappe.get_doc") as get_doc:
 						qe.save_quick_edit_data("CUST-0001", {})
-		save_phones.assert_not_called()
+		save_contact.assert_not_called()
 		save_address.assert_not_called()
 		get_doc.assert_not_called()
 
@@ -256,13 +270,14 @@ class TestSaveContactPhones(FrappeTestCase):
 			with patch(f"{MOD}.frappe.new_doc", return_value=new_contact):
 				with patch(f"{MOD}.frappe.db.get_value", side_effect=["Acme", None]):
 					with patch(f"{MOD}.frappe.db.set_value") as set_value:
-						qe._save_contact_phones("CUST-0001", "33445566", "")
+						qe._save_contact_phones_and_email("CUST-0001", "33445566", "", "")
 
 		self.assertEqual(new_contact.first_name, "Acme")
 		self.assertEqual(new_contact._appended["links"], [{"link_doctype": "Customer", "link_name": "CUST-0001"}])
 		self.assertEqual(len(new_contact._appended["phone_nos"]), 1)
 		self.assertEqual(new_contact._appended["phone_nos"][0]["phone"], "33445566")
 		self.assertEqual(new_contact._appended["phone_nos"][0]["is_primary_phone"], 1)
+		self.assertNotIn("email_ids", new_contact._appended)
 		set_value.assert_called_once_with("Customer", "CUST-0001", "customer_primary_contact", new_contact.name)
 
 	def test_updates_an_existing_contact_with_two_numbers(self):
@@ -270,12 +285,26 @@ class TestSaveContactPhones(FrappeTestCase):
 		with patch.object(qe, "_primary_contact", return_value="CONTACT-0001"):
 			with patch(f"{MOD}.frappe.get_doc", return_value=existing_contact):
 				with patch(f"{MOD}.frappe.db.get_value", return_value="CONTACT-0001"):
-					qe._save_contact_phones("CUST-0001", "33445566", "17001122")
+					qe._save_contact_phones_and_email("CUST-0001", "33445566", "17001122", "")
 
 		numbers = [row["phone"] for row in existing_contact._appended["phone_nos"]]
 		self.assertEqual(numbers, ["33445566", "17001122"])
 		primaries = [row["is_primary_phone"] for row in existing_contact._appended["phone_nos"]]
 		self.assertEqual(primaries, [1, 0])
+
+	def test_email_only_does_not_touch_phone_nos(self):
+		"""A credit customer fixing just the newly-required email must not wipe out phone numbers
+		already on file -- the dialog only ever submits the fields it actually showed."""
+		existing_contact = StubDoc("Contact", name="CONTACT-0001")
+		with patch.object(qe, "_primary_contact", return_value="CONTACT-0001"):
+			with patch(f"{MOD}.frappe.get_doc", return_value=existing_contact):
+				with patch(f"{MOD}.frappe.db.get_value", return_value="CONTACT-0001"):
+					qe._save_contact_phones_and_email("CUST-0001", "", "", "acme@example.com")
+
+		self.assertNotIn("phone_nos", existing_contact._appended)
+		self.assertEqual(len(existing_contact._appended["email_ids"]), 1)
+		self.assertEqual(existing_contact._appended["email_ids"][0]["email_id"], "acme@example.com")
+		self.assertEqual(existing_contact._appended["email_ids"][0]["is_primary"], 1)
 
 
 class TestSaveAddress(FrappeTestCase):

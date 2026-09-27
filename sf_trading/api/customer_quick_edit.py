@@ -2,10 +2,11 @@
 """Quick-edit provision on the Sales Invoice / Sales Order Customer field (client ask, 2026-09-26;
 Sales Order added 2026-09-27) and the Customer master itself: fix exactly the fields that gate
 billing for a customer -- CR/VAT (GS Issue 1), a phone number (GS Issue 20), a second phone number
-for credit customers (GS Issue 13 -- 2026-09-27: this is now the ONLY 2-contact-number rule; a
-separate B2B-specific one was dropped, client call), and an attachment (GS Issue 13's
-credit-customer requirement, and -- 2026-09-26, second pass -- customer_override.validate's own
-VAT-registration-needs-a-document rule) -- without leaving the draft transaction.
+AND an email address for credit customers (GS Issue 13 -- 2026-09-27: 2-contact-number and email
+are now the ONLY such rules; a separate B2B-specific 2-phone rule was dropped, client call), and an
+attachment (GS Issue 13's credit-customer requirement, and -- 2026-09-26, second pass --
+customer_override.validate's own VAT-registration-needs-a-document rule) -- without leaving the
+draft transaction.
 
 The attachment field IS editable here (2026-09-26, second pass): a bare Attach control in a
 frappe.ui.Dialog uploads to the File doctype unassociated (no attached_to_doctype/name) since
@@ -25,7 +26,7 @@ import frappe
 from frappe import _
 
 from sf_trading.party_completeness import CR_FIELD, VAT_FIELD, missing_company_fields
-from sf_trading.party_contact_cache import party_phone_numbers
+from sf_trading.party_contact_cache import party_email_addresses, party_phone_numbers
 from sf_trading.sales_order_governance import is_credit_customer, missing_credit_customer_requirements
 
 
@@ -75,6 +76,7 @@ def get_quick_edit_data(customer: str) -> dict:
 	contact = _primary_contact(customer)
 	address = _primary_address(customer)
 	phones = party_phone_numbers("Customer", customer)
+	emails = party_email_addresses("Customer", customer)
 
 	return {
 		"customer_name": doc.customer_name,
@@ -86,6 +88,7 @@ def get_quick_edit_data(customer: str) -> dict:
 		"contact": contact,
 		"phone_1": phones[0] if len(phones) > 0 else "",
 		"phone_2": phones[1] if len(phones) > 1 else "",
+		"email": emails[0] if emails else "",
 		"address": address,
 		"address_line1": frappe.db.get_value("Address", address, "address_line1") if address else "",
 		"address_city": frappe.db.get_value("Address", address, "city") if address else "",
@@ -128,8 +131,9 @@ def save_quick_edit_data(customer: str, values) -> dict:
 
 	phone_1 = (values.get("phone_1") or "").strip()
 	phone_2 = (values.get("phone_2") or "").strip()
-	if phone_1 or phone_2:
-		_save_contact_phones(customer, phone_1, phone_2)
+	email = (values.get("email") or "").strip()
+	if phone_1 or phone_2 or email:
+		_save_contact_phones_and_email(customer, phone_1, phone_2, email)
 
 	address_line1 = (values.get("address_line1") or "").strip()
 	address_city = (values.get("address_city") or "").strip()
@@ -161,10 +165,13 @@ def save_quick_edit_data(customer: str, values) -> dict:
 	return result
 
 
-def _save_contact_phones(customer: str, phone_1: str, phone_2: str) -> None:
+def _save_contact_phones_and_email(customer: str, phone_1: str, phone_2: str, email: str) -> None:
 	"""Find-or-create the customer's primary Contact, then replace its Contact Phone rows with
-	whatever the dialog was given (1 or 2 numbers). Never touches Address.phone, the OTHER source
-	party_phone_numbers reads, so it does not fight a value already correct there."""
+	whatever the dialog was given (1 or 2 numbers) and its Contact Email rows with the given
+	address. Never touches Address.phone/email_id, the OTHER source party_phone_numbers /
+	party_email_addresses read, so it does not fight a value already correct there. A blank
+	phone_1/phone_2 or email leaves that side's existing rows alone -- the dialog only ever
+	submits the fields it actually showed, and this must not blank out the other."""
 	contact_name = _primary_contact(customer)
 	if contact_name:
 		contact = frappe.get_doc("Contact", contact_name)
@@ -173,10 +180,16 @@ def _save_contact_phones(customer: str, phone_1: str, phone_2: str) -> None:
 		contact.first_name = frappe.db.get_value("Customer", customer, "customer_name") or customer
 		contact.append("links", {"link_doctype": "Customer", "link_name": customer})
 
-	numbers = [n for n in (phone_1, phone_2) if n]
-	contact.set("phone_nos", [])
-	for i, number in enumerate(numbers):
-		contact.append("phone_nos", {"phone": number, "is_primary_phone": 1 if i == 0 else 0})
+	if phone_1 or phone_2:
+		numbers = [n for n in (phone_1, phone_2) if n]
+		contact.set("phone_nos", [])
+		for i, number in enumerate(numbers):
+			contact.append("phone_nos", {"phone": number, "is_primary_phone": 1 if i == 0 else 0})
+
+	if email:
+		contact.set("email_ids", [])
+		contact.append("email_ids", {"email_id": email, "is_primary": 1})
+
 	contact.save(ignore_permissions=True)
 
 	if not frappe.db.get_value("Customer", customer, "customer_primary_contact"):

@@ -111,6 +111,53 @@ def party_phone_numbers(party_doctype: str, party_name: str) -> list[str]:
 	return _phone_numbers(party_doctype, party_name)
 
 
+def _email_addresses(party_doctype: str, party_name: str) -> list[str]:
+	"""Contact email_ids, then Address.email_id, de-duplicated, Contact addresses first.
+
+	Same reasoning as _phone_numbers above -- reads the linked Contact/Address directly rather
+	than the party's own fetch_from `email_id` column, which (like `mobile_no`) can sit blank in
+	the raw DB row even when a live Contact/Address carries a real address."""
+	addresses = []
+
+	contacts = frappe.get_all(
+		"Dynamic Link",
+		filters={"parenttype": "Contact", "link_doctype": party_doctype, "link_name": party_name},
+		pluck="parent",
+	)
+	if contacts:
+		addresses += frappe.get_all(
+			"Contact Email",
+			filters={"parent": ["in", contacts], "email_id": ["is", "set"]},
+			pluck="email_id",
+		)
+
+	address_names = frappe.get_all(
+		"Dynamic Link",
+		filters={"parenttype": "Address", "link_doctype": party_doctype, "link_name": party_name},
+		pluck="parent",
+	)
+	if address_names:
+		addresses += frappe.get_all(
+			"Address",
+			filters={"name": ["in", address_names], "email_id": ["is", "set"]},
+			pluck="email_id",
+		)
+
+	seen = []
+	for e in addresses:
+		e = (e or "").strip()
+		if e and e not in seen:
+			seen.append(e)
+	return seen
+
+
+def party_email_addresses(party_doctype: str, party_name: str) -> list[str]:
+	"""Every email address on file for this party, across every linked Contact and Address."""
+	if not party_name:
+		return []
+	return _email_addresses(party_doctype, party_name)
+
+
 def _refresh_cache(
 	party_doctype: str,
 	party_name: str,
