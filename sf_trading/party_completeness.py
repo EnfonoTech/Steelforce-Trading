@@ -38,100 +38,35 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from frappe.utils import cstr, flt
+from frappe.utils import cint, cstr
 
 CR_FIELD = "custom_commercial_registration_number"
 VAT_FIELD = "custom_vat_registration_number"
 
-#: Fields an account-status save is allowed to touch without tripping ANY of this app's own
-#: Customer completeness/governance gates -- see only_status_fields_changed.
-_STATUS_ONLY_FIELDS = ("is_frozen", "disabled")
-
-#: Fields excluded from the diff entirely -- not because a save may freely change them, but
-#: because comparing them is unreliable and produces a FALSE "something else changed" on every
-#: single save, defeating the exemption for virtually every real customer. A field with
-#: `fetch_from` set (Customer core ships FOUR: mobile_no, first_name, last_name, email_id, all
-#: fetch_from customer_primary_contact.*) is live-computed from the linked Contact on a normal
-#: frappe.get_doc() load, but load_doc_before_save()'s own fetch
-#: (frappe.get_doc(doctype, name, for_update=True)) does not run that same computation -- confirmed
-#: live, 2026-09-27, on "Bu Sanad for Steel and Aluminium WLL": doc.mobile_no read "35303079" (the
-#: computed display value) while before.mobile_no read "" (frappe.db.get_value's raw column read
-#: agrees: "" is what is actually stored). Excluded by the `fetch_from` property itself, not by a
-#: hardcoded field-name list -- a hardcoded ("mobile_no",) tuple only fixed the ONE field the first
-#: live case happened to hit and would have left the other three (and any future fetch_from field)
-#: to fail the exact same way for a different customer.
-
-#: Fieldtypes compared numerically (flt) rather than as strings -- see only_status_fields_changed.
-_NUMERIC_FIELDTYPES = ("Int", "Float", "Currency", "Percent", "Check")
-
-
-def _fields_equal(fieldtype: str, a, b) -> bool:
-	"""Same value, tolerant of two representation mismatches that are NOT real changes:
-
-	- None vs "" -- an unset Link/Data field reads back as ``None`` from get_doc_before_save()'s
-	  fresh DB fetch but as ``""`` on an in-memory doc built from a plain dict.
-	- int vs float -- a real desk save submits an untouched whole-number Float/Currency/Percent
-	  field as a bare JSON int, while the DB's own column reads back a float for the same value
-	  (``default_commission_rate``, live on prod, 2026-09-26 -- confirmed this is why the
-	  freeze/disable exemption below never actually fired for any real save).
-
-	cstr() alone fixes the first; flt() is needed for the second, since cstr(0) == "0" != "0.0"
-	== cstr(0.0) despite being the same number.
-	"""
-	if fieldtype in _NUMERIC_FIELDTYPES:
-		return flt(a) == flt(b)
-	return cstr(a) == cstr(b)
-
 
 def only_status_fields_changed(doc) -> bool:
-	"""True if every OTHER field on the doc (child tables excluded) is identical to the version
-	before this save -- i.e. this save touches nothing but is_frozen/disabled.
+	"""True if this save is freezing or disabling the customer -- is_frozen or disabled is
+	currently truthy on the in-memory doc, full stop.
 
 	Shared by every one of this app's own Customer-validate gates (this module's own
 	validate_company_fields, customer_override.validate, customer_permission's two credit-limit
-	checks) so an admin freezing/disabling a customer is never blocked by ANY of them -- only by
-	core Frappe's own native validation, which this does not and cannot touch. 2026-09-26, third
-	round on the same live bug: 313 Contracting kept failing validate_company_fields (missing CR)
-	right after customer_override's own attachment check was fixed to skip -- the client's call was
-	that a status-only save should clear every custom gate, not one at a time as each is reported.
+	checks) so a frozen/disabled customer is never blocked by ANY of them -- only by core Frappe's
+	own native validation (e.g. a genuinely mandatory field with no value anywhere), which this
+	does not and cannot touch.
 
-	A doc with no before-save snapshot -- including a plain stub/dict passed by a unit test, which
-	has no get_doc_before_save at all -- is treated as "not status-only", the safer default; this
-	must never raise for an object that isn't a real Document.
-
-	get_doc_before_save() is a bare ``getattr(self, "_doc_before_save", None)``; Document.save()'s
-	own check_if_latest() populates it before validate() runs in a normal save, but that is an
-	implementation detail this function should not depend on silently -- load_doc_before_save() is
-	called explicitly here as a defensive fallback for any caller that reaches this function by
-	another route, cheap and idempotent (a no-op once already populated).
-
-	Fourth round on this same live bug, 2026-09-27: confirmed on prod ("Bu Sanad for Steel and
-	Aluminium WLL") that even with a populated before-save snapshot, freezing an ordinary customer
-	still failed -- a `fetch_from` field's computed value never matches load_doc_before_save()'s
-	raw fetch, on virtually every real customer with a linked Contact, so every such field is
-	skipped in the loop below alongside is_frozen/disabled.
+	Client call, 2026-09-27, fifth round on this same live bug: earlier versions tried to prove
+	"nothing ELSE changed in this same save" via a field-by-field diff against
+	get_doc_before_save() -- correct in spirit, but an unbounded source of false blocks in
+	practice: `default_commission_rate` (int-vs-float), then `mobile_no` (a fetch_from field's
+	onload-computed value never matching the raw before-save fetch), then a live broad sweep
+	across 240 real prod customers still found ~20 more blocked the same way with no diff this
+	function's own diagnostics could find at all. The client's actual requirement is simpler and
+	more permissive than "only status changed": a frozen/disabled customer's master must be
+	saveable REGARDLESS of what else is being edited in the same save -- so this is now a plain
+	truthy check on is_frozen/disabled, nothing else, with no dependency on
+	get_doc_before_save()/load_doc_before_save() at all.
 	"""
-	load_before = getattr(doc, "load_doc_before_save", None)
-	get_before = getattr(doc, "get_doc_before_save", None)
-	if not callable(get_before):
-		return False
-	if callable(load_before) and get_before() is None:
-		load_before()
-
-	before = get_before()
-	if not before:
-		return False
-
-	for df in doc.meta.fields:
-		if (
-			df.fieldname in _STATUS_ONLY_FIELDS
-			or df.get("fetch_from")
-			or df.fieldtype in ("Table", "Table MultiSelect")
-		):
-			continue
-		if not _fields_equal(df.fieldtype, doc.get(df.fieldname), before.get(df.fieldname)):
-			return False
-	return True
+	return bool(cint(doc.get("is_frozen")) or cint(doc.get("disabled")))
 
 
 def is_b2b_customer(doc_or_customer) -> bool:
@@ -185,8 +120,8 @@ def validate_company_fields(doc, _method=None):
 
 	Applies to an existing record being edited exactly as much as a new one -- there is no
 	``is_new()`` guard -- which is what the client asked for ("must apply to EXISTING customers
-	too... fill first, then entry passes"). Skipped when the save changes only is_frozen/disabled
-	-- see only_status_fields_changed.
+	too... fill first, then entry passes"). Skipped outright whenever the customer is being frozen
+	or disabled -- see only_status_fields_changed.
 	"""
 	if only_status_fields_changed(doc):
 		return

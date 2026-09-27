@@ -54,7 +54,7 @@ def permission_query_conditions_for_customer(user):
 def validate_credit_branch_access(doc, _method=None):
 	"""Require at least one branch access row when a credit limit is set.
 
-	Skipped when the save changes only is_frozen/disabled -- see
+	Skipped outright whenever the customer is being frozen or disabled -- see
 	party_completeness.only_status_fields_changed.
 	"""
 	if only_status_fields_changed(doc):
@@ -91,8 +91,8 @@ def validate_branch_credit_limit_allocation(doc, _method=None):
 	This is a setup-time sanity check only. The actual point-of-sale enforcement -- refusing a
 	Sales Order/Invoice that would push one branch's own live exposure past its sub-limit -- is
 	sf_trading.credit_limit.check_branch_credit_limit, called from both override classes'
-	check_credit_limit(). Skipped when the save changes only is_frozen/disabled -- see
-	party_completeness.only_status_fields_changed.
+	check_credit_limit(). Skipped outright whenever the customer is being frozen or disabled --
+	see party_completeness.only_status_fields_changed.
 	"""
 	if only_status_fields_changed(doc):
 		return

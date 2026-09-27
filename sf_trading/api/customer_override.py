@@ -14,12 +14,12 @@ from sf_trading.party_completeness import only_status_fields_changed
 def validate(doc, _method=None):
 	"""Require at least one attachment when the customer has a VAT Registration Number.
 
-	Skipped when the save changes ONLY is_frozen/disabled -- an admin toggling the customer's
-	account status is doing something unrelated to VAT compliance, and must not be blocked by a
-	document that was never attached (freezing a customer is exactly the action someone takes
-	BECAUSE the VAT document is still missing). Any OTHER field changed in the same save is still
-	blocked as before -- this is not a blanket exemption for the whole document. See
-	party_completeness.only_status_fields_changed -- shared with this app's other Customer gates.
+	Skipped outright whenever the customer is being frozen or disabled (2026-09-27, client call:
+	a blanket exemption, not just an "only status changed" one -- a frozen/disabled customer's
+	master must be saveable regardless of what else is being edited in the same save) -- freezing
+	a customer is exactly the action someone takes BECAUSE the VAT document is still missing, so
+	it must never be the thing that blocks the freeze. See party_completeness.
+	only_status_fields_changed -- shared with this app's other Customer gates.
 	"""
 	vat_number = cstr(doc.get("custom_vat_registration_number") or "").strip()
 	if not vat_number or vat_number == "0":

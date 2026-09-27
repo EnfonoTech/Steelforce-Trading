@@ -85,20 +85,38 @@ class TestPartyCompleteness(FrappeTestCase):
 
 
 class TestOnlyStatusFieldsChanged(FrappeTestCase):
-	def test_a_plain_stub_with_no_get_doc_before_save_is_never_status_only(self):
-		"""only_status_fields_changed must not crash on an object that isn't a real Document --
-		every unit test in this file (and customer_permission's) passes a plain StubDoc/_dict with
-		no get_doc_before_save at all, and existing behaviour for those must not change."""
+	"""2026-09-27, fifth round on this same live bug: this is now a plain truthy check on
+	is_frozen/disabled -- client call: a BLANKET exemption, not just an "only status changed" one.
+	No dependency on get_doc_before_save()/load_doc_before_save() at all any more, so a plain
+	StubDoc exercises the real logic exactly like a real Document -- there is no separate
+	"real Document" test class needed the way there was for the old diff-based version."""
+
+	def test_a_plain_stub_with_is_frozen_set_is_exempt(self):
 		doc = StubDoc("Customer", customer_type="Company", is_frozen=1)
+		self.assertTrue(pc.only_status_fields_changed(doc))
+
+	def test_a_plain_stub_with_disabled_set_is_exempt(self):
+		doc = StubDoc("Customer", customer_type="Company", disabled=1)
+		self.assertTrue(pc.only_status_fields_changed(doc))
+
+	def test_a_plain_stub_with_neither_set_is_not_exempt(self):
+		doc = StubDoc("Customer", customer_type="Company", is_frozen=0, disabled=0)
+		self.assertFalse(pc.only_status_fields_changed(doc))
+
+	def test_a_plain_stub_missing_the_fields_entirely_is_not_exempt(self):
+		"""Must not raise for an object that never carries is_frozen/disabled at all."""
+		doc = StubDoc("Customer", customer_type="Company")
 		self.assertFalse(pc.only_status_fields_changed(doc))
 
 
 class TestValidateCompanyFieldsStatusOnlyExemption(FrappeTestCase):
-	"""2026-09-26, third round on the same live bug: "313 Contracting" (B2B via VAT on file, CR
-	still blank) kept failing THIS gate right after customer_override's own VAT-attachment check
-	was fixed to skip on a status-only save -- validate_company_fields is a separate hook and had
-	no such exemption of its own. Real Documents + real .save(), not StubDoc -- StubDoc has no
-	get_doc_before_save, so it can never exercise this exemption at all (see the class above)."""
+	"""2026-09-26 onward, several rounds on this same live bug ("313 Contracting", then "Bu Sanad
+	for Steel and Aluminium WLL", then a live sweep across 240 real prod customers still found more
+	blocked the same way): every attempt at proving "nothing ELSE changed in this same save" via a
+	before/after diff kept finding a new field shape that broke it. 2026-09-27, client call: drop
+	that entirely -- a frozen/disabled customer's master must be saveable NO MATTER what else is
+	being edited in the same save. Real Documents + real .save() to exercise the full validate
+	hook chain, not just the exemption function in isolation."""
 
 	def _make_incomplete_b2b_customer(self, name):
 		"""ignore_validate on the insert -- the incompleteness under test is exactly what a normal
@@ -138,50 +156,17 @@ class TestValidateCompanyFieldsStatusOnlyExemption(FrappeTestCase):
 		customer.save(ignore_permissions=True)  # must not raise
 		self.assertEqual(frappe.db.get_value("Customer", customer.name, "is_frozen"), 1)
 
-	def test_allows_freezing_a_customer_with_a_linked_contact_phone(self):
-		"""2026-09-27, fourth round on this same live bug: "Bu Sanad for Steel and Aluminium WLL"
-		kept failing this exemption even with a populated before-save snapshot, because
-		mobile_no -- a core Read Only field, live-computed on a normal frappe.get_doc() load from
-		the linked Contact/Address -- reads back BLANK from load_doc_before_save()'s own raw
-		for_update fetch (confirmed live: frappe.db.get_value agrees the stored column is blank).
-		Every customer with a linked Contact phone number hits this; the customer above alone
-		never did, since it has no linked Contact at all."""
-		customer = self._make_incomplete_b2b_customer("Test Bu Sanad Style Freeze")
-		contact = frappe.get_doc(
-			{
-				"doctype": "Contact",
-				"first_name": customer.customer_name,
-				"links": [{"link_doctype": "Customer", "link_name": customer.name}],
-				"phone_nos": [{"phone": "35303079", "is_primary_phone": 1}],
-			}
-		)
-		contact.insert(ignore_permissions=True)
+	def test_allows_freezing_even_when_another_field_changes_in_the_same_save(self):
+		"""The BLANKET part of the client's own wording, proven directly: a save that freezes the
+		customer AND edits an unrelated field in the same request must still not raise -- the old
+		diff-based version would have blocked exactly this."""
+		customer = self._make_incomplete_b2b_customer("Test Blanket Freeze Plus Edit")
 		customer.reload()
-		self.assertEqual(customer.mobile_no, "35303079")  # sanity: the onload computed it
 		customer.is_frozen = 1
+		customer.website = "https://example.com"
 		customer.save(ignore_permissions=True)  # must not raise
 		self.assertEqual(frappe.db.get_value("Customer", customer.name, "is_frozen"), 1)
-
-	def test_allows_freezing_a_customer_whose_contact_has_an_email(self):
-		"""The fix excludes by the `fetch_from` property, not a hardcoded ("mobile_no",) name --
-		this proves the OTHER three core fetch_from fields (first_name, last_name, email_id, all
-		fetch_from customer_primary_contact.*) are covered too, not just the one field the first
-		live case happened to hit."""
-		customer = self._make_incomplete_b2b_customer("Test Bu Sanad Style Freeze Email")
-		contact = frappe.get_doc(
-			{
-				"doctype": "Contact",
-				"first_name": customer.customer_name,
-				"links": [{"link_doctype": "Customer", "link_name": customer.name}],
-				"email_ids": [{"email_id": "test@example.com", "is_primary": 1}],
-			}
-		)
-		contact.insert(ignore_permissions=True)
-		customer.reload()
-		self.assertEqual(customer.email_id, "test@example.com")  # sanity: the onload computed it
-		customer.is_frozen = 1
-		customer.save(ignore_permissions=True)  # must not raise
-		self.assertEqual(frappe.db.get_value("Customer", customer.name, "is_frozen"), 1)
+		self.assertEqual(frappe.db.get_value("Customer", customer.name, "website"), "https://example.com")
 
 
 class TestIsB2BCustomer(FrappeTestCase):
