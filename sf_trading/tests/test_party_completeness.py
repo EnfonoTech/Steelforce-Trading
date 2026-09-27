@@ -162,6 +162,27 @@ class TestValidateCompanyFieldsStatusOnlyExemption(FrappeTestCase):
 		customer.save(ignore_permissions=True)  # must not raise
 		self.assertEqual(frappe.db.get_value("Customer", customer.name, "is_frozen"), 1)
 
+	def test_allows_freezing_a_customer_whose_contact_has_an_email(self):
+		"""The fix excludes by the `fetch_from` property, not a hardcoded ("mobile_no",) name --
+		this proves the OTHER three core fetch_from fields (first_name, last_name, email_id, all
+		fetch_from customer_primary_contact.*) are covered too, not just the one field the first
+		live case happened to hit."""
+		customer = self._make_incomplete_b2b_customer("Test Bu Sanad Style Freeze Email")
+		contact = frappe.get_doc(
+			{
+				"doctype": "Contact",
+				"first_name": customer.customer_name,
+				"links": [{"link_doctype": "Customer", "link_name": customer.name}],
+				"email_ids": [{"email_id": "test@example.com", "is_primary": 1}],
+			}
+		)
+		contact.insert(ignore_permissions=True)
+		customer.reload()
+		self.assertEqual(customer.email_id, "test@example.com")  # sanity: the onload computed it
+		customer.is_frozen = 1
+		customer.save(ignore_permissions=True)  # must not raise
+		self.assertEqual(frappe.db.get_value("Customer", customer.name, "is_frozen"), 1)
+
 
 class TestIsB2BCustomer(FrappeTestCase):
 	"""2026-09-26: B2B = VAT Registration Number on file. Full stop -- customer_type is NOT
