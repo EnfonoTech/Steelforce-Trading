@@ -1,21 +1,22 @@
 # sf_trading/api/customer_quick_edit.py
-"""Quick-edit provision on the Sales Invoice Customer field (client ask, 2026-09-26): fix exactly
-the fields that gate billing for a customer -- CR/VAT (GS Issue 1), a phone number (GS Issue 20),
-a second phone number for B2B (GS Issue 19's B2B rule), and an attachment (GS Issue 13's credit-
-customer requirement, and -- 2026-09-26, second pass -- customer_override.validate's own
-VAT-registration-needs-a-document rule) -- without leaving the draft invoice.
+"""Quick-edit provision on the Sales Invoice / Sales Order Customer field (client ask, 2026-09-26;
+Sales Order added 2026-09-27) and the Customer master itself: fix exactly the fields that gate
+billing for a customer -- CR/VAT (GS Issue 1), a phone number (GS Issue 20), a second phone number
+for credit customers (GS Issue 13 -- 2026-09-27: this is now the ONLY 2-contact-number rule; a
+separate B2B-specific one was dropped, client call), and an attachment (GS Issue 13's
+credit-customer requirement, and -- 2026-09-26, second pass -- customer_override.validate's own
+VAT-registration-needs-a-document rule) -- without leaving the draft transaction.
 
 The attachment field IS editable here (2026-09-26, second pass): a bare Attach control in a
 frappe.ui.Dialog uploads to the File doctype unassociated (no attached_to_doctype/name) since
 there is no live frm to bind it to, so save_quick_edit_data links it to this Customer explicitly,
-before the CR/VAT save -- both launch points (Customer master, Sales Invoice Customer field) only
-ever open this dialog against an ALREADY-SAVED Customer, so there is no "parent doesn't exist yet"
-problem to work around.
+before the CR/VAT save -- every launch point only ever opens this dialog against an
+ALREADY-SAVED Customer, so there is no "parent doesn't exist yet" problem to work around.
 
 Deliberately reuses the SAME check functions the billing gates themselves call
 (party_completeness.missing_company_fields, sales_order_governance.missing_credit_customer_requirements /
-missing_b2b_phone_requirements, party_contact_cache.party_phone_numbers) -- this dialog and the gates
-it is fixing can never disagree about what "complete" means, because they read the same functions.
+is_credit_customer, party_contact_cache.party_phone_numbers) -- this dialog and the gates it is
+fixing can never disagree about what "complete" means, because they read the same functions.
 """
 
 from __future__ import annotations
@@ -23,12 +24,9 @@ from __future__ import annotations
 import frappe
 from frappe import _
 
-from sf_trading.party_completeness import CR_FIELD, VAT_FIELD, is_b2b_customer, missing_company_fields
+from sf_trading.party_completeness import CR_FIELD, VAT_FIELD, missing_company_fields
 from sf_trading.party_contact_cache import party_phone_numbers
-from sf_trading.sales_order_governance import (
-	missing_b2b_phone_requirements,
-	missing_credit_customer_requirements,
-)
+from sf_trading.sales_order_governance import is_credit_customer, missing_credit_customer_requirements
 
 
 def _primary_contact(customer: str) -> str | None:
@@ -57,21 +55,22 @@ def _primary_address(customer: str) -> str | None:
 
 @frappe.whitelist()
 def get_quick_edit_data(customer: str) -> dict:
-	"""Everything the dialog needs: current values, which of the four gates is failing right now,
-	and two independent field-visibility flags (is_company, is_b2b -- see below) so the form shows
+	"""Everything the dialog needs: current values, which of the gates is failing right now, and
+	two independent field-visibility flags (is_company, is_credit -- see below) so the form shows
 	exactly the inputs needed to fix whatever the banner names, no more and no less."""
 	frappe.has_permission("Customer", "read", doc=customer, throw=True)
 
 	doc = frappe.get_cached_doc("Customer", customer)
-	# Two DIFFERENT flags, kept deliberately independent even though missing_company_fields (GS
-	# Issue 1) and missing_b2b_phone_requirements now share ONE gate (is_b2b_customer, VAT-presence,
-	# 2026-09-26 second correction). is_company here is field-VISIBILITY, not the blocking rule: a
-	# Company-type customer with no VAT yet is not blocked any more, but the dialog still shows the
-	# CR/VAT inputs for it (is_company stays customer_type-based) so staff can fill VAT in and
-	# thereby promote the customer to B2B -- hiding the fields would make that impossible. is_b2b
-	# mirrors both billing gates' own shared criterion for the 2nd-phone requirement.
+	# Two DIFFERENT flags. is_company is field-VISIBILITY for CR/VAT, not the blocking rule: a
+	# Company-type customer with no VAT yet is not blocked (missing_company_fields, GS Issue 1,
+	# now gates on is_b2b_customer/VAT-presence too), but the dialog still shows the CR/VAT inputs
+	# for it (is_company stays customer_type-based) so staff can fill VAT in and thereby promote
+	# the customer to B2B -- hiding the fields would make that impossible. is_credit (2026-09-27:
+	# replaces the old is_b2b flag here) mirrors missing_credit_customer_requirements's own trigger
+	# (a Customer Credit Limit row) for the 2nd-phone requirement -- the B2B-specific 2-phone rule
+	# was dropped, client call: a B2B customer with no credit standing no longer needs a 2nd number.
 	is_company = doc.customer_type == "Company"
-	is_b2b = is_b2b_customer(doc)
+	is_credit = is_credit_customer(customer)
 
 	contact = _primary_contact(customer)
 	address = _primary_address(customer)
@@ -81,7 +80,7 @@ def get_quick_edit_data(customer: str) -> dict:
 		"customer_name": doc.customer_name,
 		"customer_type": doc.customer_type,
 		"is_company": is_company,
-		"is_b2b": is_b2b,
+		"is_credit": is_credit,
 		CR_FIELD: doc.get(CR_FIELD),
 		VAT_FIELD: doc.get(VAT_FIELD),
 		"contact": contact,
@@ -96,7 +95,6 @@ def get_quick_edit_data(customer: str) -> dict:
 		"missing": {
 			"company_fields": missing_company_fields(doc),
 			"credit_customer": missing_credit_customer_requirements(customer),
-			"b2b_phone": missing_b2b_phone_requirements(customer),
 			"any_phone": [] if phones else [_("at least one contact number")],
 		},
 	}

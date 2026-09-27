@@ -86,6 +86,9 @@ doctype_js = {
 	"Sales Order":      [
 		"public/js/sales_order_payment.js",
 		"public/js/sales_order_parity.js",
+		# fix the customer's own phone/CR/VAT from inside the draft order, without navigating away
+		# -- same dialog the Sales Invoice Customer field and Customer master both already use
+		"public/js/customer_quick_edit.js",
 	],
 	"Supplier Quotation": "public/js/purchase_tax_template.js",
 	"Purchase Receipt":   "public/js/purchase_tax_template.js",
@@ -413,11 +416,10 @@ doc_events = {
 			# GS Issue 20: a customer missing a phone-bearing Contact is not billable, on an
 			# existing customer exactly as much as a new one
 			"sf_trading.sales_order_governance.validate_customer_contact_at_transaction",
-			# GS Issue 13: a credit customer additionally needs 2 contacts + an attachment
+			# GS Issue 13: a credit customer additionally needs 2 contacts + an attachment -- this
+			# is now the ONLY 2-contact-number rule (2026-09-27: dropped as a B2B-specific rule,
+			# client call -- a B2B customer with no credit standing no longer needs a 2nd number)
 			"sf_trading.sales_order_governance.validate_credit_customer_requirements_at_transaction",
-			# a B2B (Company-type) customer additionally needs 2 contact numbers, B2C exempt --
-			# billing-time only, so an existing customer is never blocked from being SAVED over this
-			"sf_trading.sales_order_governance.validate_b2b_phone_requirements_at_transaction",
 		],
 		"on_submit": [
 			"sf_trading.inter_company.sales_invoice_on_submit",
@@ -449,10 +451,9 @@ doc_events = {
 			"sf_trading.sales_order_governance.before_submit_cap_pending_orders",
 			# GS Issue 20: same contact-completeness rule as Sales Invoice
 			"sf_trading.sales_order_governance.validate_customer_contact_at_transaction",
-			# GS Issue 13: same credit-customer rule as Sales Invoice
+			# GS Issue 13: same credit-customer rule as Sales Invoice -- the only 2-contact-number
+			# rule now (2026-09-27: no separate B2B-specific one, see Sales Invoice's own comment)
 			"sf_trading.sales_order_governance.validate_credit_customer_requirements_at_transaction",
-			# same B2B 2-contact-number rule as Sales Invoice
-			"sf_trading.sales_order_governance.validate_b2b_phone_requirements_at_transaction",
 		],
 		"before_cancel": [
 			# GS Issue 17: a remark is mandatory, and only a Branch Head may cancel -- both

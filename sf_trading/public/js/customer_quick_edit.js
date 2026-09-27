@@ -1,13 +1,19 @@
 // sf_trading/public/js/customer_quick_edit.js
 // Quick-edit provision for a customer's own billing-blocking fields -- phone via Contact, a
-// second number for B2B, CR/VAT for B2B -- from two launch points: the Sales Invoice Customer
-// field (without leaving the draft invoice) and the Customer master itself (2026-09-26: added so
-// the same convenience -- fixing phone/address without navigating to a separate Contact/Address
-// record -- is available while looking at the customer record directly, not only mid-invoice).
+// second number for credit customers, CR/VAT for B2B -- from three launch points: the Sales
+// Invoice Customer field, the Sales Order Customer field (2026-09-27: same button, same dialog,
+// added because a Sales Order hits the identical "customer details incomplete" wall at submit --
+// see sales_order_governance.py's own before_submit hooks -- and until now only the Invoice side
+// had a fix-it-here button) (both without leaving the draft document), and the Customer master
+// itself (2026-09-26: added so the same convenience -- fixing phone/address without navigating to
+// a separate Contact/Address record -- is available while looking at the customer record
+// directly, not only mid-transaction).
 // Backed by sf_trading.api.customer_quick_edit; the dialog reads the SAME completeness checks the
 // billing gates call (missing_company_fields, missing_credit_customer_requirements,
-// missing_b2b_phone_requirements, party_phone_numbers, and now party_completeness.is_b2b_customer
-// for "is this B2B"), so this and those gates never disagree about what "complete" means.
+// party_phone_numbers, party_completeness.is_b2b_customer for "is this B2B", sales_order_
+// governance.is_credit_customer for "is this a credit customer") -- so this and those gates never
+// disagree about what "complete" means. 2026-09-27: the 2nd-phone requirement used to also apply
+// separately to B2B customers -- dropped, client call; it now follows credit-customer status only.
 //
 // An attachment IS editable here (2026-09-26, second pass): both launch points only ever open
 // this dialog against an ALREADY-SAVED Customer, so a bare Attach control's upload -- which lands
@@ -17,15 +23,20 @@
 // document rule sees it in the same request.
 
 frappe.ui.form.on("Sales Invoice", {
-	refresh: add_sales_invoice_quick_edit_button,
-	customer: add_sales_invoice_quick_edit_button,
+	refresh: add_transaction_quick_edit_button,
+	customer: add_transaction_quick_edit_button,
+});
+
+frappe.ui.form.on("Sales Order", {
+	refresh: add_transaction_quick_edit_button,
+	customer: add_transaction_quick_edit_button,
 });
 
 frappe.ui.form.on("Customer", {
 	refresh: add_customer_master_quick_edit_button,
 });
 
-function add_sales_invoice_quick_edit_button(frm) {
+function add_transaction_quick_edit_button(frm) {
 	frm.fields_dict.customer.$wrapper.find(".sf-customer-quick-edit").remove();
 
 	if (!frm.doc.customer) {
@@ -38,7 +49,7 @@ function add_sales_invoice_quick_edit_button(frm) {
 			'<i class="fa fa-pencil"></i> ' + __("Quick Edit") +
 			"</button>"
 	);
-	// A Sales Invoice's own modified timestamp is untouched by editing a DIFFERENT record
+	// The transaction's OWN modified timestamp is untouched by editing a DIFFERENT record
 	// (Customer) behind the scenes, so no reload is needed here the way the Customer master
 	// launch point below needs one.
 	$btn.on("click", () => open_customer_quick_edit_dialog(frm.doc.customer));
@@ -74,20 +85,18 @@ function open_customer_quick_edit_dialog(customer, on_saved) {
 }
 
 function render_quick_edit_dialog(customer, data, on_saved) {
-	// Two DIFFERENT flags (2026-09-26, second correction): missing_company_fields (GS Issue 1) and
-	// missing_b2b_phone_requirements now BOTH gate on party_completeness.is_b2b_customer (VAT on
-	// file) -- they agree. is_company here is field-VISIBILITY only (customer_type=="Company"), kept
-	// independent so a Company customer with no VAT yet still sees the CR/VAT inputs and can fill
-	// VAT in to become B2B; is_b2b drives the 2nd mobile number requirement. A Company customer with
-	// no VAT yet is is_company=true / is_b2b=false -- CR/VAT fields show (nothing blocking yet, but
-	// the fields are there to fill in), 2nd phone does not (that rule hasn't engaged either).
+	// Two DIFFERENT flags. is_company is field-VISIBILITY only (customer_type=="Company"), kept
+	// independent of the CR/VAT blocking rule so a Company customer with no VAT yet still sees the
+	// CR/VAT inputs and can fill VAT in to become B2B. is_credit (2026-09-27: replaces the old
+	// is_b2b flag here) drives the 2nd mobile number requirement -- it now follows
+	// is_credit_customer (a Customer Credit Limit row), not B2B/VAT status; a B2B customer with no
+	// credit standing no longer needs a 2nd number.
 	const is_company = !!data.is_company;
-	const is_b2b = !!data.is_b2b;
+	const is_credit = !!data.is_credit;
 	const missing = data.missing || {};
 	const all_missing = [].concat(
 		missing.company_fields || [],
 		missing.credit_customer || [],
-		missing.b2b_phone || [],
 		missing.any_phone || []
 	);
 
@@ -103,11 +112,11 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 		{ fieldname: "phone_1", fieldtype: "Data", label: __("Mobile No (1)"), default: data.phone_1 },
 	];
 
-	if (is_b2b) {
+	if (is_credit) {
 		fields.push({
 			fieldname: "phone_2",
 			fieldtype: "Data",
-			label: __("Mobile No (2) -- required for a B2B customer"),
+			label: __("Mobile No (2) -- required for a credit customer"),
 			default: data.phone_2,
 		});
 	}

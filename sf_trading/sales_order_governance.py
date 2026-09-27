@@ -20,7 +20,6 @@ from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.utils import cstr
 
-from sf_trading.party_completeness import is_b2b_customer
 from sf_trading.party_contact_cache import party_phone_numbers
 
 #: Role allowed to cancel a submitted Sales Order. Reuses the same role name the account's
@@ -94,21 +93,26 @@ def validate_customer_contact_at_transaction(doc, _method=None):
 		)
 
 
+def is_credit_customer(customer: str) -> bool:
+	"""A Customer Credit Limit row with credit_limit > 0 is this account's own existing marker for
+	"credit customer" -- customer_permission.py's auto_add_branch_on_credit_limit and
+	validate_credit_branch_access already key off exactly this, so every caller asking "is this a
+	credit customer" reuses the same signal rather than risking a second, possibly-disagreeing flag."""
+	return bool(frappe.db.exists("Customer Credit Limit", {"parent": customer, "credit_limit": [">", 0]}))
+
+
 def missing_credit_customer_requirements(customer: str) -> list[str]:
 	"""GS Issue 13: a credit customer needs 2 contact numbers and at least one attachment.
 
-	"Credit customer" is not a new checkbox -- this account's own customer_permission.py already
-	treats a Customer Credit Limit row with credit_limit > 0 as exactly that marker (it is what
-	auto_add_branch_on_credit_limit and validate_credit_branch_access key off), so this reuses the
-	same signal rather than adding a second, possibly-disagreeing flag. Attachment is checked via
-	the generic File-attached-to mechanism api/customer_override.py already uses for the VAT-document
-	rule -- not yet the classified document_type + expiry_date child table GS Issue 12 asks for,
-	which needs its own new DocType and is still pending separately.
+	2026-09-27: the 2-contact-number requirement used to ALSO apply separately to any B2B (VAT-
+	bearing) customer via missing_b2b_phone_requirements -- dropped, client call: a B2B customer
+	with no credit standing no longer needs a 2nd number; this is now the ONLY 2-contact-number
+	rule. Attachment is checked via the generic File-attached-to mechanism api/customer_override.py
+	already uses for the VAT-document rule -- not yet the classified document_type + expiry_date
+	child table GS Issue 12 asks for, which needs its own new DocType and is still pending
+	separately.
 	"""
-	is_credit_customer = frappe.db.exists(
-		"Customer Credit Limit", {"parent": customer, "credit_limit": [">", 0]}
-	)
-	if not is_credit_customer:
+	if not is_credit_customer(customer):
 		return []
 
 	missing = []
@@ -131,46 +135,6 @@ def validate_credit_customer_requirements_at_transaction(doc, _method=None):
 		frappe.throw(
 			_("Credit customer %s is missing: %s") % (doc.customer_name or doc.customer, ", ".join(missing)),
 			title=_("Credit Customer Requirements Incomplete"),
-		)
-
-
-def missing_b2b_phone_requirements(customer: str) -> list[str]:
-	"""A B2B customer needs at least 2 contact numbers on file. "B2B" here is
-	party_completeness.is_b2b_customer -- a VAT Registration Number on file, full stop
-	(2026-09-26: customer_type is NOT consulted) -- so a customer with no VAT number is exempt
-	regardless of customer_type.
-
-	Deliberately independent of missing_credit_customer_requirements's own trigger (a Customer
-	Credit Limit row): that check keeps meaning exactly what it always has -- a B2C credit
-	customer still only needs what IT asks for, and a B2B customer needs this regardless of
-	whether they are on credit at all.
-	"""
-	if not is_b2b_customer(customer):
-		return []
-
-	phone_count = len(party_phone_numbers("Customer", customer))
-	if phone_count < 2:
-		return [_("at least 2 contact numbers for a B2B customer (found %d)") % phone_count]
-	return []
-
-
-def validate_b2b_phone_requirements_at_transaction(doc, _method=None):
-	"""Sales Invoice / Sales Order before_submit: a B2B customer needs 2 contact numbers on file.
-
-	before_submit, not Customer's own validate/before_save -- a Customer record can always be
-	saved and edited freely regardless of this rule; it only stops the customer from being
-	BILLED while incomplete. Existing customers are never blocked from being saved because of
-	this (the exact failure mode the client's own raw Customer-mobile_no-reqd Property Setter
-	caused on prod, live-DB-only, fixed separately in party_contact_cache.fill_mobile_no_from_cache
-	and party_mobile_no_prefill.js) -- only a fresh SUBMIT of a Sales Order/Invoice is refused.
-	"""
-	if not doc.get("customer"):
-		return
-	missing = missing_b2b_phone_requirements(doc.customer)
-	if missing:
-		frappe.throw(
-			_("B2B customer %s is missing: %s") % (doc.customer_name or doc.customer, ", ".join(missing)),
-			title=_("B2B Customer Requirements Incomplete"),
 		)
 
 

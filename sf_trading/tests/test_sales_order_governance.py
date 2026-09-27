@@ -127,46 +127,19 @@ class TestCreditCustomerRequirements(FrappeTestCase):
 				gov.validate_credit_customer_requirements_at_transaction(doc)
 
 
-class TestB2BPhoneRequirements(FrappeTestCase):
-	"""missing_b2b_phone_requirements delegates its "is this B2B" question to
-	party_completeness.is_b2b_customer -- these tests only need to prove the delegation and the
-	phone-count logic on top of it. is_b2b_customer's own customer_type/VAT widening logic is
-	tested directly in test_party_completeness.py."""
+class TestIsCreditCustomer(FrappeTestCase):
+	"""2026-09-27: is_credit_customer is now the ONE gate missing_credit_customer_requirements uses
+	for its 2-contact-number + attachment rule -- a separate B2B-specific 2-phone rule
+	(missing_b2b_phone_requirements) was dropped, client call: a B2B customer with no credit
+	standing no longer needs a 2nd number."""
 
-	IS_B2B = "sf_trading.sales_order_governance.is_b2b_customer"
-	PHONE_NUMBERS = "sf_trading.sales_order_governance.party_phone_numbers"
+	CREDIT_LIMIT_EXISTS = "sf_trading.sales_order_governance.frappe.db.exists"
 
-	def test_a_non_b2b_customer_is_never_checked(self):
-		with patch(self.IS_B2B, return_value=False):
-			with patch(self.PHONE_NUMBERS) as phones:
-				missing = gov.missing_b2b_phone_requirements("CUST-0001")
-		self.assertEqual(missing, [])
-		phones.assert_not_called()
+	def test_no_credit_limit_row_is_not_a_credit_customer(self):
+		with patch(self.CREDIT_LIMIT_EXISTS, return_value=False):
+			self.assertFalse(gov.is_credit_customer("CUST-0001"))
 
-	def test_a_b2b_customer_with_one_phone_is_incomplete(self):
-		with patch(self.IS_B2B, return_value=True):
-			with patch(self.PHONE_NUMBERS, return_value=["33445566"]):
-				missing = gov.missing_b2b_phone_requirements("CUST-0001")
-		self.assertEqual(len(missing), 1)
-
-	def test_a_b2b_customer_with_two_phones_passes(self):
-		with patch(self.IS_B2B, return_value=True):
-			with patch(self.PHONE_NUMBERS, return_value=["33445566", "17001122"]):
-				missing = gov.missing_b2b_phone_requirements("CUST-0001")
-		self.assertEqual(missing, [])
-
-	def test_validate_throws_naming_what_is_missing(self):
-		doc = sales_order(customer_name="Al Test Trading W.L.L.")
-		with patch.object(gov, "missing_b2b_phone_requirements", return_value=["at least 2 contact numbers for a B2B customer (found 1)"]):
-			with self.assertRaises(frappe.ValidationError):
-				gov.validate_b2b_phone_requirements_at_transaction(doc)
-
-	def test_validate_passes_a_compliant_b2b_customer(self):
-		doc = sales_order()
-		with patch.object(gov, "missing_b2b_phone_requirements", return_value=[]):
-			gov.validate_b2b_phone_requirements_at_transaction(doc)  # must not raise
-
-	def test_a_document_with_no_customer_is_not_checked(self):
-		with patch.object(gov, "missing_b2b_phone_requirements") as check:
-			gov.validate_b2b_phone_requirements_at_transaction(sales_order(customer=None))
-		check.assert_not_called()
+	def test_a_credit_limit_row_above_zero_is_a_credit_customer(self):
+		with patch(self.CREDIT_LIMIT_EXISTS, return_value=True) as exists:
+			self.assertTrue(gov.is_credit_customer("CUST-0001"))
+		exists.assert_called_once_with("Customer Credit Limit", {"parent": "CUST-0001", "credit_limit": [">", 0]})
