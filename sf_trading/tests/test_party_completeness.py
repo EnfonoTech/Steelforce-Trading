@@ -138,6 +138,30 @@ class TestValidateCompanyFieldsStatusOnlyExemption(FrappeTestCase):
 		customer.save(ignore_permissions=True)  # must not raise
 		self.assertEqual(frappe.db.get_value("Customer", customer.name, "is_frozen"), 1)
 
+	def test_allows_freezing_a_customer_with_a_linked_contact_phone(self):
+		"""2026-09-27, fourth round on this same live bug: "Bu Sanad for Steel and Aluminium WLL"
+		kept failing this exemption even with a populated before-save snapshot, because
+		mobile_no -- a core Read Only field, live-computed on a normal frappe.get_doc() load from
+		the linked Contact/Address -- reads back BLANK from load_doc_before_save()'s own raw
+		for_update fetch (confirmed live: frappe.db.get_value agrees the stored column is blank).
+		Every customer with a linked Contact phone number hits this; the customer above alone
+		never did, since it has no linked Contact at all."""
+		customer = self._make_incomplete_b2b_customer("Test Bu Sanad Style Freeze")
+		contact = frappe.get_doc(
+			{
+				"doctype": "Contact",
+				"first_name": customer.customer_name,
+				"links": [{"link_doctype": "Customer", "link_name": customer.name}],
+				"phone_nos": [{"phone": "35303079", "is_primary_phone": 1}],
+			}
+		)
+		contact.insert(ignore_permissions=True)
+		customer.reload()
+		self.assertEqual(customer.mobile_no, "35303079")  # sanity: the onload computed it
+		customer.is_frozen = 1
+		customer.save(ignore_permissions=True)  # must not raise
+		self.assertEqual(frappe.db.get_value("Customer", customer.name, "is_frozen"), 1)
+
 
 class TestIsB2BCustomer(FrappeTestCase):
 	"""2026-09-26: B2B = VAT Registration Number on file. Full stop -- customer_type is NOT

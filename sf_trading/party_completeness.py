@@ -47,6 +47,18 @@ VAT_FIELD = "custom_vat_registration_number"
 #: Customer completeness/governance gates -- see only_status_fields_changed.
 _STATUS_ONLY_FIELDS = ("is_frozen", "disabled")
 
+#: Fields excluded from the diff entirely -- not because a save may freely change them, but
+#: because comparing them is unreliable and produces a FALSE "something else changed" on every
+#: single save, defeating the exemption for virtually every real customer. `mobile_no` is a core
+#: Read Only field whose in-memory value on a normal frappe.get_doc() load is live-computed from
+#: the linked Contact/Address (onload), but load_doc_before_save()'s own fetch
+#: (frappe.get_doc(doctype, name, for_update=True)) does not run that same onload -- confirmed
+#: live, 2026-09-27, on "Bu Sanad for Steel and Aluminium WLL": doc.mobile_no read "35303079" (the
+#: computed display value) while before.mobile_no read "" (frappe.db.get_value's raw column read
+#: agrees: "" is what is actually stored), a mismatch this function otherwise reads as a real edit
+#: on every customer that has a linked Contact phone number -- i.e. nearly all of them.
+_ALWAYS_IGNORE_FIELDS = ("mobile_no",)
+
 #: Fieldtypes compared numerically (flt) rather than as strings -- see only_status_fields_changed.
 _NUMERIC_FIELDTYPES = ("Int", "Float", "Currency", "Percent", "Check")
 
@@ -84,17 +96,35 @@ def only_status_fields_changed(doc) -> bool:
 	A doc with no before-save snapshot -- including a plain stub/dict passed by a unit test, which
 	has no get_doc_before_save at all -- is treated as "not status-only", the safer default; this
 	must never raise for an object that isn't a real Document.
+
+	get_doc_before_save() is a bare ``getattr(self, "_doc_before_save", None)``; Document.save()'s
+	own check_if_latest() populates it before validate() runs in a normal save, but that is an
+	implementation detail this function should not depend on silently -- load_doc_before_save() is
+	called explicitly here as a defensive fallback for any caller that reaches this function by
+	another route, cheap and idempotent (a no-op once already populated).
+
+	Fourth round on this same live bug, 2026-09-27: confirmed on prod ("Bu Sanad for Steel and
+	Aluminium WLL") that even with a populated before-save snapshot, freezing an ordinary customer
+	still failed -- see _ALWAYS_IGNORE_FIELDS above for why (mobile_no's onload-computed value
+	never matches load_doc_before_save()'s raw fetch, on virtually every real customer).
 	"""
+	load_before = getattr(doc, "load_doc_before_save", None)
 	get_before = getattr(doc, "get_doc_before_save", None)
 	if not callable(get_before):
 		return False
+	if callable(load_before) and get_before() is None:
+		load_before()
 
 	before = get_before()
 	if not before:
 		return False
 
 	for df in doc.meta.fields:
-		if df.fieldname in _STATUS_ONLY_FIELDS or df.fieldtype in ("Table", "Table MultiSelect"):
+		if (
+			df.fieldname in _STATUS_ONLY_FIELDS
+			or df.fieldname in _ALWAYS_IGNORE_FIELDS
+			or df.fieldtype in ("Table", "Table MultiSelect")
+		):
 			continue
 		if not _fields_equal(df.fieldtype, doc.get(df.fieldname), before.get(df.fieldname)):
 			return False
