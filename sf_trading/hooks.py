@@ -78,6 +78,7 @@ doctype_js = {
 		"public/js/party_mobile_no_prefill.js",
 		# "Quick Edit Billing Fields" button -- same dialog the Sales Invoice Customer field uses
 		"public/js/customer_quick_edit.js",
+		"public/js/credit_customer_approval.js",
 	],
 	"Supplier":         "public/js/party_mobile_no_prefill.js",
 	"Quotation":        "public/js/quotation.js",
@@ -362,6 +363,9 @@ doc_events = {
 			"sf_trading.customer_permission.auto_add_branch_on_credit_limit",
 			"sf_trading.party_accounts.create_customer_receivable_account",
 		],
+		# a brand new customer starts Pending Verification; existing ones were grandfathered
+		# in as Approved by the rollout patch, so this never touches a re-saved customer
+		"before_insert": "sf_trading.credit_customer_approval.default_new_customer_status",
 	},
 	"Supplier": {
 		"validate": [
@@ -420,6 +424,9 @@ doc_events = {
 			# is now the ONLY 2-contact-number rule (2026-09-27: dropped as a B2B-specific rule,
 			# client call -- a B2B customer with no credit standing no longer needs a 2nd number)
 			"sf_trading.sales_order_governance.validate_credit_customer_requirements_at_transaction",
+			# a customer still Pending Verification (or Rejected) is not billable, unless
+			# whoever is submitting is named on the bypass roster -- see credit_customer_approval.py
+			"sf_trading.credit_customer_approval.validate_customer_approved_for_invoicing",
 		],
 		"on_submit": [
 			"sf_trading.inter_company.sales_invoice_on_submit",
@@ -967,6 +974,7 @@ scheduler_events = {
 		# GS Issue 18: tell Sales Manager who is at/over the open-order cap, before it becomes
 		# a refused submission
 		"sf_trading.sales_order_governance.notify_customers_over_pending_cap",
+		"sf_trading.document_expiry.check_expiring_documents",
 	],
 	# every tick: each Payment Automation Settings row names its own weekday + time,
 	# and the engine fences itself with last_execution

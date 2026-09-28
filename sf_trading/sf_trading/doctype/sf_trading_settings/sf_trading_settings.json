@@ -15,7 +15,12 @@
   "si_return_approval_threshold",
   "si_return_requires_workflow",
   "open_items_section",
-  "open_items_cutover_date"
+  "open_items_cutover_date",
+  "credit_approval_section",
+  "credit_customer_approval_overrides",
+  "document_expiry_column_break",
+  "document_expiry_before_days",
+  "document_expiry_after_days"
  ],
  "fields": [
   {
@@ -101,6 +106,36 @@
    "fieldname": "open_items_cutover_date",
    "fieldtype": "Date",
    "label": "Consider Open Items From"
+  },
+  {
+   "fieldname": "credit_approval_section",
+   "fieldtype": "Section Break",
+   "label": "Credit Customer Approval"
+  },
+  {
+   "description": "Roles or users who may make a Customer available for Sales Invoice without going through the normal Pending Verification -> Approved step. Administrator always may. Every use is logged as a comment on the Customer.",
+   "fieldname": "credit_customer_approval_overrides",
+   "fieldtype": "Table",
+   "label": "Allowed to Bypass Approval",
+   "options": "SF Override Entry"
+  },
+  {
+   "fieldname": "document_expiry_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "30",
+   "description": "Start reminding this many days before a supporting document's expiry date.",
+   "fieldname": "document_expiry_before_days",
+   "fieldtype": "Int",
+   "label": "Remind Before Expiry (days)"
+  },
+  {
+   "default": "7",
+   "description": "Keep reminding for this many days after a supporting document has expired, then stop.",
+   "fieldname": "document_expiry_after_days",
+   "fieldtype": "Int",
+   "label": "Keep Reminding After Expiry (days)"
   }
  ],
  "index_web_pages_for_search": 1,
