@@ -4,8 +4,11 @@
 A new Customer starts Pending Verification and stays unavailable for Sales Invoice until
 someone with the Credit Approval Officer role opens the record and sets it to Approved (or
 Rejected) -- that field is permlevel-restricted, so this is the whole "workflow": one
-person reviews, one field decides. Existing customers were grandfathered in as Approved by
-a one-time patch when this shipped, so only customers created from here on are affected.
+person reviews, one field decides. Existing customers are grandfathered in as Approved by
+the Custom Field's own default ("Approved") -- fixture-sync backfills every row that has
+none the moment the column is added, so only customers created from here on ever see
+Pending Verification (default_new_customer_status below sets that explicitly on insert,
+overriding the column default for a brand new row).
 
 The bypass exists for the case a real customer needs invoicing today and verification
 cannot finish in time -- deliberately narrow (a roster on SF Trading Settings, same shape as
@@ -53,7 +56,7 @@ def default_new_customer_status(doc, method=None):
 	"""before_insert on Customer: a brand new customer starts unverified.
 
 	Only fires on insert, so it never touches an existing customer being re-saved --
-	those were grandfathered in as Approved by the rollout patch.
+	those were grandfathered in as Approved by the custom field's own default.
 	"""
 	if not doc.get("custom_approval_status"):
 		doc.custom_approval_status = PENDING
