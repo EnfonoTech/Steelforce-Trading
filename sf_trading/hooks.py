@@ -68,6 +68,15 @@ doctype_js = {
 		"public/js/sales_return_window.js",
 		# fix the customer's own phone/CR/VAT from inside the draft invoice, without navigating away
 		"public/js/customer_quick_edit.js",
+		"public/js/credit_customer_approval.js",
+		# copies the picked Sales Return Reason into Remarks; makes Remarks mandatory while the
+		# reason is "Other" -- a different, narrower concern than sales_return_window.js's
+		# window/approval gate
+		"public/js/sales_return_reason.js",
+		# Sales Team's Sales Person picker only offers salespersons valid for this Company
+		"public/js/salesperson_by_company.js",
+		# the whole Sales Order -> Delivery Note -> Sales Invoice chain, not just this one's own hop
+		"public/js/document_trail.js",
 	],
 	"Stock Entry":      "public/js/stock_entry.js",
 	"Material Request": "public/js/material_request.js",
@@ -90,17 +99,35 @@ doctype_js = {
 		# fix the customer's own phone/CR/VAT from inside the draft order, without navigating away
 		# -- same dialog the Sales Invoice Customer field and Customer master both already use
 		"public/js/customer_quick_edit.js",
+		# Sales Team's Sales Person picker only offers salespersons valid for this Company
+		"public/js/salesperson_by_company.js",
+		# the whole Sales Order -> Delivery Note -> Sales Invoice chain, not just this one's own hop
+		"public/js/document_trail.js",
+	],
+	# same Sales Team restriction as Sales Invoice / Sales Order -- Delivery Note carries the same
+	# child table but no other doctype-specific script of its own yet; also the SO -> DN -> SI chain
+	"Delivery Note":    [
+		"public/js/salesperson_by_company.js",
+		"public/js/document_trail.js",
 	],
 	"Supplier Quotation": "public/js/purchase_tax_template.js",
-	"Purchase Receipt":   "public/js/purchase_tax_template.js",
+	"Purchase Receipt":   [
+		"public/js/purchase_tax_template.js",
+		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
+		"public/js/document_trail.js",
+	],
 	# Payment Advice sits in the Create menu beside Payment Request, under the same conditions
 	"Purchase Order":     [
 		"public/js/purchase_tax_template.js",
 		"public/js/payment_advice_form_action.js",
+		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
+		"public/js/document_trail.js",
 	],
 	"Purchase Invoice":   [
 		"public/js/purchase_tax_template.js",
 		"public/js/payment_advice_form_action.js",
+		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
+		"public/js/document_trail.js",
 	],
 	# cancelling a payment must not demand the advice behind it be cancelled as well;
 	# and a cleared post-dated cheque is banked from the cheque's own entry
@@ -285,6 +312,16 @@ _BPL_HOOK = "sf_trading.branch_price_list.apply_branch_price_list"
 # names any: a branch with none has no opinion.
 _BPL_GUARD = "sf_trading.branch_price_list.validate_price_list_allowed"
 
+# Requires an explanation in Remarks when a return's custom_return_reason is "Other" -- a
+# different, narrower concern than sales_return.py's window/approval gate: this is only about WHY
+# a return is being made. See sf_trading/sales_return_reason.py.
+_RETURN_REASON_HOOK = "sf_trading.sales_return_reason.validate_return_reason"
+
+# A custom_track_as_asset item stays on its normal expense account (no capitalization) but
+# still gets a draft Asset for Asset Movement tracking (location/custodian/history). Fires on
+# whichever of PR/PI actually books the purchase; see sf_trading/asset_tracking_item.py.
+_ASSET_TRACKING_HOOK = "sf_trading.asset_tracking_item.create_tracking_asset"
+
 # Picks the purchase tax template matching the document currency (default
 # template for company-currency docs, "Import VAT 0%" otherwise).
 _PTT_HOOK = "sf_trading.purchase_tax_template.set_template_by_currency"
@@ -405,6 +442,7 @@ doc_events = {
 			_BRANCH_HOOK,
 			_LH_HOOK,
 			_SP_HOOK,
+			_RETURN_REASON_HOOK,
 			# freezes the valuation rate on rows invoiced ahead of delivery
 			"sf_trading.sbnd.freeze_valuation_rate",
 			# a cash return may not ENTER the approval chain with no refund planned: the approval
@@ -506,7 +544,10 @@ doc_events = {
 			_BPL_GUARD,
 		],
 		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
-		"on_submit": "sf_trading.api.purchase_return.auto_create_pr_return",
+		"on_submit": [
+			"sf_trading.api.purchase_return.auto_create_pr_return",
+			_ASSET_TRACKING_HOOK,
+		],
 	},
 	"Purchase Order": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
@@ -515,6 +556,7 @@ doc_events = {
 	"Purchase Receipt": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
 		"validate": [_BRANCH_HOOK, _LH_HOOK, _BPL_GUARD],
+		"on_submit": _ASSET_TRACKING_HOOK,
 	},
 	"Supplier Quotation": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
@@ -911,6 +953,12 @@ fixtures = [
 			"Stock Entry-to_warehouse-ignore_user_permissions",
 			"Stock Entry Detail-s_warehouse-ignore_user_permissions",
 			"Stock Entry Detail-t_warehouse-ignore_user_permissions",
+			# core hides its own Asset Location field on these two rows behind
+			# "depends_on": "is_fixed_asset" -- widened so a custom_track_as_asset row can
+			# offer it too, at the point of purchase, without touching the core doctype.
+			# See sf_trading/asset_tracking_item.py._resolve_location.
+			"Purchase Receipt Item-asset_location-depends_on",
+			"Purchase Invoice Item-asset_location-depends_on",
 		)]]
 	},
 	{
@@ -938,6 +986,25 @@ fixtures = [
 			"Supplier-custom_mobile_no",
 			# GS Issue 25: allow_on_submit -- set by reject_pdc on an already-submitted cheque
 			"Payment Entry-custom_pdc_rejection_date",
+			# credit customer approval + document expiry
+			"Customer-custom_credit_approval_section",
+			"Customer-custom_approval_status",
+			"Customer-custom_supporting_documents",
+			"Supplier-custom_supporting_documents",
+			# standardized Sales Return reason
+			"Sales Invoice-custom_return_reason",
+			# company-wise Salesperson
+			"Sales Person-custom_companies",
+			# sf_trading.asset_tracking_item: shadow Asset (Movement tracking only, no
+			# capitalization) for an item that is bought expensed, not fixed-asset
+			"Item-custom_track_as_asset",
+			"Asset-custom_source_purchase_invoice",
+			"Asset-custom_source_row",
+			# row-level mirror of the Item flag, fetched the same way core mirrors
+			# Item.is_fixed_asset onto these same two rows -- lets the Property Setter
+			# above reveal core's own Asset Location field for a tracked row too
+			"Purchase Receipt Item-custom_track_as_asset",
+			"Purchase Invoice Item-custom_track_as_asset",
 		)]],
 	},
 	{

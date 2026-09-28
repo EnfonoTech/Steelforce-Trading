@@ -20,7 +20,9 @@
   "credit_customer_approval_overrides",
   "document_expiry_column_break",
   "document_expiry_before_days",
-  "document_expiry_after_days"
+  "document_expiry_after_days",
+  "asset_tracking_section",
+  "default_asset_location"
  ],
  "fields": [
   {
@@ -136,6 +138,18 @@
    "fieldname": "document_expiry_after_days",
    "fieldtype": "Int",
    "label": "Keep Reminding After Expiry (days)"
+  },
+  {
+   "fieldname": "asset_tracking_section",
+   "fieldtype": "Section Break",
+   "label": "Asset Tracking"
+  },
+  {
+   "description": "Location is mandatory on core Asset and nothing maps a Warehouse to one, so a tracking Asset (sf_trading.asset_tracking_item, for an Item with Track as Asset ticked) uses this Location when the purchase row's own warehouse resolves none. Leave empty and an unresolved row is simply left uncreated — logged, not guessed — for staff to raise and place by hand.",
+   "fieldname": "default_asset_location",
+   "fieldtype": "Link",
+   "label": "Default Tracking Asset Location",
+   "options": "Location"
   }
  ],
  "index_web_pages_for_search": 1,

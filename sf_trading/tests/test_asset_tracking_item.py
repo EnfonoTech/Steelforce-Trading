@@ -1,0 +1,133 @@
+"""Tests for the shadow Asset created on a custom_track_as_asset item's purchase.
+
+Covers the three invariants the feature promises: a tracked, non-fixed-asset item produces
+exactly one draft Asset (no capitalization, no depreciation) on submit; an untracked item
+produces none; and a hook that somehow fires twice for the same purchase row never doubles it.
+
+    bench --site <scratch-site> run-tests --module sf_trading.tests.test_asset_tracking_item
+"""
+
+import frappe
+from frappe.tests.utils import FrappeTestCase
+
+from sf_trading.asset_tracking_item import (
+	SOURCE_PI_FIELD,
+	SOURCE_ROW_FIELD,
+	TRACK_FIELD,
+	create_tracking_asset,
+)
+from sf_trading.tests.test_open_items import SUPPLIER, TestOpenItems
+
+LOCATION = "SF Test Asset Tracking Location"
+
+
+class TestAssetTrackingItem(FrappeTestCase):
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		TestOpenItems.setUpClass()
+		cls.company = TestOpenItems.company.name
+		cls.cost_center = TestOpenItems.cost_center
+		cls.location = cls.make_location()
+		# non-stock, non-fixed-asset items: exactly the "laptop bought and expensed" case this
+		# feature is for -- a stock item is excluded on purpose, see asset_tracking_item.py
+		cls.tracked_item = cls.make_item("SF Test Tracked Asset Item", track=1)
+		cls.plain_item = cls.make_item("SF Test Untracked Expense Item", track=0)
+
+	@classmethod
+	def make_location(cls):
+		if not frappe.db.exists("Location", LOCATION):
+			frappe.get_doc({"doctype": "Location", "location_name": LOCATION}).insert()
+		return LOCATION
+
+	@classmethod
+	def make_item(cls, name, track):
+		from erpnext.stock.doctype.item.test_item import make_item
+
+		# stock_uom spelled out for the same reason test_open_items.py spells it out: this
+		# site's Item defaults were cleared, so make_item cannot insert without it
+		return make_item(
+			name,
+			properties={
+				"is_stock_item": 0,
+				"is_fixed_asset": 0,
+				"item_group": "Products",
+				"stock_uom": "Nos",
+				TRACK_FIELD: track,
+			},
+		).name
+
+	def make_invoice(self, item_code, asset_location=None):
+		"""A direct Purchase Invoice, the way a business expensing an item straight away would."""
+		pi = frappe.get_doc(
+			{
+				"doctype": "Purchase Invoice",
+				"company": self.company,
+				"supplier": SUPPLIER,
+				"cost_center": self.cost_center,
+				"items": [
+					{
+						"item_code": item_code,
+						"qty": 1,
+						"rate": 1000,
+						"cost_center": self.cost_center,
+						"asset_location": asset_location,
+					}
+				],
+			}
+		)
+		TestOpenItems.fill_site_mandatories(pi)
+		pi.insert()
+		pi.submit()
+		return pi
+
+	def tracking_assets(self, pi):
+		return frappe.get_all(
+			"Asset",
+			filters={SOURCE_PI_FIELD: pi.name},
+			fields=[
+				"name",
+				"docstatus",
+				"is_existing_asset",
+				"calculate_depreciation",
+				"location",
+				SOURCE_ROW_FIELD,
+			],
+		)
+
+	def test_a_tracked_item_gets_exactly_one_draft_asset(self):
+		pi = self.make_invoice(self.tracked_item, asset_location=self.location)
+
+		assets = self.tracking_assets(pi)
+		self.assertEqual(len(assets), 1, "exactly one Asset for the one tracked row")
+
+		asset = assets[0]
+		self.assertEqual(asset.docstatus, 0, "left as a draft so staff can complete it")
+		self.assertEqual(int(asset.is_existing_asset), 1, "no fresh capitalization")
+		self.assertEqual(int(asset.calculate_depreciation), 0, "no depreciation schedule")
+		self.assertEqual(asset.location, self.location)
+		self.assertEqual(
+			asset.get(SOURCE_ROW_FIELD),
+			pi.items[0].name,
+			"stamped with the exact row that created it, for the idempotency guard",
+		)
+
+	def test_an_untracked_item_gets_none(self):
+		pi = self.make_invoice(self.plain_item, asset_location=self.location)
+		self.assertFalse(
+			self.tracking_assets(pi),
+			"is_fixed_asset=0 and custom_track_as_asset=0: nothing here asked to be tracked",
+		)
+
+	def test_replaying_the_hook_does_not_duplicate(self):
+		"""A resubmit/replay firing on_submit twice for the same row must not double the Asset."""
+		pi = self.make_invoice(self.tracked_item, asset_location=self.location)
+		self.assertEqual(len(self.tracking_assets(pi)), 1)
+
+		create_tracking_asset(pi)  # simulate the hook firing again for the same document
+
+		self.assertEqual(
+			len(self.tracking_assets(pi)),
+			1,
+			"the per-row idempotency guard must stop a second Asset for the same purchase row",
+		)
