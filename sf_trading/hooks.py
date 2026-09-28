@@ -342,10 +342,6 @@ doc_events = {
 		# on_update_after_submit reposts the ledger when a row changes, so the same rule has to
 		# hold here or a post-submit edit would quietly re-post the wrong cost centre.
 		"before_update_after_submit": "sf_trading.journal_entry_cost_center.set_cost_center_from_branch",
-		# client call, 2026-09-28: a JE must carry a supporting attachment before it can be
-		# submitted. before_submit, not validate -- see journal_entry_attachment.py's own
-		# docstring for why (no name to attach a file to on a brand-new JE's first save).
-		"before_submit": "sf_trading.journal_entry_attachment.validate_attachment_required",
 	},
 	"Customer": {
 		"validate": [
