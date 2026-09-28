@@ -98,7 +98,7 @@ def validate_selling_price(doc, method=None):
 	errors = []
 
 	for item in doc.items:
-		if not item.item_code or not flt(item.base_net_rate):
+		if not item.item_code or item.get("is_free_item"):
 			continue
 
 		cf = flt(item.conversion_factor) or 1.0
