@@ -3,8 +3,10 @@
 
 A new Customer starts Pending Verification and stays unavailable for Sales Invoice until
 someone with the Credit Approval Officer role opens the record and sets it to Approved (or
-Rejected) -- that field is permlevel-restricted, so this is the whole "workflow": one
-person reviews, one field decides. Existing customers are grandfathered in as Approved by
+Rejected) -- the field is visible to everyone (so any tester or salesperson can SEE why a
+customer is blocked) but read-only except for a Credit Approval Officer / Accounts Manager /
+System Manager, so this is the whole "workflow": one of those roles reviews, one field
+decides. Existing customers are grandfathered in as Approved by
 the Custom Field's own default ("Approved") -- fixture-sync backfills every row that has
 none the moment the column is added, so only customers created from here on ever see
 Pending Verification (default_new_customer_status below sets that explicitly on insert,

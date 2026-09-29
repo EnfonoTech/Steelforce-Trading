@@ -1,9 +1,31 @@
+import os
+
 app_name = "sf_trading"
 app_title = "Sf Trading"
 app_publisher = "enfono"
 app_description = "Trading Feature for Steel force"
 app_email = "ramees@enfono.com"
 app_license = "mit"
+
+
+def _sf_asset_version():
+	"""Newest mtime under public/js, so a doctype_js path can carry ?v=<this> and force a
+	fresh fetch on deploy -- plain /assets paths are otherwise never cache-busted (bench build
+	only moves assets.json's own version), so a browser tab open across a deploy keeps running
+	whatever JS it loaded before it, silently, with no error anywhere. Recomputed once per
+	worker process; a clear-cache + worker restart (already part of every deploy here) picks up
+	a new value the next time any of these files change.
+	"""
+	js_dir = os.path.join(os.path.dirname(__file__), "public", "js")
+	try:
+		return str(int(max(
+			os.path.getmtime(os.path.join(js_dir, n)) for n in os.listdir(js_dir) if n.endswith(".js")
+		)))
+	except (OSError, ValueError):
+		return "0"
+
+
+_ASSET_V = _sf_asset_version()
 
 # Apps
 # ------------------
@@ -68,15 +90,14 @@ doctype_js = {
 		"public/js/sales_return_window.js",
 		# fix the customer's own phone/CR/VAT from inside the draft invoice, without navigating away
 		"public/js/customer_quick_edit.js",
-		"public/js/credit_customer_approval.js",
 		# copies the picked Sales Return Reason into Remarks; makes Remarks mandatory while the
 		# reason is "Other" -- a different, narrower concern than sales_return_window.js's
 		# window/approval gate
-		"public/js/sales_return_reason.js",
+		f"public/js/sales_return_reason.js?v={_ASSET_V}",
 		# Sales Team's Sales Person picker only offers salespersons valid for this Company
-		"public/js/salesperson_by_company.js",
+		f"public/js/salesperson_by_company.js?v={_ASSET_V}",
 		# the whole Sales Order -> Delivery Note -> Sales Invoice chain, not just this one's own hop
-		"public/js/document_trail.js",
+		f"public/js/document_trail.js?v={_ASSET_V}",
 	],
 	"Stock Entry":      "public/js/stock_entry.js",
 	"Material Request": "public/js/material_request.js",
@@ -87,7 +108,7 @@ doctype_js = {
 		"public/js/party_mobile_no_prefill.js",
 		# "Quick Edit Billing Fields" button -- same dialog the Sales Invoice Customer field uses
 		"public/js/customer_quick_edit.js",
-		"public/js/credit_customer_approval.js",
+		f"public/js/credit_customer_approval.js?v={_ASSET_V}",
 	],
 	"Supplier":         "public/js/party_mobile_no_prefill.js",
 	"Quotation":        "public/js/quotation.js",
@@ -100,34 +121,34 @@ doctype_js = {
 		# -- same dialog the Sales Invoice Customer field and Customer master both already use
 		"public/js/customer_quick_edit.js",
 		# Sales Team's Sales Person picker only offers salespersons valid for this Company
-		"public/js/salesperson_by_company.js",
+		f"public/js/salesperson_by_company.js?v={_ASSET_V}",
 		# the whole Sales Order -> Delivery Note -> Sales Invoice chain, not just this one's own hop
-		"public/js/document_trail.js",
+		f"public/js/document_trail.js?v={_ASSET_V}",
 	],
 	# same Sales Team restriction as Sales Invoice / Sales Order -- Delivery Note carries the same
 	# child table but no other doctype-specific script of its own yet; also the SO -> DN -> SI chain
 	"Delivery Note":    [
-		"public/js/salesperson_by_company.js",
-		"public/js/document_trail.js",
+		f"public/js/salesperson_by_company.js?v={_ASSET_V}",
+		f"public/js/document_trail.js?v={_ASSET_V}",
 	],
 	"Supplier Quotation": "public/js/purchase_tax_template.js",
 	"Purchase Receipt":   [
 		"public/js/purchase_tax_template.js",
 		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
-		"public/js/document_trail.js",
+		f"public/js/document_trail.js?v={_ASSET_V}",
 	],
 	# Payment Advice sits in the Create menu beside Payment Request, under the same conditions
 	"Purchase Order":     [
 		"public/js/purchase_tax_template.js",
 		"public/js/payment_advice_form_action.js",
 		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
-		"public/js/document_trail.js",
+		f"public/js/document_trail.js?v={_ASSET_V}",
 	],
 	"Purchase Invoice":   [
 		"public/js/purchase_tax_template.js",
 		"public/js/payment_advice_form_action.js",
 		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
-		"public/js/document_trail.js",
+		f"public/js/document_trail.js?v={_ASSET_V}",
 	],
 	# cancelling a payment must not demand the advice behind it be cancelled as well;
 	# and a cleared post-dated cheque is banked from the cheque's own entry

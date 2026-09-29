@@ -28,16 +28,21 @@ function render_document_trail(frm) {
 		callback(r) {
 			if (!r.message || seq !== frm._sf_doc_trail_seq) return;
 
-			// replace, never stack -- an earlier section may survive a partial refresh
+			// Replace, never stack. Two independent guards -- the stored `frm` reference goes
+			// stale if Frappe's own dashboard rebuild tears down and repaints the dashboard
+			// between calls without telling us, so the DOM query below (by a marker class we
+			// control) catches that even when our own reference is wrong or missing.
 			if (frm._sf_doc_trail_section) {
 				frm._sf_doc_trail_section.remove();
 				frm._sf_doc_trail_section = null;
 			}
+			frm.dashboard.wrapper.find(".sf-doc-trail-section").remove();
 
 			const section = frm.dashboard.add_section(
 				build_trail_html(frm, r.message),
 				__("Document Trail")
 			);
+			section.addClass("sf-doc-trail-section");
 			frm._sf_doc_trail_section = section;
 			frm.dashboard.show();
 		},
