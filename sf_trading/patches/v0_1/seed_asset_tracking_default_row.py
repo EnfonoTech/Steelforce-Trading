@@ -12,15 +12,21 @@ Only runs once: nothing to do if the old field was empty, or a row for that comp
 exists (a second migrate run, or an admin who has since added one by hand).
 """
 
+import os
+
 import frappe
 
-from sf_trading.patches.v0_1.stash_default_asset_location import CACHE_KEY
+from sf_trading.patches.v0_1.stash_default_asset_location import STASH_PATH
 
 COMPANY = "Steel Force Trading WLL"
 
 
 def execute():
-	value = frappe.cache.get_value(CACHE_KEY)
+	if not os.path.exists(STASH_PATH):
+		return
+	with open(STASH_PATH) as f:
+		value = f.read().strip()
+	os.remove(STASH_PATH)
 	if not value:
 		return
 
@@ -30,4 +36,3 @@ def execute():
 
 	settings.append("asset_tracking_defaults", {"company": COMPANY, "default_asset_location": value})
 	settings.save(ignore_permissions=True)
-	frappe.cache.delete_value(CACHE_KEY)
