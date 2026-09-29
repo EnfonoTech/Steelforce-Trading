@@ -28,22 +28,19 @@ function render_document_trail(frm) {
 		callback(r) {
 			if (!r.message || seq !== frm._sf_doc_trail_seq) return;
 
-			// Replace, never stack. Two independent guards -- the stored `frm` reference goes
-			// stale if Frappe's own dashboard rebuild tears down and repaints the dashboard
-			// between calls without telling us, so the DOM query below (by a marker class we
-			// control) catches that even when our own reference is wrong or missing.
-			if (frm._sf_doc_trail_section) {
-				frm._sf_doc_trail_section.remove();
-				frm._sf_doc_trail_section = null;
-			}
-			frm.dashboard.wrapper.find(".sf-doc-trail-section").remove();
+			// Replace, never stack. Dedup by a marker class on the section WRAPPER (the div
+			// add_section's css_class lands on -- add_section itself returns only the inner
+			// .section-body, so a reference to that return value can't be used to remove the
+			// whole section including its header) queried fresh from frm.dashboard.parent each
+			// time, so a stale `frm` reference across an unrelated dashboard rebuild can't leave
+			// an orphaned copy behind.
+			frm.dashboard.parent.find(".sf-doc-trail-section").remove();
 
-			const section = frm.dashboard.add_section(
+			frm.dashboard.add_section(
 				build_trail_html(frm, r.message),
-				__("Document Trail")
+				__("Document Trail"),
+				"sf-doc-trail-section"
 			);
-			section.addClass("sf-doc-trail-section");
-			frm._sf_doc_trail_section = section;
 			frm.dashboard.show();
 		},
 	});
