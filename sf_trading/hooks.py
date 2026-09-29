@@ -1,31 +1,9 @@
-import os
-
 app_name = "sf_trading"
 app_title = "Sf Trading"
 app_publisher = "enfono"
 app_description = "Trading Feature for Steel force"
 app_email = "ramees@enfono.com"
 app_license = "mit"
-
-
-def _sf_asset_version():
-	"""Newest mtime under public/js, so a doctype_js path can carry ?v=<this> and force a
-	fresh fetch on deploy -- plain /assets paths are otherwise never cache-busted (bench build
-	only moves assets.json's own version), so a browser tab open across a deploy keeps running
-	whatever JS it loaded before it, silently, with no error anywhere. Recomputed once per
-	worker process; a clear-cache + worker restart (already part of every deploy here) picks up
-	a new value the next time any of these files change.
-	"""
-	js_dir = os.path.join(os.path.dirname(__file__), "public", "js")
-	try:
-		return str(int(max(
-			os.path.getmtime(os.path.join(js_dir, n)) for n in os.listdir(js_dir) if n.endswith(".js")
-		)))
-	except (OSError, ValueError):
-		return "0"
-
-
-_ASSET_V = _sf_asset_version()
 
 # Apps
 # ------------------
@@ -93,11 +71,11 @@ doctype_js = {
 		# copies the picked Sales Return Reason into Remarks; makes Remarks mandatory while the
 		# reason is "Other" -- a different, narrower concern than sales_return_window.js's
 		# window/approval gate
-		f"public/js/sales_return_reason.js?v={_ASSET_V}",
+		"public/js/sales_return_reason.js",
 		# Sales Team's Sales Person picker only offers salespersons valid for this Company
-		f"public/js/salesperson_by_company.js?v={_ASSET_V}",
+		"public/js/salesperson_by_company.js",
 		# the whole Sales Order -> Delivery Note -> Sales Invoice chain, not just this one's own hop
-		f"public/js/document_trail.js?v={_ASSET_V}",
+		"public/js/document_trail.js",
 	],
 	"Stock Entry":      "public/js/stock_entry.js",
 	"Material Request": "public/js/material_request.js",
@@ -108,7 +86,7 @@ doctype_js = {
 		"public/js/party_mobile_no_prefill.js",
 		# "Quick Edit Billing Fields" button -- same dialog the Sales Invoice Customer field uses
 		"public/js/customer_quick_edit.js",
-		f"public/js/credit_customer_approval.js?v={_ASSET_V}",
+		"public/js/credit_customer_approval.js",
 	],
 	"Supplier":         "public/js/party_mobile_no_prefill.js",
 	"Quotation":        "public/js/quotation.js",
@@ -121,34 +99,34 @@ doctype_js = {
 		# -- same dialog the Sales Invoice Customer field and Customer master both already use
 		"public/js/customer_quick_edit.js",
 		# Sales Team's Sales Person picker only offers salespersons valid for this Company
-		f"public/js/salesperson_by_company.js?v={_ASSET_V}",
+		"public/js/salesperson_by_company.js",
 		# the whole Sales Order -> Delivery Note -> Sales Invoice chain, not just this one's own hop
-		f"public/js/document_trail.js?v={_ASSET_V}",
+		"public/js/document_trail.js",
 	],
 	# same Sales Team restriction as Sales Invoice / Sales Order -- Delivery Note carries the same
 	# child table but no other doctype-specific script of its own yet; also the SO -> DN -> SI chain
 	"Delivery Note":    [
-		f"public/js/salesperson_by_company.js?v={_ASSET_V}",
-		f"public/js/document_trail.js?v={_ASSET_V}",
+		"public/js/salesperson_by_company.js",
+		"public/js/document_trail.js",
 	],
 	"Supplier Quotation": "public/js/purchase_tax_template.js",
 	"Purchase Receipt":   [
 		"public/js/purchase_tax_template.js",
 		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
-		f"public/js/document_trail.js?v={_ASSET_V}",
+		"public/js/document_trail.js",
 	],
 	# Payment Advice sits in the Create menu beside Payment Request, under the same conditions
 	"Purchase Order":     [
 		"public/js/purchase_tax_template.js",
 		"public/js/payment_advice_form_action.js",
 		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
-		f"public/js/document_trail.js?v={_ASSET_V}",
+		"public/js/document_trail.js",
 	],
 	"Purchase Invoice":   [
 		"public/js/purchase_tax_template.js",
 		"public/js/payment_advice_form_action.js",
 		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
-		f"public/js/document_trail.js?v={_ASSET_V}",
+		"public/js/document_trail.js",
 	],
 	# cancelling a payment must not demand the advice behind it be cancelled as well;
 	# and a cleared post-dated cheque is banked from the cheque's own entry
@@ -333,9 +311,10 @@ _BPL_HOOK = "sf_trading.branch_price_list.apply_branch_price_list"
 # names any: a branch with none has no opinion.
 _BPL_GUARD = "sf_trading.branch_price_list.validate_price_list_allowed"
 
-# Requires an explanation in Remarks when a return's custom_return_reason is "Other" -- a
-# different, narrower concern than sales_return.py's window/approval gate: this is only about WHY
-# a return is being made. See sf_trading/sales_return_reason.py.
+# Requires custom_return_reason to say more than just "Other" when that is the picked
+# custom_return_reason_template -- a different, narrower concern than sales_return.py's
+# window/approval gate: this is only about WHY a return is being made. See
+# sf_trading/sales_return_reason.py.
 _RETURN_REASON_HOOK = "sf_trading.sales_return_reason.validate_return_reason"
 
 # A custom_track_as_asset item stays on its normal expense account (no capitalization) but
@@ -1012,8 +991,10 @@ fixtures = [
 			"Customer-custom_approval_status",
 			"Customer-custom_supporting_documents",
 			"Supplier-custom_supporting_documents",
-			# standardized Sales Return reason
-			"Sales Invoice-custom_return_reason",
+			# standardized Sales Return reason picker -- appends into the pre-existing
+			# Sales Invoice-custom_return_reason field, fixtured by whichever app already owns
+			# that field (not this one); see sf_trading/sales_return_reason.py
+			"Sales Invoice-custom_return_reason_template",
 			# company-wise Salesperson
 			"Sales Person-custom_companies",
 			# sf_trading.asset_tracking_item: shadow Asset (Movement tracking only, no

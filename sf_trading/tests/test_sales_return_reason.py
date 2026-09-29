@@ -1,5 +1,5 @@
 # sf_trading/tests/test_sales_return_reason.py
-"""Tests for the Sales Return Reason master: the seed patch and the Sales Invoice custom field.
+"""Tests for the Sales Return Reason master: the seed patch and the Sales Invoice template field.
 
     bench --site <scratch-site> run-tests --module sf_trading.tests.test_sales_return_reason
 """
@@ -26,34 +26,46 @@ class TestSalesReturnReason(FrappeTestCase):
 		seed_sales_return_reasons()  # running it again must not duplicate or raise
 		self.assertEqual(frappe.db.count("Sales Return Reason"), before)
 
-	def test_custom_field_is_present_on_sales_invoice(self):
+	def test_template_field_is_present_on_sales_invoice(self):
 		meta = frappe.get_meta("Sales Invoice")
-		field = meta.get_field("custom_return_reason")
-		self.assertIsNotNone(field, "custom_return_reason is missing from Sales Invoice")
+		field = meta.get_field("custom_return_reason_template")
+		self.assertIsNotNone(field, "custom_return_reason_template is missing from Sales Invoice")
 		self.assertEqual(field.fieldtype, "Link")
 		self.assertEqual(field.options, "Sales Return Reason")
 
-	# ── the "Other" -> Remarks-is-mandatory rule, checked server-side ─────────
-	def make_return(self, reason=None, remarks=None):
+	def test_pre_existing_return_reason_field_is_untouched(self):
+		# this module must never repurpose the pre-existing free-text field
+		meta = frappe.get_meta("Sales Invoice")
+		field = meta.get_field("custom_return_reason")
+		self.assertIsNotNone(field, "custom_return_reason should still exist, unowned by this app")
+		self.assertEqual(field.fieldtype, "Data")
+
+	# ── the "Other" -> must-say-more-than-just-that rule, checked server-side ─────────
+	def make_return(self, template=None, reason_text=None):
 		return frappe._dict(
 			doctype="Sales Invoice",
 			is_return=1,
-			custom_return_reason=reason,
-			remarks=remarks,
+			custom_return_reason_template=template,
+			custom_return_reason=reason_text,
 		)
 
-	def test_other_without_a_remark_is_refused(self):
-		doc = self.make_return(reason=OTHER_REASON, remarks="")
+	def test_other_with_nothing_appended_is_refused(self):
+		doc = self.make_return(template=OTHER_REASON, reason_text=OTHER_REASON)
 		self.assertRaises(frappe.ValidationError, validate_return_reason, doc)
 
-	def test_other_with_a_remark_is_allowed(self):
-		doc = self.make_return(reason=OTHER_REASON, remarks="Customer changed their mind")
+	def test_other_with_a_description_is_allowed(self):
+		doc = self.make_return(template=OTHER_REASON, reason_text="Other Customer changed their mind")
 		validate_return_reason(doc)
 
-	def test_a_named_reason_needs_no_remark(self):
-		doc = self.make_return(reason="Damaged", remarks="")
+	def test_a_named_reason_needs_no_extra_text(self):
+		doc = self.make_return(template="Damaged", reason_text="Damaged")
 		validate_return_reason(doc)
 
 	def test_an_ordinary_invoice_is_left_alone(self):
-		doc = frappe._dict(doctype="Sales Invoice", is_return=0, custom_return_reason=OTHER_REASON, remarks="")
+		doc = frappe._dict(
+			doctype="Sales Invoice",
+			is_return=0,
+			custom_return_reason_template=OTHER_REASON,
+			custom_return_reason=OTHER_REASON,
+		)
 		validate_return_reason(doc)

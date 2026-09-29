@@ -1,59 +1,73 @@
-// Copies the picked Sales Return Reason into core's own Remarks field, so every report and print
-// format that already reads Remarks keeps finding a real answer there -- nothing else about
-// Remarks changes, and it stays a plain free-text field the rest of the time.
-//
-// "Other" is the one reason that explains nothing on its own, so it is the one case Remarks is not
-// auto-filled and not left alone either: it is cleared, made mandatory, and focused, so the return
-// cannot be saved with the last reason's leftover text sitting under a reason that no longer
-// matches it. The mandatory flag is UI only -- sf_trading.sales_return_reason.validate_return_reason
-// (hooked on Sales Invoice validate) is the rule that actually holds if the browser is skipped.
-//
-// Reapplied on every refresh, not just on change: toggle_reqd only takes effect on the form that
-// set it, so a return reopened with "Other" already saved needs the same mandatory flag put back.
+// "Return Reason Template" (custom_return_reason_template, Link to Sales Return Reason) is a
+// convenience picker only -- Return/Debit Reason (custom_return_reason) is a pre-existing,
+// independently-used free-text field (reporting, print, debit notes) and this never repurposes or
+// replaces it. Picking a template APPENDS its label into whatever is already typed there, without
+// disturbing it; picking a different template swaps the appended text for the new one; clearing
+// the picker removes exactly what it added -- all client-side, before save, never a database
+// write of its own. sf_trading.sales_return_reason.validate_return_reason (Sales Invoice validate)
+// is the one rule this cannot skip: "Other" must be explained in the text itself, not just
+// labelled.
 
 const SF_OTHER_RETURN_REASON = "Other";
 
-function sf_apply_return_reason_reqd(frm) {
-	const is_other = !!frm.doc.is_return && frm.doc.custom_return_reason === SF_OTHER_RETURN_REASON;
-	frm.toggle_reqd("remarks", is_other);
+function sf_seed_return_reason_suffix(frm) {
+	// A reload restores both fields from the database but not this session's own in-memory
+	// bookkeeping -- reconstruct it so a later deselect on THIS load still removes the right text.
+	if (frm._sf_return_reason_suffix !== undefined) return;
+
+	const picked = frm.doc.custom_return_reason_template;
+	const text = frm.doc.custom_return_reason || "";
+
+	if (!picked || !text.endsWith(picked)) {
+		frm._sf_return_reason_suffix = "";
+		return;
+	}
+
+	const before = text.slice(0, text.length - picked.length);
+	frm._sf_return_reason_suffix = before.endsWith(" ") ? " " + picked : picked;
 }
 
-function sf_focus_remarks(frm) {
-	frm.scroll_to_field("remarks");
+function sf_focus_return_reason(frm) {
+	frm.scroll_to_field("custom_return_reason");
 	// the field's own section may still be expanding when this runs
 	setTimeout(() => {
-		const control = frm.fields_dict.remarks;
+		const control = frm.fields_dict.custom_return_reason;
 		if (control && control.$input) {
 			control.$input.trigger("focus");
 		}
 	}, 300);
 }
 
+function sf_apply_return_reason_template(frm) {
+	const prev = frm._sf_return_reason_suffix || "";
+	let text = frm.doc.custom_return_reason || "";
+
+	if (prev && text.endsWith(prev)) {
+		text = text.slice(0, text.length - prev.length);
+	}
+
+	const picked = frm.doc.custom_return_reason_template;
+	if (picked) {
+		const suffix = (text ? " " : "") + picked;
+		text = text + suffix;
+		frm._sf_return_reason_suffix = suffix;
+	} else {
+		frm._sf_return_reason_suffix = "";
+	}
+
+	frm.set_value("custom_return_reason", text);
+
+	if (picked === SF_OTHER_RETURN_REASON) {
+		sf_focus_return_reason(frm);
+	}
+}
+
 frappe.ui.form.on("Sales Invoice", {
 	refresh(frm) {
-		sf_apply_return_reason_reqd(frm);
+		sf_seed_return_reason_suffix(frm);
 	},
 
-	is_return(frm) {
-		if (!frm.doc.is_return) {
-			frm.set_value("custom_return_reason", "");
-		}
-		sf_apply_return_reason_reqd(frm);
-	},
-
-	custom_return_reason(frm) {
-		const reason = frm.doc.custom_return_reason;
-
-		if (reason === SF_OTHER_RETURN_REASON) {
-			frm.set_value("remarks", "");
-			sf_apply_return_reason_reqd(frm);
-			sf_focus_remarks(frm);
-			return;
-		}
-
-		sf_apply_return_reason_reqd(frm);
-		if (reason) {
-			frm.set_value("remarks", reason);
-		}
+	custom_return_reason_template(frm) {
+		sf_apply_return_reason_template(frm);
 	},
 });

@@ -143,11 +143,32 @@ def _create_for_row(doc, row):
 	if _already_tracked(doc, row):
 		return
 
+	location = _resolve_location(row)
+	if not location:
+		# Checked here, before insert, rather than left to Asset's own mandatory-field
+		# validation: that validation calls msgprint before raising, and msgprint's message
+		# reaches the client's response regardless of this function's own try/except catching
+		# the exception right after -- so the Purchase Receipt/Invoice would submit fine and
+		# the row would still be logged for staff to finish by hand (see module docstring),
+		# but the submitting user would see a spurious-looking "Error: Value missing for
+		# Asset: Location" dialog on an otherwise-successful submit. Logging directly here
+		# gets the same outcome with no such leak.
+		title = "Asset tracking skipped, no Location resolved: " + doc.doctype + " " + doc.name + " row " + str(row.idx)
+		message = (
+			"No Location configured for asset-tracked item "
+			+ str(row.item_code)
+			+ ". Set Purchase Receipt/Invoice Item > Asset Location on the row, a Warehouse"
+			" mapping, or SF Trading Settings > Default Tracking Asset Location, then create"
+			" the Asset by hand."
+		)
+		frappe.log_error(_(title), _(message))
+		return
+
 	asset = frappe.new_doc("Asset")
 	asset.item_code = row.item_code
 	asset.asset_name = row.item_name or item.item_name or row.item_code
 	asset.company = doc.company
-	asset.location = _resolve_location(row)
+	asset.location = location
 	asset.purchase_date = doc.posting_date
 	asset.asset_quantity = cint(row.qty) or 1
 	asset.gross_purchase_amount = flt(row.base_amount)
@@ -230,3 +251,57 @@ def _resolve_location(row):
 			return mapped
 
 	return frappe.db.get_single_value("SF Trading Settings", "default_asset_location")
+
+
+@frappe.whitelist()
+def backfill_tracking_assets(item_code: str | None = None) -> dict:
+	"""Create tracking Assets for already-submitted purchases, not only new ones from here on.
+
+	`create_tracking_asset` above only ever runs on_submit, so an Item ticked
+	`custom_track_as_asset` today gets nothing for the Purchase Receipts/Invoices that already
+	posted it before today -- the same _create_for_row / _already_tracked idempotency this
+	module already relies on for the receipt<->invoice pairing makes this safe to run
+	repeatedly (already-tracked rows are skipped, never duplicated).
+
+	item_code: limit the sweep to one Item; omitted, sweeps every Item currently flagged
+	custom_track_as_asset (not is_fixed_asset, not is_stock_item -- same eligibility
+	_should_track already enforces per row).
+	"""
+	frappe.only_for("System Manager")
+
+	filters = {"is_fixed_asset": 0, "is_stock_item": 0, TRACK_FIELD: 1}
+	if item_code:
+		filters["item_code" if frappe.get_meta("Item").has_field("item_code") else "name"] = item_code
+	items = frappe.get_all("Item", filters=filters, pluck="name")
+
+	created, skipped, failed = 0, 0, 0
+	for code in items:
+		for doctype, item_table in (
+			("Purchase Receipt", "Purchase Receipt Item"),
+			("Purchase Invoice", "Purchase Invoice Item"),
+		):
+			rows = frappe.get_all(
+				item_table,
+				filters={"item_code": code, "docstatus": 1},
+				fields=["name", "parent"],
+			)
+			for row in rows:
+				doc = frappe.get_cached_doc(doctype, row.parent)
+				doc_row = next((r for r in doc.items if r.name == row.name), None)
+				if not doc_row:
+					continue
+				before = frappe.db.exists("Asset", {SOURCE_ROW_FIELD: doc_row.name})
+				try:
+					_create_for_row(doc, doc_row)
+				except Exception:
+					failed += 1
+					title = "Asset tracking backfill failed: " + doctype + " " + doc.name + " row " + str(doc_row.idx)
+					frappe.log_error(_(title), frappe.get_traceback())
+					continue
+				after = frappe.db.exists("Asset", {SOURCE_ROW_FIELD: doc_row.name})
+				if after and not before:
+					created += 1
+				else:
+					skipped += 1
+
+	return {"created": created, "skipped": skipped, "failed": failed}

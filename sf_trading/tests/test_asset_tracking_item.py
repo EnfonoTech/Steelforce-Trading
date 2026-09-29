@@ -14,6 +14,7 @@ from sf_trading.asset_tracking_item import (
 	SOURCE_PI_FIELD,
 	SOURCE_ROW_FIELD,
 	TRACK_FIELD,
+	backfill_tracking_assets,
 	create_tracking_asset,
 )
 from sf_trading.tests.test_open_items import SUPPLIER, TestOpenItems
@@ -131,3 +132,46 @@ class TestAssetTrackingItem(FrappeTestCase):
 			1,
 			"the per-row idempotency guard must stop a second Asset for the same purchase row",
 		)
+
+	def test_no_location_skips_quietly_instead_of_raising(self):
+		"""No row location, no Warehouse mapping, no Settings default: skip, don't blow up the
+		submit that's already in flight (Asset's own mandatory-field check would otherwise throw)."""
+		frappe.db.set_single_value("SF Trading Settings", "default_asset_location", None)
+		pi = self.make_invoice(self.tracked_item, asset_location=None)  # must not raise
+		self.assertFalse(
+			self.tracking_assets(pi),
+			"no Location resolvable anywhere -- logged for staff to finish by hand, not created",
+		)
+
+	def test_backfill_creates_for_an_already_submitted_purchase(self):
+		"""Item ticked custom_track_as_asset AFTER an old purchase already posted: backfill must
+		still create the Asset for that historical row, not only ones submitted from here on."""
+		from erpnext.stock.doctype.item.test_item import make_item
+
+		late_item = make_item(
+			"SF Test Late Tracked Item",
+			properties={
+				"is_stock_item": 0,
+				"is_fixed_asset": 0,
+				"item_group": "Products",
+				"stock_uom": "Nos",
+				TRACK_FIELD: 0,  # NOT tracked yet at the time of purchase
+			},
+		).name
+
+		pi = self.make_invoice(late_item, asset_location=self.location)
+		self.assertFalse(self.tracking_assets(pi), "not tracked yet -- nothing created on submit")
+
+		frappe.db.set_value("Item", late_item, TRACK_FIELD, 1)  # ticked retroactively
+
+		result = backfill_tracking_assets(item_code=late_item)
+		self.assertEqual(result["created"], 1)
+		self.assertEqual(
+			len(self.tracking_assets(pi)),
+			1,
+			"backfill must create the Asset for the historical row now that the Item is tracked",
+		)
+
+		# idempotent: running it again must not duplicate
+		backfill_tracking_assets(item_code=late_item)
+		self.assertEqual(len(self.tracking_assets(pi)), 1)
