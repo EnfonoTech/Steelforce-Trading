@@ -22,7 +22,7 @@
   "document_expiry_before_days",
   "document_expiry_after_days",
   "asset_tracking_section",
-  "default_asset_location"
+  "asset_tracking_defaults"
  ],
  "fields": [
   {
@@ -145,11 +145,11 @@
    "label": "Asset Tracking"
   },
   {
-   "description": "Location is mandatory on core Asset and nothing maps a Warehouse to one, so a tracking Asset (sf_trading.asset_tracking_item, for an Item with Track as Asset ticked) uses this Location when the purchase row's own warehouse resolves none. Leave empty and an unresolved row is simply left uncreated — logged, not guessed — for staff to raise and place by hand.",
-   "fieldname": "default_asset_location",
-   "fieldtype": "Link",
-   "label": "Default Tracking Asset Location",
-   "options": "Location"
+   "description": "One row per Company, the same shape as the Item master's own Company-wise account defaults. Location is mandatory on core Asset and nothing maps a Warehouse to one, so a tracking Asset (sf_trading.asset_tracking_item, for an Item with Track as Asset ticked) uses that Company's row here when the purchase row's own Asset Location resolves none. A Company with no row here, or a row with a field left blank, simply leaves that value unresolved for that Company — logged, not guessed, for staff to raise and finish by hand.",
+   "fieldname": "asset_tracking_defaults",
+   "fieldtype": "Table",
+   "label": "Asset Tracking Defaults (per Company)",
+   "options": "SF Trading Asset Tracking Default"
   }
  ],
  "index_web_pages_for_search": 1,

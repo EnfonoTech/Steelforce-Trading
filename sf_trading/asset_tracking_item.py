@@ -91,12 +91,22 @@ so `ignore_validate` does not excuse a blank one. `_resolve_location` tries:
   2. A Warehouse-side mapping, for a row nobody filled in by hand. Nothing in this app (or core
      Warehouse) defines one today, so this lookup is a no-op everywhere -- written as a real
      lookup rather than removed, so a future mapping is picked up without touching this file.
-  3. **SF Trading Settings -> Default Tracking Asset Location** -- a real Location an admin
-     points this at once, org-wide, not a value this module guesses.
+  3. **SF Trading Settings -> Asset Tracking Defaults** -- one row per Company (the same shape as
+     the Item master's own Company-wise account defaults), a real Location an admin points this
+     at, not a value this module guesses.
 
 Only if all three are empty does the row's insert fail (caught by the try/except below, logged,
 not raised) into the error log for staff to finish by hand -- create/assign a Location, then raise
 the Asset themselves.
+
+**Asset Category, a separate and much lower-stakes lookup.** Not mandatory on core Asset --
+nothing refuses to create the record without one. It exists purely so core's own Asset
+value-history widget (asset.js, `get_manual_depreciation_entries`) can find a Fixed Asset Account
+to draw its chart against; without one, that unrelated client-side call throws on an otherwise-
+successful save/submit (confirmed live, 2026-09-29: "Please set Fixed Asset Account in Asset
+Category None"). `_resolve_asset_category` tries the Item's own `asset_category` first, then the
+same per-Company Asset Tracking Defaults row Location uses -- finding neither simply leaves the
+Asset without a category, never blocks creation.
 """
 
 import frappe
@@ -143,7 +153,7 @@ def _create_for_row(doc, row):
 	if _already_tracked(doc, row):
 		return
 
-	location = _resolve_location(row)
+	location = _resolve_location(row, doc.company)
 	if not location:
 		# Checked here, before insert, rather than left to Asset's own mandatory-field
 		# validation: that validation calls msgprint before raising, and msgprint's message
@@ -169,6 +179,7 @@ def _create_for_row(doc, row):
 	asset.asset_name = row.item_name or item.item_name or row.item_code
 	asset.company = doc.company
 	asset.location = location
+	asset.asset_category = _resolve_asset_category(row.item_code, doc.company)
 	asset.purchase_date = doc.posting_date
 	asset.asset_quantity = cint(row.qty) or 1
 	asset.gross_purchase_amount = flt(row.base_amount)
@@ -224,7 +235,7 @@ def _already_tracked(doc, row) -> bool:
 	return bool(frappe.db.exists("Asset", {SOURCE_ROW_FIELD: ["in", list(row_names)]}))
 
 
-def _resolve_location(row):
+def _resolve_location(row, company):
 	"""The row's own Asset Location, a Warehouse mapping, the configured default, or blank.
 
 	Three steps, in order -- see module docstring for why each exists:
@@ -235,7 +246,8 @@ def _resolve_location(row):
 	  2. A Warehouse-side mapping. Nothing in this app (or core Warehouse) defines one today, so
 	     this lookup currently always misses -- kept as a real lookup, not removed, so a future
 	     mapping is picked up without touching this file.
-	  3. SF Trading Settings' own default (an admin-chosen, real Location), org-wide.
+	  3. SF Trading Settings > Asset Tracking Defaults -- one row per Company, an admin-chosen,
+	     real Location.
 
 	Only if all three are empty does this return None and leave the row for staff to finish by
 	hand -- see module docstring.
@@ -250,7 +262,36 @@ def _resolve_location(row):
 		if mapped:
 			return mapped
 
-	return frappe.db.get_single_value("SF Trading Settings", "default_asset_location")
+	defaults = _company_defaults(company)
+	return defaults.get("default_asset_location") if defaults else None
+
+
+def _resolve_asset_category(item_code, company):
+	"""The Item's own Asset Category, or the Company's configured default, or blank.
+
+	Unlike Location, this is never mandatory -- see module docstring. Only exists so core's own
+	Asset value-history widget can find a Fixed Asset Account to draw its chart against; finding
+	nothing here just leaves the Asset without a category, exactly as before this function
+	existed.
+	"""
+	own = frappe.db.get_value("Item", item_code, "asset_category")
+	if own:
+		return own
+
+	defaults = _company_defaults(company)
+	return defaults.get("default_asset_category") if defaults else None
+
+
+def _company_defaults(company):
+	"""The Asset Tracking Defaults row (SF Trading Settings, one row per Company) matching this
+	purchase's Company, or None if that Company has no row -- see module docstring."""
+	if not company:
+		return None
+	settings = frappe.get_cached_doc("SF Trading Settings")
+	for row in settings.get("asset_tracking_defaults") or []:
+		if row.company == company:
+			return row
+	return None
 
 
 @frappe.whitelist()

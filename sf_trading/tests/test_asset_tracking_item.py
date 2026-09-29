@@ -134,13 +134,47 @@ class TestAssetTrackingItem(FrappeTestCase):
 		)
 
 	def test_no_location_skips_quietly_instead_of_raising(self):
-		"""No row location, no Warehouse mapping, no Settings default: skip, don't blow up the
-		submit that's already in flight (Asset's own mandatory-field check would otherwise throw)."""
-		frappe.db.set_single_value("SF Trading Settings", "default_asset_location", None)
+		"""No row location, no Warehouse mapping, no Settings default for this Company: skip,
+		don't blow up the submit that's already in flight (Asset's own mandatory-field check
+		would otherwise throw)."""
+		settings = frappe.get_single("SF Trading Settings")
+		settings.set("asset_tracking_defaults", [])
+		settings.save()
 		pi = self.make_invoice(self.tracked_item, asset_location=None)  # must not raise
 		self.assertFalse(
 			self.tracking_assets(pi),
 			"no Location resolvable anywhere -- logged for staff to finish by hand, not created",
+		)
+
+	def test_company_default_location_is_used_when_row_is_blank(self):
+		"""Falls back to this purchase's own Company's row in Asset Tracking Defaults."""
+		settings = frappe.get_single("SF Trading Settings")
+		settings.set("asset_tracking_defaults", [])
+		settings.append(
+			"asset_tracking_defaults", {"company": self.company, "default_asset_location": self.location}
+		)
+		settings.save()
+
+		pi = self.make_invoice(self.tracked_item, asset_location=None)
+		assets = self.tracking_assets(pi)
+		self.assertEqual(len(assets), 1)
+		self.assertEqual(assets[0].location, self.location)
+
+	def test_a_different_companys_default_is_not_used(self):
+		"""A row for some OTHER Company must not leak into this purchase's Location."""
+		settings = frappe.get_single("SF Trading Settings")
+		settings.set("asset_tracking_defaults", [])
+		settings.append(
+			"asset_tracking_defaults",
+			{"company": "SF Test Asset Tracking Other Co", "default_asset_location": self.location},
+		)
+		settings.flags.ignore_links = True  # the other Company need not exist for this check
+		settings.save()
+
+		pi = self.make_invoice(self.tracked_item, asset_location=None)
+		self.assertFalse(
+			self.tracking_assets(pi),
+			"a default configured for a different Company must not be picked up here",
 		)
 
 	def test_the_draft_can_be_saved_and_submitted_normally_afterward(self):
