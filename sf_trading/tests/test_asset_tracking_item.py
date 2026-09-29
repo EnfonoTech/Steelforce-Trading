@@ -143,6 +143,42 @@ class TestAssetTrackingItem(FrappeTestCase):
 			"no Location resolvable anywhere -- logged for staff to finish by hand, not created",
 		)
 
+	def test_the_draft_can_be_saved_and_submitted_normally_afterward(self):
+		"""Confirmed live on UAT (2026-09-29): opening the created draft and saving it as staff
+		normally would (fill custodian, submit) hit core's own Asset.validate_item(), which
+		refuses any Asset whose Item isn't a Fixed Asset Item -- on every save, not only the
+		insert `_create_for_row` already bypasses via ignore_validate. Without the
+		override_doctype_class fix (sf_trading.overrides.asset_class.CustomAsset), the draft is
+		permanently stuck: this is the regression guard for that fix."""
+		pi = self.make_invoice(self.tracked_item, asset_location=self.location)
+		asset = frappe.get_doc("Asset", self.tracking_assets(pi)[0].name)
+
+		asset.custodian = "Administrator"
+		asset.save()  # must not raise "Item ... must be a Fixed Asset Item"
+		asset.reload()
+		self.assertEqual(asset.custodian, "Administrator")
+
+		asset.submit()  # must behave like an ordinary existing Asset from here on
+		self.assertEqual(asset.docstatus, 1)
+
+	def test_an_ordinary_non_fixed_asset_item_is_still_refused(self):
+		"""The override above must not blanket-disable the check for everyone -- only for an
+		Asset this app actually stamped with SOURCE_ROW_FIELD."""
+		asset = frappe.get_doc(
+			{
+				"doctype": "Asset",
+				"asset_name": "SF Test Not Our Asset",
+				"item_code": self.plain_item,
+				"company": self.company,
+				"location": self.location,
+				"is_existing_asset": 1,
+				"calculate_depreciation": 0,
+				"gross_purchase_amount": 100,
+				"purchase_amount": 100,
+			}
+		)
+		self.assertRaises(frappe.ValidationError, asset.insert)
+
 	def test_backfill_creates_for_an_already_submitted_purchase(self):
 		"""Item ticked custom_track_as_asset AFTER an old purchase already posted: backfill must
 		still create the Asset for that historical row, not only ones submitted from here on."""

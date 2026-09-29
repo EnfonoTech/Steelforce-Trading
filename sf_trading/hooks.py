@@ -290,6 +290,10 @@ override_doctype_class = {
 	"Sales Order": "sf_trading.overrides.sales_order_class.CustomSalesOrder",
 	"Delivery Note": "sf_trading.overrides.delivery_note_class.CustomDeliveryNote",
 	"Purchase Invoice": "sf_trading.overrides.purchase_invoice_class.CustomPurchaseInvoice",
+	# lets a custom_track_as_asset shadow Asset (asset_tracking_item.py) be saved/submitted
+	# normally after its initial insert -- core's own Asset.validate_item() refuses any Asset
+	# whose Item isn't a Fixed Asset Item on every save, not only the first
+	"Asset": "sf_trading.overrides.asset_class.CustomAsset",
 }
 
 # Document Events
