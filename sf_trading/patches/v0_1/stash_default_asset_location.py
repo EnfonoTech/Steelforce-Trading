@@ -15,8 +15,12 @@ CACHE_KEY = "sf_trading_migrate_default_asset_location"
 
 
 def execute():
-	value = frappe.db.get_value(
-		"Singles", {"doctype": "SF Trading Settings", "field": "default_asset_location"}, "value"
+	# raw SQL, not frappe.db.get_value: Singles is a low-level key-value table with no `modified`
+	# column, and get_value's implicit default ordering assumes one on every table it queries
+	rows = frappe.db.sql(
+		"SELECT value FROM `tabSingles` WHERE doctype=%s AND field=%s",
+		("SF Trading Settings", "default_asset_location"),
 	)
+	value = rows[0][0] if rows else None
 	if value:
 		frappe.cache.set_value(CACHE_KEY, value, expires_in_sec=3600)
