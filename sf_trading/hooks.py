@@ -632,6 +632,9 @@ override_whitelisted_methods = {
 	# frappe 15.114 hands to sqlparse and sqlparse refuses past 10,000 tokens. Read it in
 	# batches. See sf_trading/api/query_report_columns.py.
 	"frappe.desk.query_report.get_data_for_custom_field": "sf_trading.api.query_report_columns.get_data_for_custom_field",
+	# ships sf_trading's extensions of other apps' reports with the report's own script, e.g. the
+	# clickable counts on Customer Acquisition and Loyalty. See sf_trading/api/report_script.py.
+	"frappe.desk.query_report.get_script": "sf_trading.api.report_script.get_script",
 }
 #
 # each overriding function accepts a `data` argument;
