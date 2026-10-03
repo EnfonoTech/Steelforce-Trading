@@ -1,6 +1,11 @@
 import re
 
 import frappe
+from frappe.query_builder import Criterion
+
+# a multi-word search is resolved to item codes first, then handed to ERPNext as a name IN (...)
+# filter; capped so a broad search ("ms 1") cannot build a list sqlparse refuses
+WORD_SEARCH_LIMIT = 1000
 
 
 def _natural_key(s):
@@ -17,6 +22,78 @@ def _natural_key(s):
 		except ValueError:
 			result.append(part.lower())
 	return result
+
+
+def _like(word):
+	return "%" + word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def items_matching_every_word(txt):
+	"""Item codes in which EVERY word of txt appears, in any order and in any of the fields
+	ERPNext's own item search reads (code, the Item search fields, barcode).
+
+	ERPNext matches the whole text as one string -- "ms 1.2" must appear exactly so in one field,
+	which "MS TUBE 20X20X6 1.2MM" does not. Users type the words they remember, in whatever order:
+	"ms 1.2", "1.2 ms tube", "tube 20x20 ms". None for a single-word search, which ERPNext already
+	handles.
+
+	Items carrying every word in their own name or code come first and, when there are any, alone:
+	otherwise "ms 1.2" also brings back "CHEQUERED PLATE 1.22X2.44", whose "ms" is only somewhere
+	in a description or group ("items"). The other fields are the fallback when no name fits."""
+	words = (txt or "").split()
+	if len(words) < 2:
+		return None
+
+	item = frappe.qb.DocType("Item")
+	barcode = frappe.qb.DocType("Item Barcode")
+	meta = frappe.get_meta("Item")
+	fields = ["name", "item_name"] + [
+		f for f in meta.get_search_fields() if f not in ("name", "item_name") and meta.has_field(f)
+	]
+
+	def every_word(word_condition):
+		return Criterion.all([word_condition(_like(word)) for word in words])
+
+	def run(condition):
+		return (
+			frappe.qb.from_(item)
+			.select(item.name)
+			.where(condition)
+			.orderby(item.item_name)
+			.limit(WORD_SEARCH_LIMIT)
+			.run(pluck=True)
+		)
+
+	in_name = run(every_word(lambda like: item.item_name.like(like) | item.name.like(like)))
+	if in_name:
+		return in_name
+
+	return run(
+		every_word(
+			lambda like: Criterion.any(
+				[item[f].like(like) for f in fields]
+				+ [item.name.isin(frappe.qb.from_(barcode).select(barcode.parent).where(barcode.barcode.like(like)))]
+			)
+		)
+	)
+
+
+def _apply_word_search(txt, filters):
+	"""For a multi-word txt: narrow filters["name"] to the items matching every word, and return
+	the txt ERPNext should then search with (blank). Returns (txt, filters, no_match)."""
+	codes = items_matching_every_word(txt)
+	if codes is None:
+		return txt, filters, False
+
+	allowed = filters.get("name")
+	if allowed and isinstance(allowed, (list, tuple)) and allowed[0] == "in":
+		allowed_set = set(allowed[1])
+		codes = [c for c in codes if c in allowed_set]
+	if not codes:
+		return txt, filters, True
+
+	filters["name"] = ["in", codes]
+	return "", filters, False
 
 
 @frappe.whitelist()
@@ -69,6 +146,11 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 		if not allowed_codes:
 			return []
 		filters["name"] = ["in", allowed_codes]
+
+	# "ms 1.2", "1.2 ms tube": every word, any order -- see items_matching_every_word
+	txt, filters, no_match = _apply_word_search(txt, filters)
+	if no_match:
+		return []
 
 	# Delegate to ERPNext's standard item search. We pass as_dict=False so we
 	# get tuples in the exact format Frappe's autosuggest expects.
@@ -216,6 +298,12 @@ def item_query(doctype, txt, searchfield, start, page_len, filters, as_dict=Fals
 	by item_name so all item Link fields show items in alphabetical name order.
 	"""
 	from erpnext.controllers.queries import item_query as _erpnext_item_query
+
+	if not isinstance(filters, dict):
+		filters = {}
+	txt, filters, no_match = _apply_word_search(txt, filters)
+	if no_match:
+		return []
 
 	rows = _erpnext_item_query(doctype, txt, searchfield, start, page_len, filters, as_dict=as_dict) or []
 	if as_dict:
