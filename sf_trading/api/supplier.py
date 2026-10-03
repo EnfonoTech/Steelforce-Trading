@@ -44,11 +44,16 @@ def create_supplier_with_address(
     district=None,
     allow_duplicate_vat=0,
     duplicate_vat_reason=None,
+    attachment=None,
 ):
     if not supplier_name:
         frappe.throw(_("Supplier Name is required"))
     if not mobile_no:
         frappe.throw(_("Mobile No is required"))
+    if not (email_id or "").strip():
+        frappe.throw(_("Email ID is required for every supplier."))
+    if not attachment:
+        frappe.throw(_("A document attachment is required for every supplier."))
 
     allow_duplicate_vat = int(allow_duplicate_vat or 0)
     is_b2b = (buyer_kind or "").startswith("B2B")
@@ -71,7 +76,7 @@ def create_supplier_with_address(
     if is_b2b:
         vat = (tax_id or "").strip()
         if not vat:
-            frappe.throw(_("VAT Registration Number is required for B2B suppliers."))
+            frappe.throw(_("Tax ID is required for B2B (Company) suppliers."))
         if is_saudi:
             if not re.match(r"^3\d{13}3$", vat):
                 frappe.throw(
@@ -121,7 +126,20 @@ def create_supplier_with_address(
         "email_id": email_id or None,
         "tax_id": tax_id or None,
     })
+    # the manager override above already checked role + reason; let the master's own unique
+    # check (supplier_validation.validate_unique_tax_id) through for this one insert
+    supplier.flags.allow_duplicate_tax_id = bool(allow_duplicate_vat)
+    supplier.flags.attachment_from_dialog = True
     supplier.insert(ignore_permissions=True)
+
+    # link the dialog's upload right after the insert, before the supplier.save() below (primary
+    # address), which supplier_validation.validate_attachment would otherwise refuse
+    file_rec = frappe.db.get_value("File", {"file_url": attachment, "attached_to_name": ["is", "not set"]}, "name")
+    if file_rec:
+        frappe.db.set_value("File", file_rec, {
+            "attached_to_doctype": "Supplier",
+            "attached_to_name": supplier.name,
+        })
 
     address_name = None
     if any([address_line1, city]):
