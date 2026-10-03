@@ -67,7 +67,7 @@ function sf_open_create_supplier_dialog(frm) {
                 options: "B2C (Individual)\nB2B (Company)",
                 default: "B2B (Company)",
                 reqd: 1,
-                description: __("B2C: Name + Mobile only. B2B: VAT and address details."),
+                description: __("Every supplier: Name, Mobile, Email and a document. B2B: also Tax ID, CR and address details."),
             }
             : {
                 fieldname: "buyer_kind",
@@ -99,29 +99,29 @@ function sf_open_create_supplier_dialog(frm) {
                 {
                     fieldname: "email_id",
                     fieldtype: "Data",
+                    options: "Email",
                     label: __("Email ID"),
+                    // no buying document can be raised for a supplier without one
+                    reqd: 1,
                 },
-                // ── B2B Details ──────────────────────────────────────────────
-                {
-                    fieldtype: "Section Break",
-                    label: __("B2B Details"),
-                    depends_on: b2b,
-                },
+                // mandatory for a Company (B2B) supplier, foreign ones their own country's number,
+                // optional for an Individual (sf_trading/supplier_validation.py) -- so it sits
+                // outside the B2B section
                 {
                     fieldname: "tax_id",
                     fieldtype: "Data",
-                    label: __("VAT Registration Number"),
-                    depends_on: b2b,
+                    label: __("Tax ID / VAT Registration Number"),
                     mandatory_depends_on: b2b,
                     description: is_saudi
                         ? __("Exactly 15 digits, starting and ending with 3.")
-                        : __("Required for B2B."),
+                        : __("Foreign suppliers: their own country's tax number."),
                 },
+                // any file, type not checked -- every supplier needs one (supplier_validation.py)
                 {
-                    fieldname: "commercial_registration_number",
-                    fieldtype: "Data",
-                    label: __("Commercial Registration Number"),
-                    depends_on: b2b,
+                    fieldname: "attachment",
+                    fieldtype: "Attach",
+                    label: __("Document Attachment"),
+                    reqd: 1,
                 },
                 {
                     fieldname: "allow_duplicate_vat",
@@ -129,7 +129,7 @@ function sf_open_create_supplier_dialog(frm) {
                     label: __("Allow Duplicate VAT (Manager Override)"),
                     default: 0,
                     hidden: can_override ? 0 : 1,
-                    depends_on: "eval:doc.buyer_kind === 'B2B (Company)' && doc.tax_id",
+                    depends_on: "eval:doc.tax_id",
                 },
                 {
                     fieldname: "duplicate_vat_reason",
@@ -138,6 +138,18 @@ function sf_open_create_supplier_dialog(frm) {
                     hidden: can_override ? 0 : 1,
                     depends_on: "eval:doc.allow_duplicate_vat",
                     mandatory_depends_on: "eval:doc.allow_duplicate_vat",
+                },
+                // ── B2B Details ──────────────────────────────────────────────
+                {
+                    fieldtype: "Section Break",
+                    label: __("B2B Details"),
+                    depends_on: b2b,
+                },
+                {
+                    fieldname: "commercial_registration_number",
+                    fieldtype: "Data",
+                    label: __("Commercial Registration Number"),
+                    depends_on: b2b,
                 },
                 // ── Address Details ──────────────────────────────────────────
                 {
@@ -228,7 +240,7 @@ function sf_open_create_supplier_dialog(frm) {
                 }
 
                 if (is_b2b && !vat) {
-                    frappe.msgprint(__("VAT Registration Number is required for B2B suppliers."));
+                    frappe.msgprint(__("Tax ID is required for B2B (Company) suppliers."));
                     return;
                 }
                 if (is_b2b && is_saudi) {
@@ -243,7 +255,7 @@ function sf_open_create_supplier_dialog(frm) {
                 }
 
                 // VAT duplicate pre-check
-                if (is_b2b && vat && !allow_dup) {
+                if (vat && !allow_dup) {
                     frappe.db
                         .get_value("Supplier", { tax_id: vat }, "name")
                         .then(function (res) {
@@ -273,7 +285,7 @@ function sf_open_create_supplier_dialog(frm) {
                             buyer_kind:                   values.buyer_kind,
                             company:                      company,
                             country:                      (is_b2b ? values.country : null) || company_country,
-                            tax_id:                       is_b2b ? (vat || null) : null,
+                            tax_id:                       vat || null,
                             commercial_registration_number: is_b2b ? (values.commercial_registration_number || null) : null,
                             address_type:                 is_b2b ? (values.address_type || null) : null,
                             address_line1:                is_b2b ? (values.address_line1 || null) : null,
@@ -284,6 +296,7 @@ function sf_open_create_supplier_dialog(frm) {
                             pincode:                      is_b2b ? (values.pincode || null) : null,
                             allow_duplicate_vat:          allow_dup,
                             duplicate_vat_reason:         allow_dup ? dup_reason : null,
+                            attachment:                   values.attachment,
                         },
                         callback: function (r) {
                             if (r.message) {
