@@ -290,10 +290,6 @@ override_doctype_class = {
 	"Sales Order": "sf_trading.overrides.sales_order_class.CustomSalesOrder",
 	"Delivery Note": "sf_trading.overrides.delivery_note_class.CustomDeliveryNote",
 	"Purchase Invoice": "sf_trading.overrides.purchase_invoice_class.CustomPurchaseInvoice",
-	# lets a custom_track_as_asset shadow Asset (asset_tracking_item.py) be saved/submitted
-	# normally after its initial insert -- core's own Asset.validate_item() refuses any Asset
-	# whose Item isn't a Fixed Asset Item on every save, not only the first
-	"Asset": "sf_trading.overrides.asset_class.CustomAsset",
 }
 
 # Document Events
@@ -320,11 +316,6 @@ _BPL_GUARD = "sf_trading.branch_price_list.validate_price_list_allowed"
 # window/approval gate: this is only about WHY a return is being made. See
 # sf_trading/sales_return_reason.py.
 _RETURN_REASON_HOOK = "sf_trading.sales_return_reason.validate_return_reason"
-
-# A custom_track_as_asset item stays on its normal expense account (no capitalization) but
-# still gets a draft Asset for Asset Movement tracking (location/custodian/history). Fires on
-# whichever of PR/PI actually books the purchase; see sf_trading/asset_tracking_item.py.
-_ASSET_TRACKING_HOOK = "sf_trading.asset_tracking_item.create_tracking_asset"
 
 # Picks the purchase tax template matching the document currency (default
 # template for company-currency docs, "Import VAT 0%" otherwise).
@@ -548,10 +539,7 @@ doc_events = {
 			_BPL_GUARD,
 		],
 		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
-		"on_submit": [
-			"sf_trading.api.purchase_return.auto_create_pr_return",
-			_ASSET_TRACKING_HOOK,
-		],
+		"on_submit": "sf_trading.api.purchase_return.auto_create_pr_return",
 	},
 	"Purchase Order": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
@@ -560,7 +548,6 @@ doc_events = {
 	"Purchase Receipt": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
 		"validate": [_BRANCH_HOOK, _LH_HOOK, _BPL_GUARD],
-		"on_submit": _ASSET_TRACKING_HOOK,
 	},
 	"Supplier Quotation": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
@@ -957,12 +944,6 @@ fixtures = [
 			"Stock Entry-to_warehouse-ignore_user_permissions",
 			"Stock Entry Detail-s_warehouse-ignore_user_permissions",
 			"Stock Entry Detail-t_warehouse-ignore_user_permissions",
-			# core hides its own Asset Location field on these two rows behind
-			# "depends_on": "is_fixed_asset" -- widened so a custom_track_as_asset row can
-			# offer it too, at the point of purchase, without touching the core doctype.
-			# See sf_trading/asset_tracking_item.py._resolve_location.
-			"Purchase Receipt Item-asset_location-depends_on",
-			"Purchase Invoice Item-asset_location-depends_on",
 		)]]
 	},
 	{
@@ -1001,16 +982,6 @@ fixtures = [
 			"Sales Invoice-custom_return_reason_template",
 			# company-wise Salesperson
 			"Sales Person-custom_companies",
-			# sf_trading.asset_tracking_item: shadow Asset (Movement tracking only, no
-			# capitalization) for an item that is bought expensed, not fixed-asset
-			"Item-custom_track_as_asset",
-			"Asset-custom_source_purchase_invoice",
-			"Asset-custom_source_row",
-			# row-level mirror of the Item flag, fetched the same way core mirrors
-			# Item.is_fixed_asset onto these same two rows -- lets the Property Setter
-			# above reveal core's own Asset Location field for a tracked row too
-			"Purchase Receipt Item-custom_track_as_asset",
-			"Purchase Invoice Item-custom_track_as_asset",
 		)]],
 	},
 	{
