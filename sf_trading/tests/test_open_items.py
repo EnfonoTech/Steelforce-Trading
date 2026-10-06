@@ -213,6 +213,7 @@ class TestOpenItems(FrappeTestCase):
 		si.update_stock = 0
 		if qty is not None:
 			si.items[0].qty = qty
+		self.fill_site_mandatories(si)
 		si.insert()
 		si.submit()
 		return si
@@ -1527,11 +1528,12 @@ class TestPurchaseOrderBridge(TestOpenItems):
 		"""Receipt first, invoice made FROM it: the bridge must contribute nothing."""
 		po = self.make_po(qty=10)
 		pr = self.pr_from_po(po)
-		self.make_pi_from_pr(pr)
+		pi = self.make_pi_from_pr(pr)
 
+		# scoped to THESE rows: the maps are site-wide by design
 		bridged_received, bridged_billed = po_bridge_maps(getdate(nowdate()))
-		self.assertEqual(bridged_billed, {})
-		self.assertEqual(bridged_received, {})
+		self.assertNotIn(pr.items[0].name, bridged_billed)
+		self.assertNotIn(pi.items[0].name, bridged_received)
 
 	def test_an_invoice_that_took_the_stock_itself_is_not_bridged(self):
 		"""Core leaves `update_stock` invoices out of the order's billing pool, and so does this."""
@@ -1706,33 +1708,35 @@ class TestSalesOrderBridge(TestOpenItems):
 		"""Delivery first, invoice made FROM it: the bridge must contribute nothing."""
 		so = self.make_so(qty=10)
 		dn = self.dn_from_so(so)
-		self.make_si_from_dn(dn)
+		si = self.make_si_from_dn(dn)
 
+		# scoped to THESE rows: the maps are site-wide by design, so asserting they are empty
+		# would test the site's other order-level pairs, not this one
 		bridged_delivered, bridged_billed = so_bridge_maps(getdate(nowdate()))
-		self.assertEqual(bridged_billed, {})
-		self.assertEqual(bridged_delivered, {})
+		self.assertNotIn(dn.items[0].name, bridged_billed)
+		self.assertNotIn(si.items[0].name, bridged_delivered)
 		self.assertEqual(self.delivery_rows(dn), [])
 
 	def test_a_delivery_made_from_the_invoice_is_not_bridged(self):
 		"""Invoice first, delivery made FROM it: closed by the real link, not by the order row."""
 		so = self.make_so(qty=10)
 		si = self.si_from_so(so)
-		self.make_dn_from_si(si)
+		dn = self.make_dn_from_si(si)
 
 		bridged_delivered, bridged_billed = so_bridge_maps(getdate(nowdate()))
-		self.assertEqual(bridged_billed, {})
-		self.assertEqual(bridged_delivered, {})
+		self.assertNotIn(dn.items[0].name, bridged_billed)
+		self.assertNotIn(si.items[0].name, bridged_delivered)
 		self.assertEqual(self.invoice_rows(si), [])
 
 	def test_an_invoice_that_took_the_stock_itself_is_not_bridged(self):
 		"""An update_stock invoice delivered its own goods; it bills no delivery note."""
-		so = self.make_so(qty=10)
-		dn = self.dn_from_so(so)
-		self.si_from_so(so, update_stock=1)
+		so = self.make_so(qty=20)
+		dn = self.dn_from_so(so, qty=10)
+		self.si_from_so(so, qty=10, update_stock=1)
 
-		self.assertEqual(
-			len(self.delivery_rows(dn)), 1, "that invoice shipped its own goods; it bills no note"
-		)
+		rows = self.delivery_rows(dn)
+		self.assertEqual(len(rows), 1, "that invoice shipped its own goods; it bills no note")
+		self.assertAlmostEqual(rows[0].pending_qty, 10, places=3)
 
 	def test_a_delivery_after_the_as_on_date_does_not_close_the_invoice(self):
 		placed = add_days(nowdate(), -5)
@@ -1746,6 +1750,18 @@ class TestSalesOrderBridge(TestOpenItems):
 		self.assertEqual(self.invoice_rows(si), [], "and today they have")
 
 	def test_an_invoice_after_the_as_on_date_does_not_close_the_delivery(self):
+		from erpnext.stock.doctype.stock_entry.test_stock_entry import make_stock_entry
+
+		# a stock-out dated three days ago needs stock that already existed three days ago; the
+		# class fixture's stock is dated today
+		make_stock_entry(
+			item_code=self.item_code,
+			target=self.warehouse,
+			qty=10,
+			basic_rate=100,
+			company=COMPANY,
+			posting_date=add_days(nowdate(), -10),
+		)
 		placed = add_days(nowdate(), -5)
 		so = self.make_so(qty=10, transaction_date=placed)
 		dn = self.dn_from_so(so, posting_date=add_days(nowdate(), -3))

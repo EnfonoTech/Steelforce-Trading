@@ -385,6 +385,21 @@ def so_bridge_maps(as_on):
 	narrow the page, or the same invoice would close a different delivery for each user -- and a
 	pre-cutover delivery that a post-cutover invoice bills is billed, not open.
 
+	Known limits, all in the direction of showing a row that is not owed rather than hiding one
+	that is, and none worse than before the bridge existed:
+
+	  * A Closed delivery stays in the pool. Core's own order-level spreading
+	    (`update_billed_amount_based_on_so`) also bills a Closed note, so the two agree; the report
+	    simply does not list the Closed note itself.
+	  * A credit note raised FROM a delivery return (`DeliveryNote.make_sales_invoice` on the
+	    return) carries `dn_detail` of the return row and `so_detail`, but never
+	    `sales_invoice_item`, so it credits no invoice row here. The delivery side still reopens
+	    for the goods that came back, and the invoice raised from the order keeps showing that
+	    quantity as owed. A credit note raised from the invoice itself is netted exactly.
+	  * Goods returned off a delivery that was made FROM an invoice do not reopen that invoice:
+	    `make_return_doc` does not copy `si_detail`, so the direct delivered map never shrinks.
+	    That is how `invoiced_items_to_be_delivered` behaved before this bridge.
+
 	Returns ({sales_invoice_item: delivered_qty}, {delivery_note_item: billed_qty}).
 	"""
 	delivery = frappe.qb.DocType("Delivery Note")
