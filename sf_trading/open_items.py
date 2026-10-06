@@ -8,6 +8,12 @@ row closes it. The links that pair rows up are core's own mapper fields:
     Purchase Invoice Item.pr_detail     -> Purchase Receipt Item.name (bill after receipt)
     Purchase Receipt Item.purchase_invoice_item -> Purchase Invoice Item.name (receive after billing)
 
+Documents raised separately from the same ORDER carry no link to each other, only
+to the order row (`so_detail` on both a delivery row and an invoice row,
+`po_detail` / `purchase_order_item` on an invoice row and a receipt row), so those
+pairs are matched at the order row instead -- `so_bridge_maps` for the sales pair,
+`po_bridge_maps` for the purchase pair.
+
 Every report here reconstructs the matched quantity from those links as of a
 date, instead of reading the live denormalised fields (`billed_amt`,
 `delivered_qty`, `per_received`). The live fields only know today's state, so
@@ -342,6 +348,161 @@ def po_bridge_maps(as_on):
 	return bridged_received, bridged_billed
 
 
+def so_bridge_maps(as_on):
+	"""Pair a delivery and an invoice that meet only at the Sales Order row.
+
+	The sales twin of `po_bridge_maps`. A seller may press Create > Sales Invoice on the ORDER and
+	deliver the same order on a separate Delivery Note raised from it. Neither document is made
+	from the other, so neither `dn_detail` (on the invoice row) nor `si_detail` (on the delivery
+	row) is ever filled and nothing in the mapper links them. Without this the delivery sits in
+	Delivered Items Pending Billing forever while its invoice is paid, and the invoice sits in
+	Invoiced Items To Be Delivered forever while the goods are at the customer.
+
+	Core closes the same gap for money on the delivery side -- `update_billed_amount_based_on_so`
+	(erpnext/stock/doctype/delivery_note/delivery_note.py) spreads an amount billed directly
+	against an order row across that row's delivery notes, FIFO -- and the population it spreads is
+	exactly the one matched here: submitted invoice rows naming the order row, with no `dn_detail`,
+	on an invoice that did not deliver the goods itself. But it works in amounts and writes status
+	columns as of today; these reports count quantity as of a date, so the pairing is redone here
+	and answers BOTH reports in one pass. Every unit matched is credited to the invoice row and to
+	the delivery row together, so a unit cannot be counted twice.
+
+	Differences from the purchase bridge, all deliberate:
+
+	  * Returns are netted ROW BY ROW, not off the front of the order row's queue. A return
+	    document's rows name the exact row they reverse -- `dn_detail` on a delivery return,
+	    `sales_invoice_item` on a credit note (erpnext/controllers/sales_and_purchase_return.py,
+	    make_return_doc) -- so there is no need to guess which of several rows on the same order
+	    line was sent back, and a return of a row that never entered the pool cannot eat into a
+	    different row's quantity.
+	  * What a row has left to give is exactly what the report would show for it before any
+	    bridging: quantity less what its real links and its returns already claim, taking the
+	    absolute value of each, the way `build_open_rows` does. So a row can never be pushed below
+	    zero by the bridge, and a unit a real link already claims is never claimed again.
+
+	The pool is built without the reports' own filters (party, item, warehouse, branch, dates,
+	cutover floor, document status). Pairing has to be the same whoever asks and however they
+	narrow the page, or the same invoice would close a different delivery for each user -- and a
+	pre-cutover delivery that a post-cutover invoice bills is billed, not open.
+
+	Returns ({sales_invoice_item: delivered_qty}, {delivery_note_item: billed_qty}).
+	"""
+	delivery = frappe.qb.DocType("Delivery Note")
+	delivery_item = frappe.qb.DocType("Delivery Note Item")
+	invoice = frappe.qb.DocType("Sales Invoice")
+	invoice_item = frappe.qb.DocType("Sales Invoice Item")
+
+	delivery_rows = (
+		frappe.qb.from_(delivery_item)
+		.join(delivery)
+		.on(delivery.name == delivery_item.parent)
+		.select(
+			delivery_item.name,
+			delivery_item.so_detail.as_("so_row"),
+			delivery_item.qty,
+			delivery.posting_date,
+		)
+		.where(
+			(delivery.docstatus == 1)
+			& (delivery.posting_date <= as_on)
+			& (delivery.is_return == 0)
+			& (delivery_item.qty > 0)
+			& delivery_item.so_detail.isnotnull()
+			& (delivery_item.so_detail != "")
+			# a delivery raised FROM an invoice is already paired with it by that link
+			& (delivery_item.si_detail.isnull() | (delivery_item.si_detail == ""))
+			& (
+				delivery_item.against_sales_invoice.isnull()
+				| (delivery_item.against_sales_invoice == "")
+			)
+		)
+	).run(as_dict=True)
+
+	invoice_rows = (
+		frappe.qb.from_(invoice_item)
+		.join(invoice)
+		.on(invoice.name == invoice_item.parent)
+		.select(
+			invoice_item.name,
+			invoice_item.so_detail.as_("so_row"),
+			invoice_item.qty,
+			invoice.posting_date,
+		)
+		.where(
+			(invoice.docstatus == 1)
+			& (invoice.posting_date <= as_on)
+			& (invoice.is_return == 0)
+			& (invoice_item.qty > 0)
+			# an invoice that updates stock delivered the goods itself: there is no note to pair
+			& (invoice.update_stock == 0)
+			& (invoice.is_opening != "Yes")
+			& invoice_item.so_detail.isnotnull()
+			& (invoice_item.so_detail != "")
+			# an invoice raised FROM a delivery is already paired with it by that link
+			& (invoice_item.dn_detail.isnull() | (invoice_item.dn_detail == ""))
+			& (invoice_item.delivery_note.isnull() | (invoice_item.delivery_note == ""))
+		)
+	).run(as_dict=True)
+
+	if not delivery_rows or not invoice_rows:
+		return {}, {}
+
+	# whatever a real link or a return already claims is not the bridge's to allocate
+	billed_direct = matched_qty_map("Sales Invoice Item", "Sales Invoice", "dn_detail", as_on)
+	returned_goods = matched_qty_map(
+		"Delivery Note Item", "Delivery Note", "dn_detail", as_on, is_return=1
+	)
+	delivered_direct = matched_qty_map("Delivery Note Item", "Delivery Note", "si_detail", as_on)
+	credited = matched_qty_map(
+		"Sales Invoice Item", "Sales Invoice", "sales_invoice_item", as_on, is_return=1
+	)
+
+	def free_rows(rows, *claims):
+		by_so: dict = {}
+		for row in rows:
+			free = flt(row.qty, QTY_PRECISION)
+			for claim in claims:
+				free -= abs(flt(claim.get(row.name, 0), QTY_PRECISION))
+			free = flt(free, QTY_PRECISION)
+			if free <= 0:
+				continue
+			by_so.setdefault(row.so_row, []).append(
+				{"name": row.name, "free": free, "posting_date": row.posting_date}
+			)
+		for queue in by_so.values():
+			# FIFO, the way core distributes an order-level amount across its delivery notes
+			queue.sort(key=lambda entry: (entry["posting_date"], entry["name"]))
+		return by_so
+
+	deliveries_by_so = free_rows(delivery_rows, billed_direct, returned_goods)
+	invoices_by_so = free_rows(invoice_rows, delivered_direct, credited)
+
+	bridged_delivered: dict = {}
+	bridged_billed: dict = {}
+
+	for so_row, invoices in invoices_by_so.items():
+		deliveries = deliveries_by_so.get(so_row)
+		if not deliveries:
+			continue
+		position = 0
+		for inv in invoices:
+			needed = inv["free"]
+			while needed > 0 and position < len(deliveries):
+				note = deliveries[position]
+				if note["free"] <= 0:
+					position += 1
+					continue
+				taken = min(needed, note["free"])
+				bridged_delivered[inv["name"]] = flt(bridged_delivered.get(inv["name"], 0)) + taken
+				bridged_billed[note["name"]] = flt(bridged_billed.get(note["name"], 0)) + taken
+				# rounded, so float residue from quantities in thousandths cannot leave a sliver
+				# of "needed" that the next delivery then quietly absorbs
+				needed = flt(needed - taken, QTY_PRECISION)
+				note["free"] = flt(note["free"] - taken, QTY_PRECISION)
+
+	return bridged_delivered, bridged_billed
+
+
 # The field that dates a source document. An order is dated by when it was placed;
 # every other document these reports read has a posting date. Both are reported under
 # `posting_date` so one set of columns, filters and ageing serves them all.
@@ -540,7 +701,12 @@ def invoiced_items_to_be_delivered(filters):
 		],
 	)
 
-	delivered = matched_qty_map("Delivery Note Item", "Delivery Note", "si_detail", as_on)
+	# a delivery raised from the ORDER delivered these goods too, though no link says so
+	bridged_delivered, _bridged_billed = so_bridge_maps(as_on)
+	delivered = merge_qty_maps(
+		matched_qty_map("Delivery Note Item", "Delivery Note", "si_detail", as_on),
+		bridged_delivered,
+	)
 	credited = matched_qty_map(
 		"Sales Invoice Item", "Sales Invoice", "sales_invoice_item", as_on, is_return=1
 	)
@@ -906,7 +1072,12 @@ def delivered_items_pending_billing(filters):
 
 	rows = base_rows("Delivery Note", "customer", filters, extra_conditions=conditions)
 
-	billed = matched_qty_map("Sales Invoice Item", "Sales Invoice", "dn_detail", as_on)
+	# an invoice raised from the ORDER bills this delivery too, though no link says so
+	_bridged_delivered, bridged_billed = so_bridge_maps(as_on)
+	billed = merge_qty_maps(
+		matched_qty_map("Sales Invoice Item", "Sales Invoice", "dn_detail", as_on),
+		bridged_billed,
+	)
 	returned = matched_qty_map("Delivery Note Item", "Delivery Note", "dn_detail", as_on, is_return=1)
 
 	return build_open_rows(rows, [billed, returned], ["billed_qty", "returned_qty"], filters)

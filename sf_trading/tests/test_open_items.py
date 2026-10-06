@@ -18,6 +18,7 @@ from sf_trading.open_items import (
 	invoices_pending_delivery,
 	po_bridge_maps,
 	received_items_pending_billing,
+	so_bridge_maps,
 )
 from sf_trading.tests.test_sdbnb import ABBR, COMPANY, get_test_company
 
@@ -1252,14 +1253,15 @@ class TestOpenItems(FrappeTestCase):
 	# Sales Order -> Sales Invoice, the layer the family never covered
 	# ------------------------------------------------------------------
 
-	def make_so(self, qty=4, rate=120, customer=CUSTOMER):
+	def make_so(self, qty=4, rate=120, customer=CUSTOMER, transaction_date=None):
+		placed = transaction_date or nowdate()
 		so = frappe.get_doc(
 			{
 				"doctype": "Sales Order",
 				"company": COMPANY,
 				"customer": customer,
-				"transaction_date": nowdate(),
-				"delivery_date": add_days(nowdate(), 3),
+				"transaction_date": placed,
+				"delivery_date": add_days(placed, 3),
 				"cost_center": self.cost_center,
 				"items": [
 					{
@@ -1268,7 +1270,7 @@ class TestOpenItems(FrappeTestCase):
 						"rate": rate,
 						"warehouse": self.warehouse,
 						"cost_center": self.cost_center,
-						"delivery_date": add_days(nowdate(), 3),
+						"delivery_date": add_days(placed, 3),
 					}
 				],
 			}
@@ -1577,6 +1579,308 @@ class TestPurchaseOrderBridge(TestOpenItems):
 
 		rows = self.rows_for(received_items_pending_billing(self.filters()), pr.name)
 		self.assertEqual(rows, [], "six billed through the order, four returned: nothing is open")
+
+
+class TestSalesOrderBridge(TestOpenItems):
+	"""An invoice and a delivery that meet only at the Sales Order row.
+
+	Pressing Create > Sales Invoice on the ORDER and delivering the same order on a separate
+	Delivery Note leaves neither `dn_detail` nor `si_detail` filled, so nothing in the mapper links
+	the two. Before the bridge the delivery sat in Delivered Items Pending Billing and the invoice
+	in Invoiced Items To Be Delivered forever, each already settled by the other.
+	"""
+
+	def si_from_so(self, so, qty=None, update_stock=0, posting_date=None):
+		from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+
+		si = make_sales_invoice(so.name)
+		si.update_stock = update_stock
+		if qty is not None:
+			si.items[0].qty = qty
+		if posting_date:
+			si.set_posting_time = 1
+			si.posting_date = posting_date
+		self.fill_site_mandatories(si)
+		si.insert()
+		si.submit()
+		return si
+
+	def dn_from_so(self, so, qty=None, posting_date=None):
+		from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
+
+		dn = make_delivery_note(so.name)
+		if qty is not None:
+			dn.items[0].qty = qty
+		if posting_date:
+			dn.set_posting_time = 1
+			dn.posting_date = posting_date
+		dn.insert()
+		dn.submit()
+		return dn
+
+	def invoice_rows(self, si, **overrides):
+		return self.rows_for(invoiced_items_to_be_delivered(self.filters(**overrides)), si.name)
+
+	def delivery_rows(self, dn, **overrides):
+		return self.rows_for(delivered_items_pending_billing(self.filters(**overrides)), dn.name)
+
+	def test_a_delivery_from_the_order_closes_an_invoice_from_the_order(self):
+		so = self.make_so(qty=10)
+		si = self.si_from_so(so)
+		self.dn_from_so(so)
+
+		self.assertEqual(
+			self.invoice_rows(si), [], "the goods left on a note raised from the same order"
+		)
+
+	def test_the_same_pairing_closes_the_delivery_for_billing(self):
+		so = self.make_so(qty=10)
+		self.si_from_so(so)
+		dn = self.dn_from_so(so)
+
+		self.assertEqual(
+			self.delivery_rows(dn), [], "the invoice was raised from the same order"
+		)
+
+	def test_delivery_first_and_invoice_second_pair_the_same_way(self):
+		so = self.make_so(qty=10)
+		dn = self.dn_from_so(so)
+		self.assertEqual(len(self.delivery_rows(dn)), 1, "nothing bills it yet")
+
+		si = self.si_from_so(so)
+		self.assertEqual(self.delivery_rows(dn), [])
+		self.assertEqual(self.invoice_rows(si), [])
+
+	def test_a_short_delivery_leaves_the_rest_of_the_invoice_open(self):
+		so = self.make_so(qty=10)
+		si = self.si_from_so(so)
+		self.dn_from_so(so, qty=4)
+
+		rows = self.invoice_rows(si)
+		self.assertEqual(len(rows), 1)
+		self.assertAlmostEqual(rows[0].pending_qty, 6, places=3)
+		self.assertAlmostEqual(rows[0].delivered_qty, 4, places=3)
+
+	def test_a_part_invoice_leaves_the_rest_of_the_delivery_open(self):
+		so = self.make_so(qty=10)
+		self.si_from_so(so, qty=6)
+		dn = self.dn_from_so(so)
+
+		rows = self.delivery_rows(dn)
+		self.assertEqual(len(rows), 1)
+		self.assertAlmostEqual(rows[0].pending_qty, 4, places=3)
+		self.assertAlmostEqual(rows[0].billed_qty, 6, places=3)
+
+	def test_a_real_link_is_not_counted_twice(self):
+		"""Delivery first, invoice made FROM it: the bridge must contribute nothing."""
+		so = self.make_so(qty=10)
+		dn = self.dn_from_so(so)
+		self.make_si_from_dn(dn)
+
+		bridged_delivered, bridged_billed = so_bridge_maps(getdate(nowdate()))
+		self.assertEqual(bridged_billed, {})
+		self.assertEqual(bridged_delivered, {})
+		self.assertEqual(self.delivery_rows(dn), [])
+
+	def test_a_delivery_made_from_the_invoice_is_not_bridged(self):
+		"""Invoice first, delivery made FROM it: closed by the real link, not by the order row."""
+		so = self.make_so(qty=10)
+		si = self.si_from_so(so)
+		self.make_dn_from_si(si)
+
+		bridged_delivered, bridged_billed = so_bridge_maps(getdate(nowdate()))
+		self.assertEqual(bridged_billed, {})
+		self.assertEqual(bridged_delivered, {})
+		self.assertEqual(self.invoice_rows(si), [])
+
+	def test_an_invoice_that_took_the_stock_itself_is_not_bridged(self):
+		"""An update_stock invoice delivered its own goods; it bills no delivery note."""
+		so = self.make_so(qty=10)
+		dn = self.dn_from_so(so)
+		self.si_from_so(so, update_stock=1)
+
+		self.assertEqual(
+			len(self.delivery_rows(dn)), 1, "that invoice shipped its own goods; it bills no note"
+		)
+
+	def test_a_delivery_after_the_as_on_date_does_not_close_the_invoice(self):
+		placed = add_days(nowdate(), -5)
+		so = self.make_so(qty=10, transaction_date=placed)
+		si = self.si_from_so(so, posting_date=add_days(nowdate(), -3))
+		self.dn_from_so(so)
+
+		rows = self.invoice_rows(si, as_on=add_days(nowdate(), -2))
+		self.assertEqual(len(rows), 1, "two days ago the goods had not left")
+		self.assertAlmostEqual(rows[0].pending_qty, 10, places=3)
+		self.assertEqual(self.invoice_rows(si), [], "and today they have")
+
+	def test_an_invoice_after_the_as_on_date_does_not_close_the_delivery(self):
+		placed = add_days(nowdate(), -5)
+		so = self.make_so(qty=10, transaction_date=placed)
+		dn = self.dn_from_so(so, posting_date=add_days(nowdate(), -3))
+		self.si_from_so(so)
+
+		rows = self.delivery_rows(dn, as_on=add_days(nowdate(), -2))
+		self.assertEqual(len(rows), 1, "two days ago nobody had billed it")
+		self.assertAlmostEqual(rows[0].pending_qty, 10, places=3)
+		self.assertEqual(self.delivery_rows(dn), [], "and today somebody has")
+
+	def test_goods_sent_back_reopen_the_invoice(self):
+		"""The order row pairs these documents, so a delivery return has to reach the pairing."""
+		from erpnext.controllers.sales_and_purchase_return import make_return_doc
+
+		so = self.make_so(qty=10)
+		si = self.si_from_so(so)
+		dn = self.dn_from_so(so)
+
+		sent_back = make_return_doc("Delivery Note", dn.name)
+		sent_back.items[0].qty = -4
+		sent_back.insert()
+		sent_back.submit()
+
+		rows = self.invoice_rows(si)
+		self.assertEqual(len(rows), 1, "four came back, so four are owed again")
+		self.assertAlmostEqual(rows[0].pending_qty, 4, places=3)
+
+	def test_a_delivery_return_does_not_net_twice(self):
+		"""Six billed through the order and four returned on the delivery: nothing is left open."""
+		from erpnext.controllers.sales_and_purchase_return import make_return_doc
+
+		so = self.make_so(qty=10)
+		self.si_from_so(so)
+		dn = self.dn_from_so(so)
+
+		sent_back = make_return_doc("Delivery Note", dn.name)
+		sent_back.items[0].qty = -4
+		sent_back.insert()
+		sent_back.submit()
+
+		self.assertEqual(
+			self.delivery_rows(dn),
+			[],
+			"netted once through the bridge's free quantity and once through its own link would "
+			"push the row below zero and over-close it; here it must land on exactly zero",
+		)
+
+	def test_a_credit_note_against_the_order_reopens_the_delivery(self):
+		from erpnext.controllers.sales_and_purchase_return import make_return_doc
+
+		so = self.make_so(qty=10)
+		dn = self.dn_from_so(so)
+		si = self.si_from_so(so)
+
+		credit = make_return_doc("Sales Invoice", si.name)
+		credit.items[0].qty = -4
+		self.fill_site_mandatories(credit)
+		credit.insert()
+		try:
+			credit.submit()
+		except frappe.ValidationError as refused:
+			self.skipTest("the site's return rules refuse a direct submit: %s" % refused)
+
+		rows = self.delivery_rows(dn)
+		self.assertEqual(len(rows), 1, "four were credited back, so four are unbilled again")
+		self.assertAlmostEqual(rows[0].pending_qty, 4, places=3)
+		self.assertEqual(self.invoice_rows(si), [], "the invoice still has all it was owed")
+
+	def test_several_documents_on_one_order_line_pair_off_in_order(self):
+		"""Invoices of 6 and 4 against deliveries of 5 and 5 close every one of the four rows."""
+		so = self.make_so(qty=10)
+		si_one = self.si_from_so(so, qty=6)
+		si_two = self.si_from_so(so, qty=4)
+		dn_one = self.dn_from_so(so, qty=5)
+		dn_two = self.dn_from_so(so, qty=5)
+
+		for si in (si_one, si_two):
+			self.assertEqual(self.invoice_rows(si), [], si.name)
+		for dn in (dn_one, dn_two):
+			self.assertEqual(self.delivery_rows(dn), [], dn.name)
+
+	def test_a_unit_is_never_counted_on_both_sides_of_two_documents(self):
+		"""One delivery of 5 cannot close two invoices of 5 each."""
+		so = self.make_so(qty=10)
+		si_one = self.si_from_so(so, qty=5)
+		si_two = self.si_from_so(so, qty=5)
+		self.dn_from_so(so, qty=5)
+
+		open_pending = sum(
+			flt(row.pending_qty) for row in self.invoice_rows(si_one) + self.invoice_rows(si_two)
+		)
+		self.assertAlmostEqual(open_pending, 5, places=3, msg="five units shipped against ten billed")
+
+	def test_a_cancelled_invoice_reopens_the_delivery(self):
+		so = self.make_so(qty=10)
+		si = self.si_from_so(so)
+		dn = self.dn_from_so(so)
+		self.assertEqual(self.delivery_rows(dn), [])
+
+		si.cancel()
+		rows = self.delivery_rows(dn)
+		self.assertEqual(len(rows), 1, "the bill is gone, so the delivery is unbilled again")
+		self.assertAlmostEqual(rows[0].pending_qty, 10, places=3)
+
+	def test_a_cancelled_delivery_reopens_the_invoice(self):
+		so = self.make_so(qty=10)
+		si = self.si_from_so(so)
+		dn = self.dn_from_so(so)
+		self.assertEqual(self.invoice_rows(si), [])
+
+		dn.cancel()
+		rows = self.invoice_rows(si)
+		self.assertEqual(len(rows), 1, "the goods came back, so they are owed again")
+		self.assertAlmostEqual(rows[0].pending_qty, 10, places=3)
+
+	def test_two_orders_never_pair_with_each_other(self):
+		so_a = self.make_so(qty=10)
+		so_b = self.make_so(qty=10)
+		si_a = self.si_from_so(so_a)
+		dn_b = self.dn_from_so(so_b)
+
+		self.assertEqual(len(self.invoice_rows(si_a)), 1, "order A's invoice has no delivery")
+		self.assertEqual(len(self.delivery_rows(dn_b)), 1, "order B's delivery has no invoice")
+
+	def test_the_pairing_does_not_depend_on_the_report_filters(self):
+		"""Narrowing the page must not change which delivery an invoice closes."""
+		so = self.make_so(qty=10)
+		si = self.si_from_so(so)
+		dn = self.dn_from_so(so)
+
+		self.assertEqual(self.invoice_rows(si, party=CUSTOMER), [])
+		self.assertEqual(self.delivery_rows(dn, party=CUSTOMER), [])
+		self.assertEqual(self.invoice_rows(si, warehouse=self.warehouse), [])
+		self.assertEqual(self.delivery_rows(dn, warehouse=self.warehouse), [])
+		self.assertEqual(self.invoice_rows(si, from_date=nowdate(), to_date=nowdate()), [])
+
+	def test_a_bridged_invoice_drops_out_of_the_invoice_wise_report(self):
+		so = self.make_so(qty=10)
+		si = self.si_from_so(so)
+		self.assertIn(si.name, [r.document for r in invoices_pending_delivery(self.filters())])
+
+		self.dn_from_so(so)
+		self.assertNotIn(si.name, [r.document for r in invoices_pending_delivery(self.filters())])
+
+	def test_the_customer_summary_follows_the_bridge(self):
+		"""Summary == detail by construction; the bridge must not break that."""
+		from sf_trading.open_items import customer_open_items_summary
+
+		so = self.make_so(qty=10)
+		self.si_from_so(so)
+		self.dn_from_so(so)
+
+		filters = self.filters()
+		to_deliver = sum(
+			r.pending_amount for r in invoiced_items_to_be_delivered(filters) if r.party == CUSTOMER
+		)
+		unbilled = sum(
+			r.pending_amount for r in delivered_items_pending_billing(filters) if r.party == CUSTOMER
+		)
+
+		row = self.summary_row(customer_open_items_summary(filters), CUSTOMER)
+		if row is None:
+			self.assertAlmostEqual(to_deliver + unbilled, 0, places=2)
+			return
+		self.assertAlmostEqual(row.to_deliver_value, to_deliver, places=2)
+		self.assertAlmostEqual(row.unbilled_delivery_value, unbilled, places=2)
 
 
 class TestOpenItemsCutover(TestOpenItems):
