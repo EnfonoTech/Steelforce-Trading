@@ -6,6 +6,8 @@ company, warehouse, items and parties:
     bench --site <scratch-site> run-tests --module sf_trading.tests.test_open_items
 """
 
+from unittest import mock
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_days, flt, getdate, nowdate
@@ -31,6 +33,11 @@ class TestOpenItems(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
+		# These tests are about the open-item engine, not the open-order cap (GS Issue 18): a
+		# class raises many orders for one customer, and the cap would refuse the third
+		cap = mock.patch("sf_trading.sales_order_governance.PENDING_SO_CAP", 10**6)
+		cap.start()
+		cls.addClassCleanup(cap.stop)
 		cls.company = get_test_company()
 		cls.warehouse = "Stores - " + ABBR
 		cls.cost_center = "Main - " + ABBR
@@ -95,6 +102,7 @@ class TestOpenItems(FrappeTestCase):
 						"territory": territory,
 					}
 				).insert()
+			cls.make_billable(name)
 		if not frappe.db.exists("Supplier", SUPPLIER):
 			frappe.get_doc(
 				{
@@ -103,6 +111,29 @@ class TestOpenItems(FrappeTestCase):
 					"supplier_group": supplier_group,
 				}
 			).insert()
+
+	@classmethod
+	def make_billable(cls, customer):
+		"""Make a test customer billable on a site that has rules about who may be invoiced.
+
+		Both rules postdate these fixtures and live in sf_trading.sales_order_governance /
+		credit_customer_approval: a customer needs a Contact carrying a phone number (GS Issue
+		20), and a customer created from here on starts Pending Verification. Without them every
+		invoice or order below dies in before_submit, whatever the engine under test does.
+		"""
+		from sf_trading.party_contact_cache import party_phone_numbers
+
+		if not party_phone_numbers("Customer", customer):
+			frappe.get_doc(
+				{
+					"doctype": "Contact",
+					"first_name": customer,
+					"links": [{"link_doctype": "Customer", "link_name": customer}],
+					"phone_nos": [{"phone": "+97336000000", "is_primary_phone": 1}],
+				}
+			).insert(ignore_permissions=True)
+		if frappe.get_meta("Customer").get_field("custom_approval_status"):
+			frappe.db.set_value("Customer", customer, "custom_approval_status", "Approved")
 
 	# ------------------------------------------------------------------
 	# document helpers
