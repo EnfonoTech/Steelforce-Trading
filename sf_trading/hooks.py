@@ -78,6 +78,7 @@ doctype_js = {
 		"public/js/document_trail.js",
 	],
 	"Stock Entry":      "public/js/stock_entry.js",
+	"Company":          "public/js/company_stock_reco_account.js",
 	"Material Request": "public/js/material_request.js",
 	"Customer":         [
 		"public/js/customer_company.js",
@@ -236,6 +237,8 @@ after_migrate = [
 	"sf_trading.party_contact_cache.ensure_custom_fields",
 	# GS Issue 25: PDC Rejected-status field
 	"sf_trading.pdc_transfer.ensure_rejection_field",
+	# the one Difference Account a Stock Reconciliation may use, on Company
+	"sf_trading.stock_reconciliation_account.ensure_custom_fields",
 ]
 
 # Uninstallation
@@ -517,7 +520,14 @@ doc_events = {
 		"validate": [
 			"sf_trading.sdbnb.validate_company_sdbnb",
 			"sf_trading.sbnd.validate_company_sbnd",
+			"sf_trading.stock_reconciliation_account.validate_company_account",
 		],
+	},
+	# Purpose "Stock Reconciliation": the Company's own Difference Account and no other, and none
+	# at all without one -- see sf_trading/stock_reconciliation_account.py
+	"Stock Reconciliation": {
+		"before_validate": "sf_trading.stock_reconciliation_account.set_difference_account",
+		"validate": "sf_trading.stock_reconciliation_account.validate_difference_account",
 	},
 	"Purchase Invoice": {
 		"before_validate": [
@@ -622,6 +632,9 @@ override_whitelisted_methods = {
 	# ships sf_trading's extensions of other apps' reports with the report's own script, e.g. the
 	# clickable counts on Customer Acquisition and Loyalty. See sf_trading/api/report_script.py.
 	"frappe.desk.query_report.get_script": "sf_trading.api.report_script.get_script",
+	# the Stock Reconciliation form fills the Company's own Difference Account, not Stock
+	# Adjustment Account. See sf_trading/stock_reconciliation_account.py.
+	"erpnext.stock.doctype.stock_reconciliation.stock_reconciliation.get_difference_account": "sf_trading.stock_reconciliation_account.get_difference_account",
 }
 #
 # each overriding function accepts a `data` argument;
