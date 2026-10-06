@@ -313,6 +313,9 @@ _BPL_HOOK = "sf_trading.branch_price_list.apply_branch_price_list"
 # Refuses a price list the document's branch is not configured for. Only bites when the branch
 # names any: a branch with none has no opinion.
 _BPL_GUARD = "sf_trading.branch_price_list.validate_price_list_allowed"
+# No buying document (or payment) against a supplier still missing Tax ID, phone, email or an
+# attached document -- see sf_trading/supplier_validation.py.
+_SUPPLIER_GATE = "sf_trading.supplier_validation.validate_supplier_at_transaction"
 
 # Requires custom_return_reason to say more than just "Other" when that is the picked
 # custom_return_reason_template -- a different, narrower concern than sales_return.py's
@@ -348,6 +351,7 @@ doc_events = {
 			"sf_trading.payment_entry_reference_date.set_reference_dates",
 			# a transfer that names a post-dated cheque has to add up, however it was built
 			"sf_trading.pdc_transfer.validate",
+			_SUPPLIER_GATE,
 		],
 		# an Internal Transfer raised from a post-dated cheque closes that cheque when it is
 		# submitted, and re-opens it if it is cancelled
@@ -405,9 +409,13 @@ doc_events = {
 	"Supplier": {
 		"validate": [
 			"sf_trading.party_contact_cache.fill_mobile_no_from_cache",
+			# Tax ID mandatory + unique and a document attached, for every supplier, existing
+			# ones too -- see sf_trading/supplier_validation.py
+			"sf_trading.supplier_validation.validate",
 			"sf_trading.party_accounts.apply_title_case",
 		],
 		"before_save": "sf_trading.party_accounts.create_supplier_payable_account",
+		"after_insert": "sf_trading.supplier_validation.remind_attachment",
 	},
 	"Driver": {
 		# GS Issue 19: keep every branch's own Cash Limit sub-allocation from adding up to more
@@ -547,21 +555,22 @@ doc_events = {
 			_BRANCH_HOOK,
 			_LH_HOOK,
 			_BPL_GUARD,
+			_SUPPLIER_GATE,
 		],
 		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
 		"on_submit": "sf_trading.api.purchase_return.auto_create_pr_return",
 	},
 	"Purchase Order": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_LH_HOOK, _BPL_GUARD],
+		"validate": [_LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE],
 	},
 	"Purchase Receipt": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_BRANCH_HOOK, _LH_HOOK, _BPL_GUARD],
+		"validate": [_BRANCH_HOOK, _LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE],
 	},
 	"Supplier Quotation": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_LH_HOOK, _BPL_GUARD],
+		"validate": [_LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE],
 	},
 	# core logs the impersonation but drops the reason — put it back on the row
 	"Activity Log": {
