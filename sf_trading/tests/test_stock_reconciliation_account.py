@@ -80,7 +80,11 @@ class TestStockReconciliationAccount(FrappeTestCase):
 
 	def test_company_refuses_another_companys_account(self):
 		other_company = frappe.db.get_value("Company", {"name": ("!=", self.company)}, "name")
+		if not other_company:
+			self.skipTest("needs a second Company (a single-company site such as production has none)")
 		foreign = frappe.db.get_value("Account", {"company": other_company, "is_group": 0}, "name")
+		if not foreign:
+			self.skipTest("the second Company has no ledger account to offer")
 		doc = frappe._dict(name=self.company)
 		doc[ACCOUNT_FIELD] = foreign
 		with self.assertRaises(frappe.ValidationError):

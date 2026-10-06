@@ -174,7 +174,8 @@ These are ordinary ERPNext fields on the Company, but this app and ERPNext both 
 | Default Payable Account | Payment Advice, supplier payments | A supplier with no payable account and no company default is skipped by automation |
 | Default Expense Account | Where stock rounding differences land | On this site it is the **Cost of Goods Sold** account, so Purchase Receipts post fils-level rounding to COGS. See 9.4 |
 | Default Cost Center | Fallback when a branch has none | Keep it set; several flows fall back to it |
-| Stock Adjustment Account | Stock Reconciliation write-offs | Should not be a COGS account |
+| Stock Adjustment Account | Stock write-offs other than a Stock Reconciliation | Should not be a COGS account |
+| Stock Reconciliation Difference Account | The only Difference Account a Stock Reconciliation may post to; it fills in by itself and cannot be changed on the document | Must be set, or no Stock Reconciliation can be saved. Should not be a COGS account |
 | Default Letter Head | Statements and print formats | Statements fall back to this when no letter head is chosen |
 
 ### 3.7 Letter Head and print formats
@@ -585,7 +586,7 @@ Two ways to stop it: point Default Expense Account at a rounding or stock adjust
 The quantity is more than the warehouse holds. Reduce it, change warehouse, or remove the row.
 
 **Items show a value but no quantity.**
-Stranded valuation, usually left over from a migration. A Stock Reconciliation with the quantity and rate set to zero clears it, and the write-off should go to the Stock Adjustment account — not COGS.
+Stranded valuation, usually left over from a migration. A Stock Reconciliation with the quantity and rate set to zero clears it, and the write-off posts to the Company's Stock Reconciliation Difference Account (Accounts tab) — make sure that is not COGS.
 
 **A reorder suggestion looks far too high.**
 Check the **Busiest Day** and **Variability** columns. One large sale in the window raises safety stock for the whole item. Drop the service level to 85%, or shorten the window.

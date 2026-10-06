@@ -2,6 +2,8 @@ import re
 
 import frappe
 from frappe.query_builder import Criterion
+from frappe.query_builder.functions import IfNull
+from frappe.utils import nowdate
 
 # a multi-word search is resolved to item codes first, then handed to ERPNext as a name IN (...)
 # filter; capped so a broad search ("ms 1") cannot build a list sqlparse refuses
@@ -28,9 +30,14 @@ def _like(word):
 	return "%" + word.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
 
-def items_matching_every_word(txt):
+def items_matching_every_word(txt, allowed=None):
 	"""Item codes in which EVERY word of txt appears, in any order and in any of the fields
 	ERPNext's own item search reads (code, the Item search fields, barcode).
+
+	Only items ERPNext's own search would offer are considered (not disabled, not a template, not
+	past end of life) and, when `allowed` is given, only those codes -- both BEFORE deciding which
+	of the two stages below answers, so a name match the caller could never use cannot hide the
+	fallback stage's items.
 
 	ERPNext matches the whole text as one string -- "ms 1.2" must appear exactly so in one field,
 	which "MS TUBE 20X20X6 1.2MM" does not. Users type the words they remember, in whatever order:
@@ -54,17 +61,29 @@ def items_matching_every_word(txt):
 	def every_word(word_condition):
 		return Criterion.all([word_condition(_like(word)) for word in words])
 
+	today = nowdate()
+	offered = (
+		(item.disabled == 0)
+		& (item.has_variants == 0)
+		& ((item.end_of_life > today) | (IfNull(item.end_of_life, "0000-00-00") == "0000-00-00"))
+	)
+
 	def run(condition):
-		return (
+		codes = (
 			frappe.qb.from_(item)
 			.select(item.name)
-			.where(condition)
+			.where(offered & condition)
 			.orderby(item.item_name)
 			.limit(WORD_SEARCH_LIMIT)
 			.run(pluck=True)
 		)
+		# the company's own item set is far too long for an IN list (sqlparse refuses past 10,000
+		# tokens), so it is applied here; the cap above is on candidates, as before
+		return [code for code in codes if allowed is None or code in allowed]
 
-	in_name = run(every_word(lambda like: item.item_name.like(like) | item.name.like(like)))
+	in_name = run(
+		every_word(lambda like: item.item_name.like(like) | item.name.like(like) | item.item_code.like(like))
+	)
 	if in_name:
 		return in_name
 
@@ -81,14 +100,27 @@ def items_matching_every_word(txt):
 def _apply_word_search(txt, filters):
 	"""For a multi-word txt: narrow filters["name"] to the items matching every word, and return
 	the txt ERPNext should then search with (blank). Returns (txt, filters, no_match)."""
-	codes = items_matching_every_word(txt)
-	if codes is None:
+	if len((txt or "").split()) < 2:
 		return txt, filters, False
 
-	allowed = filters.get("name")
-	if allowed and isinstance(allowed, (list, tuple)) and allowed[0] == "in":
-		allowed_set = set(allowed[1])
-		codes = [c for c in codes if c in allowed_set]
+	# ERPNext replaces filters["name"] outright with the party's own "Item" rule, which would throw
+	# our narrowing (and the typed text we blank) away and list that party's whole item set. Leave
+	# such a search to ERPNext's own behaviour.
+	party = filters.get("customer") or filters.get("supplier")
+	if party and frappe.db.exists("Party Specific Item", {"party": party, "restrict_based_on": "Item"}):
+		return txt, filters, False
+
+	existing = filters.get("name")
+	allowed_set = None
+	if existing:
+		# only an IN list can be intersected with; any other name condition is left to ERPNext
+		if not (isinstance(existing, (list, tuple)) and existing and existing[0] == "in"):
+			return txt, filters, False
+		allowed_set = set(existing[1])
+
+	codes = items_matching_every_word(txt, allowed_set)
+	if codes is None:
+		return txt, filters, False
 	if not codes:
 		return txt, filters, True
 

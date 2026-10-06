@@ -233,7 +233,8 @@ Take extra care here. These feed posted accounts.
 |---|---|
 | Company → Default Payable / Receivable Account | Thousands of posted entries point at these |
 | Company → **Default Expense Account** | On this site it is the Cost of Goods Sold account. Purchase Receipts post their small valuation rounding differences there. Changing it changes where future rounding lands — it is a reasonable thing to want, but we should check what else uses it first |
-| Stock Adjustment Account | Used by stock write-offs. It must not be a COGS account |
+| Stock Adjustment Account | Used by stock write-offs other than a Stock Reconciliation. It must not be a COGS account |
+| Stock Reconciliation Difference Account | The one Difference Account a Stock Reconciliation (Purpose: Stock Reconciliation) may use. Accounts tab, under Default Cost of Goods Sold Account. **Without it no Stock Reconciliation can be saved**, and the document may use no other account. Opening Stock is unaffected |
 | Chart of Accounts structure | Renaming or moving accounts affects every report |
 | Tax templates and rates | VAT is filed from these |
 | Naming series, mid-year | Changing a series after documents exist creates gaps and confuses auditors |
@@ -349,7 +350,7 @@ To check either: search `Scheduled Job Type`, find it, and look at **Last Execut
 
 ### 9.4 Stock housekeeping
 
-**An item shows value but no quantity.** Left over from an earlier migration. Fix it with a **Stock Reconciliation**: set quantity and rate to zero for those item and warehouse rows, and make sure the expense account is the **Stock Adjustment** account, not a COGS account. Take a backup first.
+**An item shows value but no quantity.** Left over from an earlier migration. Fix it with a **Stock Reconciliation**: set quantity and rate to zero for those item and warehouse rows, The Difference Account is filled from the Company's **Stock Reconciliation Difference Account** (Accounts tab) and cannot be changed on the document, so check that account is not a COGS account first. Take a backup first.
 
 **Reorder levels.** Nothing on this site has one configured yet. The **Reorder Recommendation** report proposes a level and a quantity per item and warehouse from real sales history. Read it before setting anything, and remember: transfers between your own warehouses are deliberately excluded, and most items fall back to the default lead time in the filter.
 
