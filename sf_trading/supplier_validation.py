@@ -27,16 +27,35 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from frappe.utils import cstr
+from frappe.utils import cint, cstr
 
 from sf_trading.party_completeness import only_status_fields_changed
 from sf_trading.party_contact_cache import party_email_addresses, party_phone_numbers
+
+SETTINGS = "SF Trading Settings"
+ENFORCE_FIELD = "enforce_supplier_completeness"
+
+
+def enforcement_enabled() -> bool:
+	"""Whether the supplier completeness rules are switched on (SF Trading Settings).
+
+	Off until someone turns it on, deliberately: the rules apply to existing suppliers as much as
+	new ones, and on the day this was added 149 of the 150 enabled suppliers on production lacked
+	at least one of Tax ID, phone, email or an attached document (40 / 121 / 147 / 114), 79 of them
+	invoiced in the last 90 days. With no bypass, switching the rules on before that data is
+	completed stops purchasing and supplier payments, so the data is completed first and the
+	switch turned on after.
+	"""
+	try:
+		return bool(cint(frappe.get_cached_doc(SETTINGS).get(ENFORCE_FIELD)))
+	except frappe.DoesNotExistError:
+		return False
 
 
 def validate(doc, _method=None):
 	"""Supplier validate: Tax ID mandatory for a Company supplier and unique when given, and a
 	file attached."""
-	if only_status_fields_changed(doc):
+	if not enforcement_enabled() or only_status_fields_changed(doc):
 		return
 
 	doc.tax_id = cstr(doc.tax_id).strip() or None
@@ -79,7 +98,7 @@ def remind_attachment(doc, _method=None):
 	"""Supplier after_insert: the first save cannot carry a file, so say right away that one is
 	needed -- not only when the next save is refused."""
 	# the Create Supplier dialog links its own upload straight after the insert
-	if doc.flags.get("attachment_from_dialog"):
+	if doc.flags.get("attachment_from_dialog") or not enforcement_enabled():
 		return
 
 	frappe.msgprint(
@@ -133,6 +152,8 @@ def missing_supplier_details(supplier: str) -> list[str]:
 def validate_supplier_at_transaction(doc, _method=None):
 	"""validate on every buying document, and on a Payment Entry to a supplier: refuse to save
 	while the supplier lacks Tax ID, phone, email or an attached document."""
+	if not enforcement_enabled():
+		return
 	if doc.doctype == "Payment Entry":
 		supplier = doc.party if doc.get("party_type") == "Supplier" else None
 	else:

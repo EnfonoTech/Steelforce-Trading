@@ -3,10 +3,28 @@
     bench --site <scratch-site> run-tests --module sf_trading.tests.test_supplier_validation
 """
 
+from unittest import mock
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from sf_trading import supplier_validation
 from sf_trading.supplier_validation import validate_supplier_at_transaction
+
+GATE = "sf_trading.supplier_validation.validate_supplier_at_transaction"
+BUYING_DOCTYPES = ("Supplier Quotation", "Purchase Order", "Purchase Receipt", "Purchase Invoice", "Payment Entry")
+
+
+class Enforced:
+	"""The rules ship switched off (SF Trading Settings > Enforce Supplier Completeness), so the
+	tests of the rules themselves run with it on."""
+
+	@classmethod
+	def setUpClass(cls):
+		super().setUpClass()
+		patcher = mock.patch.object(supplier_validation, "enforcement_enabled", return_value=True)
+		patcher.start()
+		cls.addClassCleanup(patcher.stop)
 
 
 def attach(supplier_name, file_name="any-document.txt"):
@@ -21,7 +39,7 @@ def attach(supplier_name, file_name="any-document.txt"):
 	).insert(ignore_permissions=True)
 
 
-class TestSupplierMaster(FrappeTestCase):
+class TestSupplierMaster(Enforced, FrappeTestCase):
 	def _supplier(self, name, **fields):
 		doc = {
 			"doctype": "Supplier",
@@ -86,6 +104,8 @@ class TestSupplierMaster(FrappeTestCase):
 	def test_changing_to_a_taken_tax_id_is_refused(self):
 		first = self._supplier("Test Supplier Tax E").insert(ignore_permissions=True)
 		second = self._supplier("Test Supplier Tax F").insert(ignore_permissions=True)
+		# a document attached, so the only thing left to refuse is the taken Tax ID
+		attach(second.name)
 		second.reload()
 		second.tax_id = first.tax_id
 		with self.assertRaises(frappe.ValidationError):
@@ -146,7 +166,7 @@ class TestSupplierMaster(FrappeTestCase):
 			frappe.db.set_value("Supplier", supplier.name, field, 0)
 
 
-class TestSupplierAtTransaction(FrappeTestCase):
+class TestSupplierAtTransaction(Enforced, FrappeTestCase):
 	def _supplier(self, name, tax_id=True, document=True, supplier_type="Company"):
 		supplier = frappe.get_doc(
 			{
@@ -225,7 +245,7 @@ class TestSupplierAtTransaction(FrappeTestCase):
 		)  # must not raise
 
 
-class TestCreateSupplierDialog(FrappeTestCase):
+class TestCreateSupplierDialog(Enforced, FrappeTestCase):
 	def _upload(self):
 		# what the dialog's Attach field leaves behind: a File attached to nothing yet
 		return frappe.get_doc(
@@ -284,3 +304,80 @@ class TestCreateSupplierDialog(FrappeTestCase):
 				buyer_kind="B2B (Company)",
 				attachment=self._upload().file_url,
 			)
+
+
+class TestEnforcementSwitch(FrappeTestCase):
+	"""Off by default: the rules reach existing suppliers with no bypass, and most of them are
+	incomplete, so they are switched on only after the data is (Supplier Validation Gaps report)."""
+
+	def _settings(self, value):
+		return mock.patch.object(
+			frappe, "get_cached_doc", return_value=frappe._dict({supplier_validation.ENFORCE_FIELD: value})
+		)
+
+	def test_off_unless_ticked(self):
+		with self._settings(0):
+			self.assertFalse(supplier_validation.enforcement_enabled())
+		with self._settings(None):
+			self.assertFalse(supplier_validation.enforcement_enabled())
+		with self._settings(1):
+			self.assertTrue(supplier_validation.enforcement_enabled())
+
+	def test_off_when_the_settings_do_not_exist(self):
+		with mock.patch.object(frappe, "get_cached_doc", side_effect=frappe.DoesNotExistError):
+			self.assertFalse(supplier_validation.enforcement_enabled())
+
+	def test_incomplete_supplier_passes_every_gate_while_off(self):
+		supplier = frappe.get_doc(
+			{
+				"doctype": "Supplier",
+				"supplier_name": "Test Supplier Switch Off",
+				"supplier_group": frappe.db.get_value("Supplier Group", {"is_group": 0}, "name"),
+				"supplier_type": "Company",
+			}
+		)
+		with self._settings(0):
+			supplier.insert(ignore_permissions=True)  # no Tax ID: must not raise
+			supplier.reload()
+			supplier.website = "https://example.com"
+			supplier.save(ignore_permissions=True)  # no file attached: must not raise
+			for doctype in BUYING_DOCTYPES:
+				party = {"party_type": "Supplier", "party": supplier.name} if doctype == "Payment Entry" else {"supplier": supplier.name}
+				validate_supplier_at_transaction(frappe._dict(doctype=doctype, **party))  # must not raise
+
+	def test_the_same_supplier_is_refused_once_on(self):
+		supplier = frappe.get_doc(
+			{
+				"doctype": "Supplier",
+				"supplier_name": "Test Supplier Switch On",
+				"supplier_group": frappe.db.get_value("Supplier Group", {"is_group": 0}, "name"),
+				"supplier_type": "Company",
+			}
+		)
+		with self._settings(0):
+			supplier.insert(ignore_permissions=True)
+		with self._settings(1), self.assertRaises(frappe.ValidationError):
+			validate_supplier_at_transaction(frappe._dict(doctype="Purchase Order", supplier=supplier.name))
+
+
+class TestHookWiring(FrappeTestCase):
+	"""The gate is only as good as its registration: assert it is really wired to every buying
+	document and to the Supplier master, so removing a hook entry fails a test."""
+
+	def _registered(self, doctype, event):
+		return str(frappe.get_hooks("doc_events").get(doctype, {}).get(event))
+
+	def test_gate_is_on_every_buying_document_and_payment_entry(self):
+		for doctype in BUYING_DOCTYPES:
+			self.assertIn(GATE, self._registered(doctype, "validate"), doctype)
+
+	def test_master_rules_are_on_supplier(self):
+		self.assertIn("sf_trading.supplier_validation.validate", self._registered("Supplier", "validate"))
+		self.assertIn("sf_trading.supplier_validation.remind_attachment", self._registered("Supplier", "after_insert"))
+
+	def test_every_registered_path_imports(self):
+		import importlib
+
+		for path in (GATE, "sf_trading.supplier_validation.validate", "sf_trading.supplier_validation.remind_attachment"):
+			module, _, name = path.rpartition(".")
+			self.assertTrue(callable(getattr(importlib.import_module(module), name)), path)

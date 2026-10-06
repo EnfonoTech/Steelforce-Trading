@@ -20,7 +20,9 @@
   "credit_customer_approval_overrides",
   "document_expiry_column_break",
   "document_expiry_before_days",
-  "document_expiry_after_days"
+  "document_expiry_after_days",
+  "supplier_validation_section",
+  "enforce_supplier_completeness"
  ],
  "fields": [
   {
@@ -136,6 +138,18 @@
    "fieldname": "document_expiry_after_days",
    "fieldtype": "Int",
    "label": "Keep Reminding After Expiry (days)"
+  },
+  {
+   "fieldname": "supplier_validation_section",
+   "fieldtype": "Section Break",
+   "label": "Supplier Validation"
+  },
+  {
+   "default": "0",
+   "description": "When ticked, a Company supplier needs a Tax ID and every supplier a file attached, and no buying document or supplier payment can be saved while the supplier lacks a Tax ID, phone, email or an attached file. Applies to existing suppliers too, with no bypass, so complete the supplier data first (Supplier Validation Gaps) and tick this after.",
+   "fieldname": "enforce_supplier_completeness",
+   "fieldtype": "Check",
+   "label": "Enforce Supplier Completeness"
   }
  ],
  "index_web_pages_for_search": 1,
