@@ -308,56 +308,60 @@ class TestCreateSupplierDialog(Enforced, FrappeTestCase):
 
 class TestEnforcementSwitch(FrappeTestCase):
 	"""Off by default: the rules reach existing suppliers with no bypass, and most of them are
-	incomplete, so they are switched on only after the data is (Supplier Validation Gaps report)."""
+	incomplete, so they are switched on only after the data is (Supplier Validation Gaps report).
 
-	def _settings(self, value):
-		return mock.patch.object(
-			frappe, "get_cached_doc", return_value=frappe._dict({supplier_validation.ENFORCE_FIELD: value})
+	These drive the real SF Trading Settings value, not a mock of frappe.get_cached_doc, which every
+	other hook on a Supplier insert (party accounts reads the Company) also goes through."""
+
+	def setUp(self):
+		self.addCleanup(self._set, 0)
+
+	def _set(self, value):
+		frappe.db.set_single_value("SF Trading Settings", supplier_validation.ENFORCE_FIELD, value)
+		frappe.clear_document_cache("SF Trading Settings")
+
+	def _new_supplier(self, name):
+		return frappe.get_doc(
+			{
+				"doctype": "Supplier",
+				"supplier_name": name,
+				"supplier_group": frappe.db.get_value("Supplier Group", {"is_group": 0}, "name"),
+				"supplier_type": "Company",
+			}
 		)
 
 	def test_off_unless_ticked(self):
-		with self._settings(0):
-			self.assertFalse(supplier_validation.enforcement_enabled())
-		with self._settings(None):
-			self.assertFalse(supplier_validation.enforcement_enabled())
-		with self._settings(1):
-			self.assertTrue(supplier_validation.enforcement_enabled())
+		self._set(0)
+		self.assertFalse(supplier_validation.enforcement_enabled())
+		self._set(1)
+		self.assertTrue(supplier_validation.enforcement_enabled())
 
 	def test_off_when_the_settings_do_not_exist(self):
 		with mock.patch.object(frappe, "get_cached_doc", side_effect=frappe.DoesNotExistError):
 			self.assertFalse(supplier_validation.enforcement_enabled())
 
 	def test_incomplete_supplier_passes_every_gate_while_off(self):
-		supplier = frappe.get_doc(
-			{
-				"doctype": "Supplier",
-				"supplier_name": "Test Supplier Switch Off",
-				"supplier_group": frappe.db.get_value("Supplier Group", {"is_group": 0}, "name"),
-				"supplier_type": "Company",
-			}
-		)
-		with self._settings(0):
-			supplier.insert(ignore_permissions=True)  # no Tax ID: must not raise
-			supplier.reload()
-			supplier.website = "https://example.com"
-			supplier.save(ignore_permissions=True)  # no file attached: must not raise
-			for doctype in BUYING_DOCTYPES:
-				party = {"party_type": "Supplier", "party": supplier.name} if doctype == "Payment Entry" else {"supplier": supplier.name}
-				validate_supplier_at_transaction(frappe._dict(doctype=doctype, **party))  # must not raise
+		self._set(0)
+		supplier = self._new_supplier("Test Supplier Switch Off")
+		supplier.insert(ignore_permissions=True)  # no Tax ID: must not raise
+		supplier.reload()
+		supplier.website = "https://example.com"
+		supplier.save(ignore_permissions=True)  # no file attached: must not raise
+		for doctype in BUYING_DOCTYPES:
+			party = {"party_type": "Supplier", "party": supplier.name} if doctype == "Payment Entry" else {"supplier": supplier.name}
+			validate_supplier_at_transaction(frappe._dict(doctype=doctype, **party))  # must not raise
 
 	def test_the_same_supplier_is_refused_once_on(self):
-		supplier = frappe.get_doc(
-			{
-				"doctype": "Supplier",
-				"supplier_name": "Test Supplier Switch On",
-				"supplier_group": frappe.db.get_value("Supplier Group", {"is_group": 0}, "name"),
-				"supplier_type": "Company",
-			}
-		)
-		with self._settings(0):
-			supplier.insert(ignore_permissions=True)
-		with self._settings(1), self.assertRaises(frappe.ValidationError):
+		self._set(0)
+		supplier = self._new_supplier("Test Supplier Switch On")
+		supplier.insert(ignore_permissions=True)
+		self._set(1)
+		with self.assertRaises(frappe.ValidationError):
 			validate_supplier_at_transaction(frappe._dict(doctype="Purchase Order", supplier=supplier.name))
+		supplier.reload()
+		supplier.website = "https://example.com"
+		with self.assertRaises(frappe.ValidationError):
+			supplier.save(ignore_permissions=True)
 
 
 class TestHookWiring(FrappeTestCase):
