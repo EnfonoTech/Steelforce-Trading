@@ -19,6 +19,9 @@ from frappe.utils import flt, getdate
 
 def execute(filters=None):
 	filters = frappe._dict(filters or {})
+	# the rows are Sales Invoices, so the right to read them gates the report as well as the right
+	# to open it (the report's own roles come from the standard report it drills from)
+	frappe.has_permission("Sales Invoice", "read", throw=True)
 	if not filters.company:
 		frappe.throw(_("Company is required"))
 	filters.from_date = getdate(filters.from_date)
@@ -111,7 +114,9 @@ def get_invoices(filters, currency):
 		value = filters.get("sales_person" if fieldname == "custom_sales_person" else fieldname)
 		if value:
 			invoice_filters[fieldname] = set(get_descendants(doctype, value) if tree else [value])
-	item_values = get_item_dimensions(filters) if {"cost_center", "branch"} & set(invoice_filters) else {}
+	permitted = get_permitted_scope()
+	needs_item_values = {"cost_center", "branch"} & set(invoice_filters) or {"Cost Center", "Branch"} & set(permitted)
+	item_values = get_item_dimensions(filters) if needs_item_values else {}
 
 	def matches(inv):
 		for fieldname, allowed in invoice_filters.items():
@@ -124,9 +129,10 @@ def get_invoices(filters, currency):
 	first_seen = dict(prior)
 	out = []
 	for inv in invoices:
+		# decided company-wide, before any filter or permission narrows what is shown
 		inv.is_new = inv.customer not in first_seen
 		first_seen.setdefault(inv.customer, inv.posting_date)
-		if not matches(inv):
+		if not matches(inv) or not is_permitted(inv, permitted, item_values):
 			continue
 		inv.first_invoice_date = first_seen[inv.customer]
 		inv.type = _("First Invoice") if inv.is_new else _("Repeat Invoice")
@@ -139,6 +145,47 @@ def get_invoices(filters, currency):
 		inv.currency = currency
 		out.append(inv)
 	return out
+
+
+# Which User Permission narrows which column of the invoice.
+PERMISSION_COLUMNS = (("Branch", "branch"), ("Cost Center", "cost_center"), ("Customer", "customer"))
+
+
+def get_permitted_scope(user=None):
+	"""doctype -> the values the user may see, for the doctypes they are restricted on.
+
+	`frappe.qb` applies no permission filtering, so without this a user restricted to one branch
+	or cost center would see every branch's invoices here while the desk list is restricted.
+	A user with no User Permissions (Administrator, most head-office logins) gets an empty scope
+	and is unaffected.
+	"""
+	from frappe.permissions import get_user_permissions
+
+	permissions = get_user_permissions(user or frappe.session.user) or {}
+	scope = {}
+	for doctype, _fieldname in PERMISSION_COLUMNS:
+		allowed = {row.get("doc") for row in (permissions.get(doctype) or []) if row.get("doc")}
+		if allowed:
+			scope[doctype] = allowed
+	return scope
+
+
+def is_permitted(inv, scope, item_values):
+	"""False when the invoice lies wholly outside a restriction the user has.
+
+	A blank value passes, the way frappe treats an empty link field under a User Permission, and
+	branch / cost center may sit on the item rows only, so a hit there counts, as in `matches`.
+	"""
+	for doctype, fieldname in PERMISSION_COLUMNS:
+		allowed = scope.get(doctype)
+		if not allowed:
+			continue
+		values = {inv.get(fieldname)} | item_values.get((inv.name, fieldname), set())
+		values.discard(None)
+		values.discard("")
+		if values and not values & allowed:
+			return False
+	return True
 
 
 def aggregate(invoices, currency):

@@ -101,7 +101,8 @@ frappe.query_reports["Customer Acquisition and Loyalty Detail"] = {
 			value = `<span style="color: ${colour}">${value}</span>`;
 		}
 		if (data && column.fieldname === "total" && data.total) {
-			const customer = encodeURIComponent(data.customer);
+			// encodeURIComponent leaves ' unescaped, which would end the inline string below
+			const customer = encodeURIComponent(data.customer).replace(/'/g, "%27");
 			value = `<a href="#" style="color: var(--blue-600)" onclick="sfCALInvoices('${customer}'); return false;">${value}</a>`;
 		}
 		return value;
@@ -110,10 +111,19 @@ frappe.query_reports["Customer Acquisition and Loyalty Detail"] = {
 
 window.sfCALInvoices = function (customer) {
 	const f = (k) => frappe.query_report.get_filter_value(k);
-	frappe.set_route("List", "Sales Invoice", {
+	const route_filters = {
 		customer: decodeURIComponent(customer),
 		company: f("company"),
 		docstatus: 1,
 		posting_date: ["between", [f("from_date"), f("to_date")]],
-	});
+	};
+	// carry the report's own narrowing across, so the list count matches the cell clicked. The
+	// report also counts a branch / cost center that sits on the item rows only, which a header
+	// filter cannot express, so such an invoice can still be absent from this list.
+	const tree = "descendants of (inclusive)";
+	if (f("territory")) route_filters.territory = [tree, f("territory")];
+	if (f("cost_center")) route_filters.cost_center = [tree, f("cost_center")];
+	if (f("branch")) route_filters.branch = f("branch");
+	if (f("sales_person")) route_filters.custom_sales_person = [tree, f("sales_person")];
+	frappe.set_route("List", "Sales Invoice", route_filters);
 };
