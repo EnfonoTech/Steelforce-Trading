@@ -582,7 +582,9 @@ def workspace_content():
 
 def ensure_workspace():
 	"""The Tickets workspace, for every desk user. A copy somebody has rearranged is theirs."""
-	if frappe.db.exists("Workspace", WORKSPACE):
+	# not doc.is_new(): a doc built from a dict that already carries its name does not count as new
+	exists = bool(frappe.db.exists("Workspace", WORKSPACE))
+	if exists:
 		doc = frappe.get_doc("Workspace", WORKSPACE)
 		if SHORTCUTS[0][0] in (doc.content or ""):
 			return
@@ -606,10 +608,10 @@ def ensure_workspace():
 			},
 		)
 	doc.append("quick_lists", {"document_type": DOCTYPE, "label": QUICK_LIST, "quick_list_filter": json.dumps([])})
-	if doc.is_new():
-		doc.insert(ignore_permissions=True)
-	else:
+	if exists:
 		doc.save(ignore_permissions=True)
+	else:
+		doc.insert(ignore_permissions=True)
 
 
 def ensure_help_menu_item():

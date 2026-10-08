@@ -228,6 +228,25 @@ class TestTicket(FrappeTestCase):
 		self.act(OUTSIDER, add_comment, "Ticket", doc.name, "<p>Stock is fine</p>", OUTSIDER, "Outsider")
 		self.assertTrue(any("replied on" in s for s in self.bells(ASSIGNEE, doc.name)))
 
+	# ── desk furniture ──
+
+	def test_workspace_and_help_entry_are_built_once(self):
+		if frappe.db.exists("Workspace", ticket.WORKSPACE):
+			frappe.delete_doc("Workspace", ticket.WORKSPACE, ignore_permissions=True, force=True)
+		ticket.setup()
+		ticket.setup()
+		workspace = frappe.get_doc("Workspace", ticket.WORKSPACE)
+		labels = [row.label for row in workspace.shortcuts]
+		self.assertEqual(labels, [label for label, *_rest in ticket.SHORTCUTS])
+		# a shortcut row renders nothing unless a content block names it by label
+		blocks = {b["data"].get("shortcut_name") for b in frappe.parse_json(workspace.content) if b["type"] == "shortcut"}
+		self.assertEqual(blocks, set(labels))
+		help_rows = [
+			row for row in frappe.get_single("Navbar Settings").help_dropdown if row.route == ticket.NEW_TICKET_ROUTE
+		]
+		self.assertEqual(len(help_rows), 1)
+		self.assertEqual(help_rows[0].idx, 1)
+
 	# ── who sees what ──
 
 	def test_watcher_reads_but_cannot_edit(self):
