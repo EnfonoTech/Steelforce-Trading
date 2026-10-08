@@ -239,6 +239,8 @@ after_migrate = [
 	"sf_trading.pdc_transfer.ensure_rejection_field",
 	# the one Difference Account a Stock Reconciliation may use, on Company
 	"sf_trading.stock_reconciliation_account.ensure_custom_fields",
+	# support tickets: the Tickets workspace, and Help -> Raise a Support Ticket
+	"sf_trading.ticket.setup",
 ]
 
 # Uninstallation
@@ -276,11 +278,13 @@ after_migrate = [
 permission_query_conditions = {
 	"Item": "sf_trading.branch_defaults.item_permission_query",
 	"Customer": "sf_trading.customer_permission.permission_query_conditions_for_customer",
+	# a ticket is seen by the people on it, and by Ticket / System Managers
+	"Ticket": "sf_trading.ticket.get_permission_query_conditions",
 }
-#
-# has_permission = {
-# 	"Event": "frappe.desk.doctype.event.event.has_permission",
-# }
+
+has_permission = {
+	"Ticket": "sf_trading.ticket.has_permission",
+}
 
 # DocType Class
 # ---------------
@@ -595,6 +599,15 @@ doc_events = {
 	"Item": {
 		"autoname": "sf_trading.item_naming.autoname",
 	},
+	# a reply in a Ticket's comment box reaches everyone on the ticket. Both handlers return at
+	# once for any other doctype, so a site that has not migrated the Ticket table is untouched.
+	"Comment": {
+		"after_insert": "sf_trading.ticket.on_comment",
+	},
+	# an assignment made or removed from a Ticket's sidebar reaches its Assigned To field
+	"ToDo": {
+		"on_update": "sf_trading.ticket.sync_assignee_from_todo",
+	},
 }
 
 # Scheduled Tasks
@@ -732,7 +745,7 @@ before_job = ["sf_trading.api.query_report_columns.install"]
 fixtures = [
 	{
 		"doctype": "Role",
-		"filters": [["name", "in", ("B2B Creator",)]],
+		"filters": [["name", "in", ("B2B Creator", "Ticket Manager")]],
 	},
 	{
 		"doctype": "Custom DocPerm",

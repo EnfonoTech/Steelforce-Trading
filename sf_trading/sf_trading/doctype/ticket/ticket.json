@@ -1,0 +1,313 @@
+{
+ "actions": [],
+ "autoname": "format:TKT-{YYYY}-{#####}",
+ "creation": "2026-10-08 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "subject",
+  "ticket_type",
+  "module_area",
+  "raised_by",
+  "raised_by_name",
+  "column_break_main",
+  "status",
+  "priority",
+  "assignee",
+  "assignee_name",
+  "opening_date",
+  "section_details",
+  "description",
+  "error_message",
+  "attachment",
+  "section_reference",
+  "reference_doctype",
+  "column_break_reference",
+  "reference_name",
+  "section_watchers",
+  "watchers",
+  "section_resolution",
+  "resolution_details",
+  "section_tracking",
+  "first_response_on",
+  "resolved_on",
+  "resolved_by",
+  "column_break_tracking",
+  "closed_on",
+  "resolution_time",
+  "reopen_count"
+ ],
+ "fields": [
+  {
+   "fieldname": "subject",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Subject",
+   "reqd": 1
+  },
+  {
+   "default": "Error / Bug",
+   "fieldname": "ticket_type",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Type",
+   "options": "Error / Bug\nHow To / Question\nData Correction\nAccess / Permission\nFeature Request\nOther",
+   "reqd": 1
+  },
+  {
+   "fieldname": "module_area",
+   "fieldtype": "Select",
+   "in_standard_filter": 1,
+   "label": "Area",
+   "options": "\nSelling\nBuying\nStock\nAccounts\nHR & Payroll\nReports & Printing\nSettings & Permissions\nOther"
+  },
+  {
+   "default": "__user",
+   "fieldname": "raised_by",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "in_standard_filter": 1,
+   "label": "Raised By",
+   "options": "User",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "raised_by.full_name",
+   "fieldname": "raised_by_name",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Raised By Name",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Open",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "no_copy": 1,
+   "options": "Open\nIn Progress\nOn Hold\nResolved\nClosed",
+   "reqd": 1
+  },
+  {
+   "default": "Medium",
+   "fieldname": "priority",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Priority",
+   "options": "Low\nMedium\nHigh\nUrgent"
+  },
+  {
+   "description": "Allocated by a Ticket Manager. The person it is with can hand it over.",
+   "fieldname": "assignee",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Assigned To",
+   "no_copy": 1,
+   "options": "User"
+  },
+  {
+   "fetch_from": "assignee.full_name",
+   "fieldname": "assignee_name",
+   "fieldtype": "Data",
+   "hidden": 1,
+   "label": "Assigned To Name",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "opening_date",
+   "fieldtype": "Datetime",
+   "label": "Opened On",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_details",
+   "fieldtype": "Section Break",
+   "label": "Details"
+  },
+  {
+   "description": "What you were doing, what you expected, and what happened instead. Paste screenshots straight into this box.",
+   "fieldname": "description",
+   "fieldtype": "Text Editor",
+   "label": "What happened?",
+   "reqd": 1
+  },
+  {
+   "description": "The exact error text, if one was shown.",
+   "fieldname": "error_message",
+   "fieldtype": "Code",
+   "label": "Error Message"
+  },
+  {
+   "fieldname": "attachment",
+   "fieldtype": "Attach",
+   "label": "Attachment"
+  },
+  {
+   "description": "The document the problem is on, if there is one -- for example the Sales Invoice that will not submit.",
+   "fieldname": "section_reference",
+   "fieldtype": "Section Break",
+   "label": "Related Document"
+  },
+  {
+   "fieldname": "reference_doctype",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "label": "Document Type",
+   "options": "DocType"
+  },
+  {
+   "fieldname": "column_break_reference",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "reference_doctype",
+   "fieldname": "reference_name",
+   "fieldtype": "Dynamic Link",
+   "label": "Document",
+   "options": "reference_doctype"
+  },
+  {
+   "description": "Colleagues who should follow this ticket. They can read it and reply in the comments, and are told about every update.",
+   "fieldname": "section_watchers",
+   "fieldtype": "Section Break",
+   "label": "Keep Informed"
+  },
+  {
+   "fieldname": "watchers",
+   "fieldtype": "Table",
+   "label": "People",
+   "options": "Ticket Watcher"
+  },
+  {
+   "collapsible": 1,
+   "collapsible_depends_on": "eval:doc.resolution_details || in_list([\"Resolved\", \"Closed\"], doc.status)",
+   "depends_on": "eval:!doc.__islocal",
+   "fieldname": "section_resolution",
+   "fieldtype": "Section Break",
+   "label": "Resolution"
+  },
+  {
+   "fieldname": "resolution_details",
+   "fieldtype": "Text Editor",
+   "label": "How was it resolved?",
+   "mandatory_depends_on": "eval:doc.status==\"Resolved\""
+  },
+  {
+   "collapsible": 1,
+   "depends_on": "eval:!doc.__islocal",
+   "fieldname": "section_tracking",
+   "fieldtype": "Section Break",
+   "label": "Tracking"
+  },
+  {
+   "fieldname": "first_response_on",
+   "fieldtype": "Datetime",
+   "label": "First Response On",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "resolved_on",
+   "fieldtype": "Datetime",
+   "label": "Resolved On",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "resolved_by",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "label": "Resolved By",
+   "no_copy": 1,
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_tracking",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "closed_on",
+   "fieldtype": "Datetime",
+   "label": "Closed On",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "resolution_time",
+   "fieldtype": "Duration",
+   "label": "Resolution Time",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "reopen_count",
+   "fieldtype": "Int",
+   "label": "Times Reopened",
+   "no_copy": 1,
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-08 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "Ticket",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Ticket Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Desk User",
+   "write": 1
+  }
+ ],
+ "search_fields": "subject,status,raised_by,assignee",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "subject",
+ "track_changes": 1,
+ "track_seen": 1
+}
