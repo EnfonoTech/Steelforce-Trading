@@ -173,7 +173,9 @@ def has_permission(doc, ptype=None, user=None, debug=False):
 def get_permission_query_conditions(user=None, doctype=None):
 	"""permission_query_conditions hook for Ticket -- the list's twin of has_permission.
 
-	Tickets shared with the user (an @mention) are added by frappe itself, OR-ed onto this.
+	Shares (an @mention) are matched here too: frappe adds shared documents to a list only when
+	user permissions or an if-owner rule apply, never because of this hook, so without the DocShare
+	clause a mentioned colleague could open the ticket but never find it in a list or a report.
 	"""
 	user = user or frappe.session.user
 	if is_manager(user):
@@ -189,7 +191,10 @@ def get_permission_query_conditions(user=None, doctype=None):
 			where tw.parenttype = 'Ticket' and tw.parent = `tabTicket`.`name` and tw.user = {who})
 		or exists (select 1 from `tabToDo` td
 			where td.reference_type = 'Ticket' and td.reference_name = `tabTicket`.`name`
-			and td.allocated_to = {who} and td.status in ('Open', 'Closed')))"""
+			and td.allocated_to = {who} and td.status in ('Open', 'Closed'))
+		or exists (select 1 from `tabDocShare` sh
+			where sh.share_doctype = 'Ticket' and sh.share_name = `tabTicket`.`name`
+			and sh.`read` = 1 and (sh.user = {who} or sh.everyone = 1)))"""
 
 
 # ── The rules for a change ──────────────────────────────────────────────────────────

@@ -224,6 +224,8 @@ class TestTicket(FrappeTestCase):
 		self.act(ASSIGNEE, add_comment, "Ticket", doc.name, mention, ASSIGNEE, "Assignee")
 		self.assertTrue(self.can(OUTSIDER, "read", doc))
 		self.assertFalse(self.can(OUTSIDER, "write", doc))
+		# and can find it again: frappe only lists shared docs when user permissions apply
+		self.assertIn(doc.name, self.act(OUTSIDER, frappe.get_list, "Ticket", pluck="name", limit_page_length=0))
 		# the reply comes back to everyone else on the ticket, the mentioned person included
 		self.act(OUTSIDER, add_comment, "Ticket", doc.name, "<p>Stock is fine</p>", OUTSIDER, "Outsider")
 		self.assertTrue(any("replied on" in s for s in self.bells(ASSIGNEE, doc.name)))
