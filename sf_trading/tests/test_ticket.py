@@ -237,15 +237,84 @@ class TestTicket(FrappeTestCase):
 		ticket.setup()
 		workspace = frappe.get_doc("Workspace", ticket.WORKSPACE)
 		labels = [row.label for row in workspace.shortcuts]
-		self.assertEqual(labels, [label for label, *_rest in ticket.SHORTCUTS])
+		self.assertEqual(labels, [row["label"] for row in ticket.SHORTCUTS])
 		# a shortcut row renders nothing unless a content block names it by label
-		blocks = {b["data"].get("shortcut_name") for b in frappe.parse_json(workspace.content) if b["type"] == "shortcut"}
-		self.assertEqual(blocks, set(labels))
+		self.assertEqual(ticket._shortcut_blocks(workspace.content), set(labels))
 		help_rows = [
 			row for row in frappe.get_single("Navbar Settings").help_dropdown if row.route == ticket.NEW_TICKET_ROUTE
 		]
 		self.assertEqual(len(help_rows), 1)
 		self.assertEqual(help_rows[0].idx, 1)
+
+	def test_workspace_from_an_older_release_gains_the_new_shortcut(self):
+		ticket.setup()
+		workspace = frappe.get_doc("Workspace", ticket.WORKSPACE)
+		workspace.content = frappe.as_json(
+			[b for b in frappe.parse_json(workspace.content) if b.get("data", {}).get("shortcut_name") != ticket.REPORT]
+		)
+		workspace.set("shortcuts", [row for row in workspace.shortcuts if row.label != ticket.REPORT])
+		workspace.save(ignore_permissions=True)
+		ticket.setup()
+		workspace.reload()
+		self.assertIn(ticket.REPORT, [row.label for row in workspace.shortcuts])
+		self.assertIn(ticket.REPORT, ticket._shortcut_blocks(workspace.content))
+
+	# ── the My Tickets report ──
+
+	def report(self, as_user, **filters):
+		from sf_trading.sf_trading.report.my_tickets.my_tickets import execute
+
+		_columns, rows, _message, _chart, summary = self.act(as_user, execute, filters)
+		return {row["ticket"]: row for row in rows}, {card["label"]: card["value"] for card in summary}
+
+	def test_report_lists_what_you_raised_or_are_part_of(self):
+		raised = self.raise_ticket()
+		informed = self.raise_ticket(as_user=OUTSIDER, watchers=[{"user": REPORTER}])
+		elsewhere = self.raise_ticket(as_user=OUTSIDER)
+		rows, _summary = self.report(REPORTER, status="All")
+		self.assertIn("Raised", rows[raised.name]["part"])
+		self.assertIn("Keep Informed", rows[informed.name]["part"])
+		self.assertNotIn(elsewhere.name, rows)
+		rows, _summary = self.report(REPORTER, status="All", part="Keep Informed")
+		self.assertEqual(set(rows) & {raised.name, informed.name}, {informed.name})
+
+	def test_report_says_what_waits_on_you(self):
+		doc = self.assigned()
+		rows, summary = self.report(ASSIGNEE, needs_me=1)
+		self.assertTrue(rows[doc.name]["next_step"])
+		self.assertGreaterEqual(summary["Needs Action"], 1)
+		self.act(ASSIGNEE, ticket.set_status, doc.name, ticket.RESOLVED, "<p>done</p>")
+		rows, _summary = self.report(ASSIGNEE, needs_me=1)
+		self.assertNotIn(doc.name, rows)
+		# now it waits on whoever raised it: confirm, or reopen
+		rows, summary = self.report(REPORTER, needs_me=1)
+		self.assertIn(doc.name, rows)
+		self.assertGreaterEqual(summary["Resolved, Awaiting Confirmation"], 1)
+
+	def test_report_counts_replies_and_mentions(self):
+		doc = self.assigned()
+		mention = f'<p><span class="mention" data-id="{OUTSIDER}" data-value="Outsider">@Outsider</span> stock?</p>'
+		self.act(ASSIGNEE, add_comment, "Ticket", doc.name, mention, ASSIGNEE, "Assignee")
+		rows, _summary = self.report(OUTSIDER)
+		self.assertIn("Mentioned", rows[doc.name]["part"])
+		rows, _summary = self.report(ASSIGNEE)
+		self.assertIn("Commented", rows[doc.name]["part"])
+		self.assertEqual(rows[doc.name]["replies"], 1)
+
+	def test_report_hides_closed_tickets_unless_asked(self):
+		doc = self.raise_ticket()
+		self.act(REPORTER, ticket.set_status, doc.name, ticket.CLOSED)
+		rows, _summary = self.report(REPORTER)
+		self.assertNotIn(doc.name, rows)
+		rows, _summary = self.report(REPORTER, status="Closed")
+		self.assertIn(doc.name, rows)
+
+	def test_report_for_someone_else_is_a_managers_view(self):
+		doc = self.raise_ticket()
+		with self.assertRaises(frappe.PermissionError):
+			self.report(OUTSIDER, user=REPORTER)
+		rows, _summary = self.report(MANAGER, user=REPORTER)
+		self.assertIn(doc.name, rows)
 
 	# ── who sees what ──
 

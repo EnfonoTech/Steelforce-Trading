@@ -558,21 +558,29 @@ MODULE = "Sf Trading"
 NEW_TICKET_ROUTE = "/app/ticket/new"
 HELP_MENU_LABEL = "Raise a Support Ticket"
 QUICK_LIST = "Recent Tickets"
+REPORT = "My Tickets"
 
 _NOT_DONE = '"status": ["not in", ["Resolved", "Closed"]]'
 SHORTCUTS = (
-	# label, doc_view, stats_filter (a JS expression the desk evaluates), count format
-	("Raise a Ticket", "New", None, None),
-	("My Open Tickets", "List", '{"raised_by": frappe.session.user, ' + _NOT_DONE + "}", "{} Open"),
-	("Assigned to Me", "List", '{"assignee": frappe.session.user, ' + _NOT_DONE + "}", "{} Pending"),
-	("Unassigned", "List", '{"assignee": ["is", "not set"], ' + _NOT_DONE + "}", "{} Waiting"),
-	("All Tickets", "List", None, None),
+	# stats_filter is a JS expression the desk evaluates; doc_view must stay empty on a Report shortcut
+	{"label": "Raise a Ticket", "type": "DocType", "link_to": DOCTYPE, "doc_view": "New"},
+	# everything the user raised or is part of, and what waits on them -- the report, not a list
+	{"label": REPORT, "type": "Report", "link_to": REPORT, "report_ref_doctype": DOCTYPE},
+	{
+		"label": "Assigned to Me", "type": "DocType", "link_to": DOCTYPE, "doc_view": "List",
+		"stats_filter": '{"assignee": frappe.session.user, ' + _NOT_DONE + "}", "format": "{} Pending",
+	},
+	{
+		"label": "Unassigned", "type": "DocType", "link_to": DOCTYPE, "doc_view": "List",
+		"stats_filter": '{"assignee": ["is", "not set"], ' + _NOT_DONE + "}", "format": "{} Waiting",
+	},
+	{"label": "All Tickets", "type": "DocType", "link_to": DOCTYPE, "doc_view": "List"},
 )
 
 
 def workspace_content():
 	blocks = [{"type": "header", "data": {"text": '<span class="h4"><b>Support Tickets</b></span>', "col": 12}}]
-	blocks += [{"type": "shortcut", "data": {"shortcut_name": label, "col": 3}} for label, *_rest in SHORTCUTS]
+	blocks += [{"type": "shortcut", "data": {"shortcut_name": row["label"], "col": 4}} for row in SHORTCUTS]
 	blocks += [
 		{"type": "spacer", "data": {"col": 12}},
 		{"type": "quick_list", "data": {"quick_list_name": QUICK_LIST, "col": 12}},
@@ -580,13 +588,25 @@ def workspace_content():
 	return blocks
 
 
+def _shortcut_blocks(content) -> set:
+	try:
+		blocks = json.loads(content or "[]")
+	except ValueError:
+		return set()
+	return {block.get("data", {}).get("shortcut_name") for block in blocks if block.get("type") == "shortcut"}
+
+
 def ensure_workspace():
-	"""The Tickets workspace, for every desk user. A copy somebody has rearranged is theirs."""
+	"""The Tickets workspace, for every desk user.
+
+	Rebuilt only while it lacks one of SHORTCUTS -- so a release that adds a shortcut reaches a site
+	that already has the workspace, and a copy somebody has merely rearranged is left alone.
+	"""
 	# not doc.is_new(): a doc built from a dict that already carries its name does not count as new
 	exists = bool(frappe.db.exists("Workspace", WORKSPACE))
 	if exists:
 		doc = frappe.get_doc("Workspace", WORKSPACE)
-		if SHORTCUTS[0][0] in (doc.content or ""):
+		if {row["label"] for row in SHORTCUTS} <= _shortcut_blocks(doc.content):
 			return
 	else:
 		doc = frappe.get_doc(
@@ -599,14 +619,9 @@ def ensure_workspace():
 	doc.set("shortcuts", [])
 	doc.set("quick_lists", [])
 	doc.content = json.dumps(workspace_content())
-	for label, view, stats_filter, count_format in SHORTCUTS:
-		doc.append(
-			"shortcuts",
-			{
-				"label": label, "type": "DocType", "link_to": DOCTYPE, "doc_view": view,
-				"stats_filter": stats_filter, "format": count_format,
-			},
-		)
+	for row in SHORTCUTS:
+		# a copy: append() writes "doctype" into the dict it is handed
+		doc.append("shortcuts", dict(row))
 	doc.append("quick_lists", {"document_type": DOCTYPE, "label": QUICK_LIST, "quick_list_filter": json.dumps([])})
 	if exists:
 		doc.save(ignore_permissions=True)
