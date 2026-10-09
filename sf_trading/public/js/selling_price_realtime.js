@@ -12,6 +12,8 @@
 	];
 
 	function check_min_price(frm, cdt, cdn) {
+		// a return gives goods back at the price they were sold at; the server does not check it
+		if (frm.doc.is_return) return;
 		var row = locals[cdt][cdn];
 		if (!row || !row.item_code || !(flt(row.rate) > 0)) return;
 

@@ -86,7 +86,16 @@ def validate_selling_price(doc, method=None):
 
 	Runs independently — not gated on Selling Settings.
 	Does not reveal cost components; shows only the minimum price.
+
+	Returns are exempt. A return hands goods back at the price they were sold at (ERPNext pins
+	the row to the original document's rate), so a floor built from TODAY's last purchase rate or
+	valuation has nothing to protect: the sale it would have stopped already happened. Refusing
+	the return only leaves the customer holding goods the books say came back, and a later rise
+	in cost would make any old sale impossible to reverse.
 	"""
+	if doc.get("is_return"):
+		return
+
 	is_internal = bool(
 		doc.get("customer")
 		and frappe.db.get_value("Customer", doc.customer, "is_internal_customer")
