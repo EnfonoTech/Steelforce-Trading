@@ -180,7 +180,7 @@
  },
  {
   "charts": [],
-  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Open Items</b></span>\", \"col\": 12}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Pending Delivery Value\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Unbilled Deliveries Value\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Unbilled Receipts Value\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Pending Receipt Value\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Reports</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Invoiced Items To Be Delivered\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivered Items Pending Billing\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Received Items Pending Billing\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Billed Items Pending Receipt\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Sales\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Purchase\", \"col\": 4}}]",
+  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Open Items</b></span>\", \"col\": 12}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Pending Delivery Value\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Unbilled Deliveries Value\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Unbilled Receipts Value\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Pending Receipt Value\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Reports</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Invoiced Items To Be Delivered\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivered Items Pending Billing\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Received Items Pending Billing\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Billed Items Pending Receipt\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivery Notes Pending Return\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Purchase Receipts Pending Return\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Sales\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Purchase\", \"col\": 4}}]",
   "creation": "2026-08-09 13:00:00.000000",
   "docstatus": 0,
   "doctype": "Workspace",
@@ -267,6 +267,18 @@
     "dependencies": "",
     "hidden": 0,
     "idx": 7,
+    "is_query_report": 1,
+    "label": "Delivery Notes Pending Return",
+    "link_count": 0,
+    "link_to": "Delivery Notes Pending Return",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 8,
     "is_query_report": 0,
     "label": "Purchase",
     "link_count": 5,
@@ -278,7 +290,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 8,
+    "idx": 9,
     "is_query_report": 1,
     "label": "Supplier Open Items Summary",
     "link_count": 0,
@@ -290,7 +302,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 9,
+    "idx": 10,
     "is_query_report": 1,
     "label": "Received Items Pending Billing",
     "link_count": 0,
@@ -302,7 +314,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 10,
+    "idx": 11,
     "is_query_report": 1,
     "label": "Billed Items Pending Receipt",
     "link_count": 0,
@@ -314,7 +326,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 11,
+    "idx": 12,
     "is_query_report": 1,
     "label": "Purchase Register Extended",
     "link_count": 0,
@@ -326,7 +338,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 12,
+    "idx": 13,
     "is_query_report": 1,
     "label": "Pending Advance PO",
     "link_count": 0,
@@ -334,9 +346,21 @@
     "link_type": "Report",
     "onboard": 0,
     "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 14,
+    "is_query_report": 1,
+    "label": "Purchase Receipts Pending Return",
+    "link_count": 0,
+    "link_to": "Purchase Receipts Pending Return",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
    }
   ],
-  "modified": "2026-08-13 02:30:00.000000",
+  "modified": "2026-10-10 02:30:00.000000",
   "modified_by": "Administrator",
   "module": "Sf Trading",
   "name": "Open Items",
@@ -391,6 +415,20 @@
     "doc_view": "",
     "label": "Billed Items Pending Receipt",
     "link_to": "Billed Items Pending Receipt",
+    "type": "Report"
+   },
+   {
+    "color": "Green",
+    "doc_view": "",
+    "label": "Delivery Notes Pending Return",
+    "link_to": "Delivery Notes Pending Return",
+    "type": "Report"
+   },
+   {
+    "color": "Orange",
+    "doc_view": "",
+    "label": "Purchase Receipts Pending Return",
+    "link_to": "Purchase Receipts Pending Return",
     "type": "Report"
    }
   ],
