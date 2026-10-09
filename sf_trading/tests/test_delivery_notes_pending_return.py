@@ -118,3 +118,60 @@ class TestPermissionsAndSummary(FrappeTestCase):
 		fieldnames = [c["fieldname"] for c in report.get_columns()]
 		for needed in ("delivery_note", "invoice", "credit_notes", "credited_qty", "returned_qty", "pending_qty", "pending_value", "status"):
 			self.assertIn(needed, fieldnames)
+
+
+class TestViews(FrappeTestCase):
+	def rows(self):
+		common = dict(customer="C1", customer_name="Customer One", status=report.PENDING, return_notes=None)
+		return [
+			line("a", 6, 5, dn="DN-1", pending_qty=5, pending_value=50.0, item_code="I1", item_name="Item One",
+				item_group="Plates", invoice="INV-1", credit_notes="CN-1", **common),
+			line("b", 5, 3, dn="DN-1", pending_qty=3, pending_value=30.0, item_code="I2", item_name="Item Two",
+				item_group="Pipes", invoice="INV-1", credit_notes="CN-1, CN-2", **common),
+			line("c", 2, 2, dn="DN-2", date="2026-08-01", pending_qty=2, pending_value=20.0, item_code="I1",
+				item_name="Item One", item_group="Plates", invoice="INV-2", credit_notes="CN-3", **common),
+		]
+
+	def test_document_wise_is_one_row_per_delivery_note(self):
+		out = report.group_by_document(self.rows(), "BHD")
+		self.assertEqual([r.delivery_note for r in out], ["DN-1", "DN-2"])
+		first = out[0]
+		self.assertEqual((first.lines, first.pending_qty, first.pending_value), (2, 8, 80.0))
+		self.assertEqual((first.delivered_qty, first.credited_qty), (11, 8))
+		self.assertEqual(first.invoice, "INV-1")  # the same invoice twice is shown once
+		self.assertEqual(first.credit_notes, "CN-1, CN-2")
+		self.assertEqual(first.status, report.PENDING)
+
+	def test_item_wise_is_one_row_per_item_across_delivery_notes(self):
+		out = {r.item_code: r for r in report.group_by_item(self.rows(), "BHD")}
+		self.assertEqual(set(out), {"I1", "I2"})
+		self.assertEqual((out["I1"].delivery_notes, out["I1"].lines, out["I1"].pending_qty), (2, 2, 7))
+		self.assertEqual(out["I1"].pending_value, 70.0)
+		self.assertEqual(out["I1"].item_group, "Plates")
+		self.assertEqual((out["I2"].delivery_notes, out["I2"].pending_qty), (1, 3))
+
+	def test_item_wise_lists_the_biggest_pending_value_first(self):
+		self.assertEqual([r.item_code for r in report.group_by_item(self.rows())], ["I1", "I2"])
+
+	def test_a_group_with_nothing_pending_is_returned(self):
+		rows = self.rows()
+		for r in rows:
+			r.pending_qty, r.pending_value, r.status = 0, 0.0, report.RETURNED
+		self.assertEqual(report.group_by_document(rows)[0].status, report.RETURNED)
+		self.assertEqual(report.group_by_item(rows)[0].status, report.RETURNED)
+
+	def test_join_drops_blanks_and_repeats(self):
+		self.assertEqual(report._join(["A, B", None, "", "B", "C"]), "A, B, C")
+
+	def test_each_view_has_its_own_columns(self):
+		line_cols = [c["fieldname"] for c in report.get_columns(report.LINE_WISE)]
+		doc_cols = [c["fieldname"] for c in report.get_columns(report.DOCUMENT_WISE)]
+		item_cols = [c["fieldname"] for c in report.get_columns(report.ITEM_WISE)]
+		self.assertIn("item_group", line_cols)
+		self.assertIn("lines", doc_cols)
+		self.assertNotIn("item_code", doc_cols)
+		self.assertIn("item_code", item_cols)
+		self.assertNotIn("delivery_note", item_cols)
+		for cols in (line_cols, doc_cols, item_cols):
+			self.assertIn("pending_qty", cols)
+			self.assertIn("pending_value", cols)

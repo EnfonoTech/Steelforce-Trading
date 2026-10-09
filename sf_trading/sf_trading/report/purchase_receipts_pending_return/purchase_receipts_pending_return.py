@@ -31,6 +31,10 @@ PENDING = "Pending Return"
 RETURNED = "Returned"
 TOLERANCE = 0.0005
 
+LINE_WISE = "Line Wise"
+DOCUMENT_WISE = "Document Wise"
+ITEM_WISE = "Item Wise"
+
 # Which User Permission narrows which column of the receipt line
 PERMISSION_COLUMNS = (
 	("Supplier", "supplier"),
@@ -64,7 +68,14 @@ def execute(filters=None):
 		r.currency = currency
 
 	rows.sort(key=lambda r: (r.posting_date, r.purchase_receipt, r.pr_row))
-	return get_columns(), rows, None, None, get_summary(rows, currency)
+	# the cards always describe the lines, whichever way they are laid out below
+	summary = get_summary(rows, currency)
+	view = filters.get("view") or LINE_WISE
+	if view == DOCUMENT_WISE:
+		rows = group_by_document(rows, currency)
+	elif view == ITEM_WISE:
+		rows = group_by_item(rows, currency)
+	return get_columns(view), rows, None, None, summary
 
 
 def get_rows(filters):
@@ -76,6 +87,24 @@ def get_rows(filters):
 
 	conditions = ["p.docstatus = 1", "p.is_return = 0", "p.company = %(company)s"]
 	values = {"company": filters.company}
+	if filters.get("purchase_receipt"):
+		conditions.append("prr.parent = %(purchase_receipt)s")
+		values["purchase_receipt"] = filters.purchase_receipt
+	if filters.get("invoice"):
+		conditions.append("pair.invoice = %(invoice)s")
+		values["invoice"] = filters.invoice
+	if filters.get("debit_note"):
+		# only the lines this debit note actually debited
+		conditions.append(
+			"""EXISTS (SELECT 1 FROM `tabPurchase Invoice Item` dnr
+				WHERE dnr.parent = %(debit_note)s AND dnr.purchase_invoice_item = pair.pi_row)"""
+		)
+		values["debit_note"] = filters.debit_note
+	if filters.get("item_group"):
+		# the group and everything under it, by the tree's own bounds (no long IN list)
+		lft, rgt = frappe.db.get_value("Item Group", filters.item_group, ["lft", "rgt"]) or (0, 0)
+		conditions.append("ig.lft >= %(ig_lft)s AND ig.rgt <= %(ig_rgt)s")
+		values["ig_lft"], values["ig_rgt"] = lft, rgt
 	if filters.get("from_date"):
 		conditions.append("p.posting_date >= %(from_date)s")
 		values["from_date"] = filters.from_date
@@ -99,6 +128,7 @@ def get_rows(filters):
 			p.supplier_name,
 			prr.item_code,
 			prr.item_name,
+			it.item_group,
 			prr.warehouse,
 			prr.qty AS received_qty,
 			prr.base_net_rate AS rate,
@@ -123,6 +153,8 @@ def get_rows(filters):
 		) pair
 		INNER JOIN `tabPurchase Receipt Item` prr ON prr.name = pair.pr_row
 		INNER JOIN `tabPurchase Receipt` p ON p.name = prr.parent
+		LEFT JOIN `tabItem` it ON it.name = prr.item_code
+		LEFT JOIN `tabItem Group` ig ON ig.name = it.item_group
 		INNER JOIN `tabPurchase Invoice` pi ON pi.name = pair.invoice AND pi.docstatus = 1 AND pi.is_return = 0
 		INNER JOIN (
 			SELECT
@@ -175,6 +207,80 @@ def allocate_pending(rows):
 	return rows
 
 
+def _join(values):
+	"""Distinct non-blank values of a comma-joined column, in order, as one string."""
+	seen = []
+	for value in values:
+		for part in (value or "").split(","):
+			part = part.strip()
+			if part and part not in seen:
+				seen.append(part)
+	return ", ".join(seen)
+
+
+def _roll_up(group, **identity):
+	"""One row summarising a set of lines."""
+	pending = flt(sum(r.pending_qty for r in group), 3)
+	return frappe._dict(
+		lines=len(group),
+		received_qty=flt(sum(r.received_qty for r in group), 3),
+		debited_qty=flt(sum(r.debited_qty for r in group), 3),
+		returned_qty=flt(sum(r.returned_qty for r in group), 3),
+		pending_qty=pending,
+		pending_value=flt(sum(r.pending_value for r in group), 3),
+		invoice=_join(r.invoice for r in group),
+		bill_no=_join(r.bill_no for r in group),
+		debit_notes=_join(r.debit_notes for r in group),
+		return_notes=_join(r.return_notes for r in group),
+		status=PENDING if pending else RETURNED,
+		**identity,
+	)
+
+
+def group_by_document(rows, currency=None):
+	"""One row per Purchase Receipt."""
+	groups = defaultdict(list)
+	for r in rows:
+		groups[r.purchase_receipt].append(r)
+	out = []
+	for purchase_receipt, group in groups.items():
+		first = group[0]
+		out.append(
+			_roll_up(
+				group,
+				purchase_receipt=purchase_receipt,
+				posting_date=first.posting_date,
+				supplier=first.supplier,
+				supplier_name=first.supplier_name,
+				currency=currency,
+			)
+		)
+	out.sort(key=lambda r: (r.posting_date, r.purchase_receipt))
+	return out
+
+
+def group_by_item(rows, currency=None):
+	"""One row per item, across every Purchase Receipt it is pending on."""
+	groups = defaultdict(list)
+	for r in rows:
+		groups[r.item_code].append(r)
+	out = []
+	for item_code, group in groups.items():
+		first = group[0]
+		out.append(
+			_roll_up(
+				group,
+				item_code=item_code,
+				item_name=first.item_name,
+				item_group=first.item_group,
+				purchase_receipts=len({r.purchase_receipt for r in group}),
+				currency=currency,
+			)
+		)
+	out.sort(key=lambda r: (-r.pending_value, r.item_code))
+	return out
+
+
 def get_permitted_scope(user=None):
 	"""doctype -> the values the user may see, for the doctypes they are restricted on.
 
@@ -205,7 +311,41 @@ def is_permitted(row, scope):
 	return True
 
 
-def get_columns():
+def get_columns(view=LINE_WISE):
+	if view == DOCUMENT_WISE:
+		return [
+			{"label": _("Purchase Receipt"), "fieldname": "purchase_receipt", "fieldtype": "Link", "options": "Purchase Receipt", "width": 170},
+			{"label": _("Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 100},
+			{"label": _("Supplier"), "fieldname": "supplier", "fieldtype": "Link", "options": "Supplier", "width": 160},
+			{"label": _("Supplier Name"), "fieldname": "supplier_name", "fieldtype": "Data", "width": 180},
+			{"label": _("Lines"), "fieldname": "lines", "fieldtype": "Int", "width": 70},
+			{"label": _("Invoice"), "fieldname": "invoice", "fieldtype": "Data", "width": 160},
+			{"label": _("Supplier Invoice No"), "fieldname": "bill_no", "fieldtype": "Data", "width": 140},
+			{"label": _("Debit Note(s)"), "fieldname": "debit_notes", "fieldtype": "Data", "width": 150},
+			{"label": _("Received Qty"), "fieldname": "received_qty", "fieldtype": "Float", "width": 100},
+			{"label": _("Debited Qty"), "fieldname": "debited_qty", "fieldtype": "Float", "width": 100},
+			{"label": _("Returned from Stock"), "fieldname": "returned_qty", "fieldtype": "Float", "width": 130},
+			{"label": _("Pending Return Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 130},
+			{"label": _("Pending Value"), "fieldname": "pending_value", "fieldtype": "Currency", "options": "currency", "width": 120},
+			{"label": _("Receipt Return(s)"), "fieldname": "return_notes", "fieldtype": "Data", "width": 150},
+			{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 110},
+		]
+
+	if view == ITEM_WISE:
+		return [
+			{"label": _("Item"), "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "width": 130},
+			{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 220},
+			{"label": _("Item Group"), "fieldname": "item_group", "fieldtype": "Link", "options": "Item Group", "width": 140},
+			{"label": _("Purchase Receipts"), "fieldname": "purchase_receipts", "fieldtype": "Int", "width": 120},
+			{"label": _("Lines"), "fieldname": "lines", "fieldtype": "Int", "width": 70},
+			{"label": _("Received Qty"), "fieldname": "received_qty", "fieldtype": "Float", "width": 100},
+			{"label": _("Debited Qty"), "fieldname": "debited_qty", "fieldtype": "Float", "width": 100},
+			{"label": _("Returned from Stock"), "fieldname": "returned_qty", "fieldtype": "Float", "width": 130},
+			{"label": _("Pending Return Qty"), "fieldname": "pending_qty", "fieldtype": "Float", "width": 130},
+			{"label": _("Pending Value"), "fieldname": "pending_value", "fieldtype": "Currency", "options": "currency", "width": 120},
+			{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 110},
+		]
+
 	return [
 		{"label": _("Purchase Receipt"), "fieldname": "purchase_receipt", "fieldtype": "Link", "options": "Purchase Receipt", "width": 170},
 		{"label": _("Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 100},
@@ -213,6 +353,7 @@ def get_columns():
 		{"label": _("Supplier Name"), "fieldname": "supplier_name", "fieldtype": "Data", "width": 180},
 		{"label": _("Item"), "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "width": 130},
 		{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 200},
+		{"label": _("Item Group"), "fieldname": "item_group", "fieldtype": "Link", "options": "Item Group", "width": 130},
 		{"label": _("Warehouse"), "fieldname": "warehouse", "fieldtype": "Link", "options": "Warehouse", "width": 120},
 		{"label": _("Received Qty"), "fieldname": "received_qty", "fieldtype": "Float", "width": 100},
 		{"label": _("Invoice"), "fieldname": "invoice", "fieldtype": "Link", "options": "Purchase Invoice", "width": 150},
