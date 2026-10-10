@@ -36,6 +36,8 @@ app_include_js = [
 	# ── Multi-doctype: purchasing (Purchase Invoice, Purchase Order, Purchase Receipt, …) ──
 	f"/assets/sf_trading/js/last_purchase_rate.js?{_v}",
 	f"/assets/sf_trading/js/create_supplier.js?{_v}",
+	# Customer / Supplier "+ Add" quick entry: required marks, no address picker on a new supplier
+	f"/assets/sf_trading/js/party_quick_entry.js?{_v}",
 	# ── Multi-doctype: cross-selling + purchasing ──
 	f"/assets/sf_trading/js/return_qty_autofix.js?{_v}",
 	f"/assets/sf_trading/js/accounting_dimension_sync.js?{_v}",
@@ -90,8 +92,13 @@ doctype_js = {
 		# "Quick Edit Billing Fields" button -- same dialog the Sales Invoice Customer field uses
 		"public/js/customer_quick_edit.js",
 		"public/js/credit_customer_approval.js",
+		# the Supporting Documents grid and the new-master required marks
+		"public/js/party_documents.js",
 	],
-	"Supplier":         "public/js/party_mobile_no_prefill.js",
+	"Supplier":         [
+		"public/js/party_mobile_no_prefill.js",
+		"public/js/party_documents.js",
+	],
 	"Quotation":        "public/js/quotation.js",
 	# Receive Payment on a submitted order — the invoice popup's twin — and the three fields the
 	# order now shares with the invoice
@@ -252,6 +259,18 @@ after_migrate = [
 	"sf_trading.ticket.setup",
 	# landed cost charge rows name the expense entry that booked them
 	"sf_trading.landed_cost.ensure_custom_fields",
+	# the cancellation reason picked from a list, on Sales Order and Purchase Order
+	"sf_trading.order_cancellation.ensure_custom_fields",
+	"sf_trading.order_cancellation.seed_reasons",
+	# the standard Supporting Document Types (a fresh install marks the seed patch done unrun)
+	"sf_trading.party_documents.seed_document_types",
+	# PM's own Actions entry for a cancellation request stays hidden until a reason is picked
+	"sf_trading.approval_routing.ensure_request_condition",
+]
+
+after_install = [
+	"sf_trading.order_cancellation.seed_reasons",
+	"sf_trading.party_documents.seed_document_types",
 ]
 
 # Uninstallation
@@ -334,6 +353,9 @@ _BPL_GUARD = "sf_trading.branch_price_list.validate_price_list_allowed"
 # No buying document (or payment) against a supplier still missing Tax ID, phone, email or an
 # attached document -- see sf_trading/supplier_validation.py.
 _SUPPLIER_GATE = "sf_trading.supplier_validation.validate_supplier_at_transaction"
+# a new supplier / B2B customer must be complete, and no party may hold an expired document that
+# carries a Financial Implication -- see sf_trading/party_documents.py
+_MASTER_GATE = "sf_trading.party_documents.validate_party_at_transaction"
 
 # Requires custom_return_reason to say more than just "Other" when that is the picked
 # custom_return_reason_template -- a different, narrower concern than sales_return.py's
@@ -370,6 +392,7 @@ doc_events = {
 			# a transfer that names a post-dated cheque has to add up, however it was built
 			"sf_trading.pdc_transfer.validate",
 			_SUPPLIER_GATE,
+			_MASTER_GATE,
 		],
 		# an Internal Transfer raised from a post-dated cheque closes that cheque when it is
 		# submitted, and re-opens it if it is cancelled
@@ -422,7 +445,11 @@ doc_events = {
 			"sf_trading.party_accounts.apply_title_case",
 			# only a credit approver may switch "Allow Cash Sales Without Credit Documents"
 			"sf_trading.sales_order_governance.validate_cash_override_change",
+			# supporting-document rows, and what a new B2B customer must carry
+			"sf_trading.party_documents.validate_master",
 		],
+		"on_update": "sf_trading.party_documents.relink_attachments",
+		"onload": "sf_trading.party_documents.set_onload",
 		"before_save": [
 			"sf_trading.customer_permission.auto_add_branch_on_credit_limit",
 			"sf_trading.party_accounts.create_customer_receivable_account",
@@ -438,7 +465,11 @@ doc_events = {
 			# ones too -- see sf_trading/supplier_validation.py
 			"sf_trading.supplier_validation.validate",
 			"sf_trading.party_accounts.apply_title_case",
+			# supporting-document rows, and what a new supplier must carry
+			"sf_trading.party_documents.validate_master",
 		],
+		"on_update": "sf_trading.party_documents.relink_attachments",
+		"onload": "sf_trading.party_documents.set_onload",
 		"before_save": "sf_trading.party_accounts.create_supplier_payable_account",
 		"after_insert": "sf_trading.supplier_validation.remind_attachment",
 	},
@@ -499,6 +530,7 @@ doc_events = {
 			# is now the ONLY 2-contact-number rule (2026-09-27: dropped as a B2B-specific rule,
 			# client call -- a B2B customer with no credit standing no longer needs a 2nd number)
 			"sf_trading.sales_order_governance.validate_credit_customer_requirements_at_transaction",
+			_MASTER_GATE,
 			# a customer still Pending Verification (or Rejected) is not billable, unless
 			# whoever is submitting is named on the bypass roster -- see credit_customer_approval.py
 			"sf_trading.credit_customer_approval.validate_customer_approved_for_invoicing",
@@ -537,6 +569,7 @@ doc_events = {
 			# GS Issue 13: same credit-customer rule as Sales Invoice -- the only 2-contact-number
 			# rule now (2026-09-27: no separate B2B-specific one, see Sales Invoice's own comment)
 			"sf_trading.sales_order_governance.validate_credit_customer_requirements_at_transaction",
+			_MASTER_GATE,
 		],
 		"before_cancel": [
 			# GS Issue 17 / tracker #23: a remark is mandatory, and only a Sales Manager may cancel
@@ -592,6 +625,7 @@ doc_events = {
 			_LH_HOOK,
 			_BPL_GUARD,
 			_SUPPLIER_GATE,
+			_MASTER_GATE,
 			"sf_trading.landed_cost.validate_charges",
 		],
 		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
@@ -601,13 +635,13 @@ doc_events = {
 	},
 	"Purchase Order": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE],
+		"validate": [_LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE, _MASTER_GATE],
 		# a remark is mandatory, checked before docstatus flips -- see purchase_order_cancel.py
 		"before_cancel": "sf_trading.purchase_order_cancel.before_cancel_require_remark",
 	},
 	"Purchase Receipt": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_BRANCH_HOOK, _LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE, "sf_trading.landed_cost.validate_charges"],
+		"validate": [_BRANCH_HOOK, _LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE, _MASTER_GATE, "sf_trading.landed_cost.validate_charges"],
 		"before_submit": "sf_trading.landed_cost.require_links",
 	},
 	# every charge names the expense entry it absorbs, and may not take more than it booked
@@ -622,7 +656,7 @@ doc_events = {
 	},
 	"Supplier Quotation": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE],
+		"validate": [_LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE, _MASTER_GATE],
 	},
 	# core logs the impersonation but drops the reason — put it back on the row
 	"Activity Log": {
@@ -879,6 +913,19 @@ fixtures = [
 	{
 		"doctype": "Property Setter",
 		"filters": [["name", "in", (
+			# Customer / Supplier creation: what is required, and what the quick entry shows
+			# (sf_trading/party_documents.py, public/js/party_quick_entry.js)
+			"Supplier-supplier_primary_address-reqd",
+			"Supplier-primary_address-reqd",
+			"Supplier-custom_mobile_no-reqd",
+			"Supplier-tax_id-reqd",
+			"Supplier-tax_id-mandatory_depends_on",
+			"Supplier-tax_id-allow_in_quick_entry",
+			"Supplier-payment_terms-allow_in_quick_entry",
+			"Customer-payment_terms-allow_in_quick_entry",
+			"Customer-custom_vat_registration_number-allow_in_quick_entry",
+			"Customer-custom_commercial_registration_number-allow_in_quick_entry",
+			"Customer-custom_commercial_registration_number-mandatory_depends_on",
 			"Sales Invoice Item-barcode-in_list_view",
 			"Sales Taxes and Charges-cost_center-ignore_user_permissions",
 			"Sales Invoice Item-cost_center-ignore_user_permissions",

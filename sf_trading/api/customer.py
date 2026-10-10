@@ -52,7 +52,13 @@ def create_customer_with_address(
     allow_duplicate_vat=0,
     duplicate_vat_reason=None,
     attachment=None,
+    payment_terms=None,
+    document_type=None,
+    document_number=None,
+    expiry_date=None,
 ):
+    from sf_trading.party_documents import dialog_document_row, rules_from
+
     if not customer_name:
         frappe.throw(_("Customer Name is required"))
     if not mobile_no:
@@ -138,7 +144,14 @@ def create_customer_with_address(
         "custom_company": company or None,
         "custom_vat_registration_number": tax_id or None,
         "custom_commercial_registration_number": commercial_registration_number or None,
+        "payment_terms": payment_terms or None,
     })
+    if is_b2b and rules_from() and not payment_terms:
+        frappe.throw(_("Payment Terms are required for a new B2B customer."))
+    # a B2B customer's upload is its first supporting document (sf_trading/party_documents.py)
+    if attachment:
+        customer.append("custom_supporting_documents",
+            dialog_document_row("Customer", document_type, document_number, expiry_date, attachment))
     customer.insert(ignore_permissions=True)
 
     # Link attachment immediately after insert so customer_override.validate finds

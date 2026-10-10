@@ -24,6 +24,26 @@ from sf_trading.open_items import (
 )
 from sf_trading.tests.test_sdbnb import ABBR, COMPANY, get_test_company
 
+from unittest.mock import patch
+
+# Not a test of the new-master rules (sf_trading/tests/test_master_rules.py is): parties made here
+# are not held to them, nor to the every-save Company Tax ID check.
+_MASTER_RULES = (
+	patch("sf_trading.party_documents.rules_from", return_value=None),
+	patch("sf_trading.party_documents.validate_supplier_tax_id", return_value=None),
+)
+
+
+def setUpModule():
+	for guard in _MASTER_RULES:
+		guard.start()
+
+
+def tearDownModule():
+	for guard in _MASTER_RULES:
+		guard.stop()
+
+
 CUSTOMER = "_Test Open Items Customer"
 OTHER_CUSTOMER = "_Test Open Items Customer 2"
 SUPPLIER = "_Test Open Items Supplier"

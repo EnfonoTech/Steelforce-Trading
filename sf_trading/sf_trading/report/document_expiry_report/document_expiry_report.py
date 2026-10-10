@@ -21,7 +21,11 @@ def _get_columns():
 		{"label": _("Party"), "fieldname": "party", "fieldtype": "Dynamic Link", "options": "parenttype", "width": 220},
 		{"label": _("Document Type"), "fieldname": "document_type", "fieldtype": "Data", "width": 160},
 		{"label": _("Document Number"), "fieldname": "document_number", "fieldtype": "Data", "width": 140},
+		{"label": _("Issue Date"), "fieldname": "issue_date", "fieldtype": "Date", "width": 100},
 		{"label": _("Expiry Date"), "fieldname": "expiry_date", "fieldtype": "Date", "width": 100},
+		{"label": _("Grace Days"), "fieldname": "grace_days", "fieldtype": "Int", "width": 85},
+		{"label": _("Financial Implication"), "fieldname": "financial_implication", "fieldtype": "Check", "width": 90},
+		{"label": _("Attach"), "fieldname": "attachment", "fieldtype": "Data", "width": 160},
 		{"label": _("Days To Expiry"), "fieldname": "days_to_expiry", "fieldtype": "Int", "width": 110},
 		{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 110},
 	]
@@ -49,7 +53,8 @@ def _get_data(filters):
 
 	rows = frappe.db.sql(
 		f"""
-		SELECT csd.parent, csd.parenttype, csd.document_type, csd.document_number, csd.expiry_date
+		SELECT csd.parent, csd.parenttype, csd.document_type, csd.document_number, csd.expiry_date,
+			csd.issue_date, csd.grace_days, csd.financial_implication, csd.attachment
 		FROM `tabCustomer Supporting Document` csd
 		WHERE {" AND ".join(conditions)}
 		ORDER BY csd.expiry_date ASC
@@ -71,7 +76,10 @@ def _get_data(filters):
 	out = []
 	for r in rows:
 		days = date_diff(r.expiry_date, today)
-		status = _("Expired") if days < 0 else (_("Expiring Soon") if days <= 30 else _("Valid"))
+		# within its grace days a document still counts as valid, though past its date
+		status = (_("Expired") if days + cint(r.grace_days) < 0
+			else _("In Grace Period") if days < 0
+			else _("Expiring Soon") if days <= 30 else _("Valid"))
 		if status_filter and status_filter != status:
 			continue
 		out.append(
@@ -82,6 +90,10 @@ def _get_data(filters):
 				"document_type": r.document_type,
 				"document_number": r.document_number,
 				"expiry_date": r.expiry_date,
+				"issue_date": r.issue_date,
+				"grace_days": cint(r.grace_days),
+				"financial_implication": cint(r.financial_implication),
+				"attachment": r.attachment,
 				"days_to_expiry": cint(days),
 				"status": status,
 			}

@@ -145,10 +145,10 @@ class TestApprovalRouting(FrappeTestCase):
 		self.assertFalse(opening["applies"])
 		self.assertTrue(count["applies"] and count["guard_submit"])
 
-	def _order(self, was, now, comment=None, remark=None):
+	def _order(self, was, now, comment=None, remark=None, reason="Customer Request"):
 		doc = MagicMock()
 		doc.flags = frappe._dict(pm_workflow_comment=comment)
-		values = {"workflow_state": now, routing.REMARK_FIELD: remark}
+		values = {"workflow_state": now, routing.REMARK_FIELD: remark, routing.REASON_FIELD: reason}
 		doc.get = lambda key, default=None: values.get(key, default)
 		doc.set = lambda key, value: values.__setitem__(key, value)
 		doc.get_doc_before_save = lambda: frappe._dict(workflow_state=was)
@@ -174,6 +174,12 @@ class TestApprovalRouting(FrappeTestCase):
 		doc, values = self._order(routing.REQUESTED, routing.SUBMITTED, remark="old reason")
 		routing.capture_cancellation_reason(doc)
 		self.assertIsNone(values[routing.REMARK_FIELD])
+		self.assertIsNone(values[routing.REASON_FIELD])
+
+	def test_a_request_without_a_picked_reason_is_refused(self):
+		doc, _values = self._order(routing.SUBMITTED, routing.REQUESTED, comment="typed only", reason=None)
+		with self.assertRaises(frappe.ValidationError):
+			routing.capture_cancellation_reason(doc)
 
 	def test_a_count_needs_its_sheet_attached(self):
 		doc = frappe._dict(doctype="Stock Reconciliation", name="MAT-RECO-TEST-NONE", purpose="Stock Reconciliation")

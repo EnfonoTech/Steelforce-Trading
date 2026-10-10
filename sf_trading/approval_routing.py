@@ -33,6 +33,7 @@ REQUEST = "Request Cancellation"
 APPROVE = "Approve Cancellation"
 REJECT = "Reject Cancellation"
 REMARK_FIELD = "custom_cancellation_remark"
+REASON_FIELD = "custom_cancellation_reason"
 APPROVER_ROLE = "Sales Manager"
 REQUESTER_ROLES = ("Sales User", "Counter Sale", "Branch Head")
 
@@ -93,9 +94,18 @@ def capture_cancellation_reason(doc, _method=None):
 			frappe.throw(
 				_("Give a reason with the cancellation request."), title=_("Cancellation Reason Required")
 			)
+		# the reason itself is picked from the Order Cancellation Reason list by the order's
+		# Request Cancellation button (order_cancellation.request_sales_order_cancellation)
+		if doc.meta.has_field(REASON_FIELD) and not cstr(doc.get(REASON_FIELD)).strip():
+			frappe.throw(
+				_("Use the Request Cancellation button on the order to pick a cancellation reason."),
+				title=_("Cancellation Reason Required"),
+			)
 		doc.set(REMARK_FIELD, reason)
 	elif was == REQUESTED and now == SUBMITTED:
 		doc.set(REMARK_FIELD, None)
+		if doc.meta.has_field(REASON_FIELD):
+			doc.set(REASON_FIELD, None)
 
 
 # ── Stock Reconciliation attachment ─────────────────────────────────────────────────────────────
@@ -129,8 +139,31 @@ def _transition(state, action, next_state, role, **extra):
 		"allowed": role, "allow_self_approval": 1}, **extra)
 
 
+#: PM shows a transition only while its condition holds. The reason is stamped by the order's own
+#: Request Cancellation button (order_cancellation.request_sales_order_cancellation) just before it
+#: applies this transition, so PM's own Actions entry -- which has no reason picker -- never shows.
+REQUEST_CONDITION = 'doc.get("custom_cancellation_reason")'
+
+
+def ensure_request_condition():
+	"""after_migrate: an existing Sales Order Cancellation workflow gets the request condition too
+	(ensure_workflows never touches a workflow that already exists)."""
+	if not frappe.db.exists("PM Workflow", SO_WORKFLOW):
+		return
+	rows = frappe.get_all("PM Workflow Transition", filters={"parent": SO_WORKFLOW, "parenttype": "PM Workflow",
+		"action": REQUEST}, fields=["name", "condition"])
+	changed = False
+	for row in rows:
+		if not cstr(row.condition).strip():
+			frappe.db.set_value("PM Workflow Transition", row.name, "condition", REQUEST_CONDITION, update_modified=False)
+			changed = True
+	if changed:
+		frappe.clear_cache(doctype="Sales Order")
+
+
 def sales_order_workflow() -> dict:
-	transitions = [_transition(SUBMITTED, REQUEST, REQUESTED, role, require_comment=1) for role in REQUESTER_ROLES]
+	transitions = [_transition(SUBMITTED, REQUEST, REQUESTED, role, require_comment=1, condition=REQUEST_CONDITION)
+		for role in REQUESTER_ROLES]
 	transitions += [
 		_transition(REQUESTED, APPROVE, CANCELLED, APPROVER_ROLE),
 		_transition(REQUESTED, REJECT, SUBMITTED, APPROVER_ROLE),

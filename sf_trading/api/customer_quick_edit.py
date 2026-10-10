@@ -95,6 +95,10 @@ def get_quick_edit_data(customer: str) -> dict:
 		"has_attachment": bool(
 			frappe.db.exists("File", {"attached_to_doctype": "Customer", "attached_to_name": customer})
 		),
+		"payment_terms": doc.get("payment_terms"),
+		# the new-master rules (sf_trading/party_documents.py): a governed new customer needs Payment
+		# Terms and a supporting-document row with its file, not just any file in the sidebar
+		"master_rules": _master_rules(doc),
 		"missing": {
 			"company_fields": missing_company_fields(doc),
 			"credit_customer": missing_credit_customer_requirements(customer),
@@ -142,12 +146,21 @@ def save_quick_edit_data(customer: str, values) -> dict:
 
 	cr = (values.get(CR_FIELD) or "").strip()
 	vat = (values.get(VAT_FIELD) or "").strip()
-	if cr or vat:
+	payment_terms = (values.get("payment_terms") or "").strip()
+	if cr or vat or payment_terms or attachment:
 		doc = frappe.get_doc("Customer", customer)
 		if cr:
 			doc.set(CR_FIELD, cr)
 		if vat:
 			doc.set(VAT_FIELD, vat)
+		if payment_terms:
+			doc.payment_terms = payment_terms
+		if attachment and (doc.get(VAT_FIELD) or "").strip():
+			# a B2B customer's upload is a supporting document of its own, as in the create dialog
+			from sf_trading.party_documents import TABLE, dialog_document_row
+
+			doc.append(TABLE, dialog_document_row("Customer", values.get("document_type") or "VAT Certificate",
+				values.get("document_number"), values.get("expiry_date"), attachment))
 		try:
 			doc.save()
 		except frappe.ValidationError as e:
@@ -163,6 +176,17 @@ def save_quick_edit_data(customer: str, values) -> dict:
 			frappe.clear_messages()
 
 	return result
+
+
+def _master_rules(doc) -> dict:
+	from sf_trading import party_documents as pd
+
+	applies = pd.is_governed(doc) and pd.is_new_master(doc)
+	return {
+		"applies": applies,
+		"has_document_row": bool(pd.attached_rows(doc)),
+		"missing": pd.missing_details(doc, after_insert=True) if applies else [],
+	}
 
 
 def _save_contact_phones_and_email(customer: str, phone_1: str, phone_2: str, email: str) -> None:

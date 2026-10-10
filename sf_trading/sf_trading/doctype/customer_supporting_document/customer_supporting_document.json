@@ -8,57 +8,119 @@
  "field_order": [
   "document_type",
   "document_number",
-  "column_break_csd1",
+  "issue_date",
   "expiry_date",
+  "validate_expiry",
+  "attachment",
+  "financial_implication",
+  "column_break_csd1",
   "remarks",
+  "date_of_birth",
+  "days_ahead",
+  "grace_days",
   "last_notified_on"
  ],
  "fields": [
   {
    "fieldname": "document_type",
-   "fieldtype": "Data",
-   "in_list_view": 1,
-   "label": "Document Type",
+   "fieldtype": "Link",
+   "options": "Supporting Document Type",
+   "label": "Document Name",
    "reqd": 1,
-   "width": "160px"
+   "in_list_view": 1,
+   "columns": 2
   },
   {
    "fieldname": "document_number",
    "fieldtype": "Data",
+   "label": "Document #",
    "in_list_view": 1,
-   "label": "Document Number",
-   "width": "160px"
+   "columns": 1
+  },
+  {
+   "fieldname": "issue_date",
+   "fieldtype": "Date",
+   "label": "Issue Date",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "expiry_date",
+   "fieldtype": "Date",
+   "label": "Expiry Date",
+   "in_list_view": 1,
+   "columns": 1,
+   "mandatory_depends_on": "eval:doc.validate_expiry"
+  },
+  {
+   "default": "0",
+   "fieldname": "validate_expiry",
+   "fieldtype": "Check",
+   "label": "Validate",
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "Expiry is checked: reminders before and after it, and a block if Financial Implication is ticked."
+  },
+  {
+   "fieldname": "attachment",
+   "fieldtype": "Attach",
+   "label": "Attach",
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "default": "0",
+   "fieldname": "financial_implication",
+   "fieldtype": "Check",
+   "label": "Financial Implication",
+   "in_list_view": 1,
+   "columns": 1,
+   "depends_on": "eval:doc.validate_expiry"
   },
   {
    "fieldname": "column_break_csd1",
    "fieldtype": "Column Break"
   },
   {
-   "fieldname": "expiry_date",
-   "fieldtype": "Date",
-   "in_list_view": 1,
-   "label": "Expiry Date",
-   "width": "120px"
-  },
-  {
    "fieldname": "remarks",
    "fieldtype": "Small Text",
-   "label": "Remarks"
+   "label": "Description"
   },
   {
-   "description": "Set by the daily expiry scan; used to send at most one reminder a day for this row.",
+   "fieldname": "date_of_birth",
+   "fieldtype": "Date",
+   "label": "Date of Birth"
+  },
+  {
+   "default": "0",
+   "fieldname": "days_ahead",
+   "fieldtype": "Int",
+   "label": "Days Ahead",
+   "non_negative": 1,
+   "depends_on": "eval:doc.validate_expiry",
+   "description": "Start reminding this many days before expiry. 0 uses SF Trading Settings."
+  },
+  {
+   "default": "0",
+   "fieldname": "grace_days",
+   "fieldtype": "Int",
+   "label": "Grace Days",
+   "non_negative": 1,
+   "depends_on": "eval:doc.validate_expiry",
+   "description": "Days after expiry the document still counts as valid."
+  },
+  {
    "fieldname": "last_notified_on",
    "fieldtype": "Date",
-   "hidden": 1,
    "label": "Last Notified On",
-   "no_copy": 1,
-   "read_only": 1
+   "read_only": 1,
+   "no_copy": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-09-28 00:00:00.000000",
+ "modified": "2026-10-11 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "Customer Supporting Document",

@@ -45,7 +45,13 @@ def create_supplier_with_address(
     allow_duplicate_vat=0,
     duplicate_vat_reason=None,
     attachment=None,
+    payment_terms=None,
+    document_type=None,
+    document_number=None,
+    expiry_date=None,
 ):
+    from sf_trading.party_documents import dialog_document_row, rules_from
+
     if not supplier_name:
         frappe.throw(_("Supplier Name is required"))
     if not mobile_no:
@@ -54,6 +60,8 @@ def create_supplier_with_address(
         frappe.throw(_("Email ID is required for every supplier."))
     if not attachment:
         frappe.throw(_("A document attachment is required for every supplier."))
+    if rules_from() and not payment_terms:
+        frappe.throw(_("Payment Terms are required for every new supplier."))
 
     allow_duplicate_vat = int(allow_duplicate_vat or 0)
     is_b2b = (buyer_kind or "").startswith("B2B")
@@ -125,7 +133,12 @@ def create_supplier_with_address(
         "mobile_no": mobile_no,
         "email_id": email_id or None,
         "tax_id": tax_id or None,
+        "custom_mobile_no": mobile_no,
+        "payment_terms": payment_terms or None,
     })
+    # the upload is the supplier's first supporting document (sf_trading/party_documents.py)
+    supplier.append("custom_supporting_documents",
+        dialog_document_row("Supplier", document_type, document_number, expiry_date, attachment))
     # the manager override above already checked role + reason; let the master's own unique
     # check (supplier_validation.validate_unique_tax_id) through for this one insert
     supplier.flags.allow_duplicate_tax_id = bool(allow_duplicate_vat)

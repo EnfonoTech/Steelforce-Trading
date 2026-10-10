@@ -73,26 +73,36 @@ class TestCancellationControl(FrappeTestCase):
 			gov.before_cancel_require_remark_and_branch_head(doc)
 
 	def test_blocks_a_remarked_cancel_from_a_user_without_the_role(self):
-		doc = sales_order(custom_cancellation_remark="Customer changed their mind")
+		doc = sales_order(custom_cancellation_remark="Customer changed their mind", custom_cancellation_reason="Customer Request")
 		with patch("frappe.get_roles", return_value=["Sales User"]):
 			with self.assertRaises(frappe.ValidationError):
 				gov.before_cancel_require_remark_and_branch_head(doc)
 
 	def test_a_sales_manager_with_a_remark_may_cancel(self):
-		doc = sales_order(custom_cancellation_remark="Customer changed their mind")
+		doc = sales_order(custom_cancellation_remark="Customer changed their mind", custom_cancellation_reason="Customer Request")
 		with patch("frappe.get_roles", return_value=["Sales Manager"]):
 			gov.before_cancel_require_remark_and_branch_head(doc)  # must not raise
 
 	def test_a_branch_head_now_has_to_ask(self):
 		"""Client tracker #23: the Sales Manager approves; a Branch Head requests like anyone else."""
-		doc = sales_order(custom_cancellation_remark="Customer changed their mind")
+		doc = sales_order(custom_cancellation_remark="Customer changed their mind", custom_cancellation_reason="Customer Request")
 		with patch("frappe.get_roles", return_value=[gov.ROLE_BRANCH_HEAD]):
+			with self.assertRaises(frappe.ValidationError):
+				gov.before_cancel_require_remark_and_branch_head(doc)
+
+	def test_a_remark_without_a_picked_reason_is_refused(self):
+		from sf_trading.order_cancellation import REASON_FIELD
+
+		if not frappe.get_meta("Sales Order").has_field(REASON_FIELD):
+			self.skipTest("Cancellation Reason field not migrated on this site")
+		doc = sales_order(custom_cancellation_remark="typed only")
+		with patch("frappe.get_roles", return_value=["Sales Manager"]):
 			with self.assertRaises(frappe.ValidationError):
 				gov.before_cancel_require_remark_and_branch_head(doc)
 
 	def test_a_system_manager_may_also_cancel(self):
 		"""So Administrator/support can always unblock a mistake, without needing Sales Manager."""
-		doc = sales_order(custom_cancellation_remark="testing")
+		doc = sales_order(custom_cancellation_remark="testing", custom_cancellation_reason="Other")
 		with patch("frappe.get_roles", return_value=["System Manager"]):
 			gov.before_cancel_require_remark_and_branch_head(doc)  # must not raise
 

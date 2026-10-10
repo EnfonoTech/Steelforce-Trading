@@ -16,3 +16,6 @@ sf_trading.patches.backfill_party_contact_mobile_no
 sf_trading.patches.backfill_mobile_no_from_cache
 sf_trading.patches.v0_1.seed_sales_return_reasons
 sf_trading.patches.v0_1.driver_branches_table
+sf_trading.patches.v0_1.seed_supporting_document_types
+sf_trading.patches.v0_1.seed_order_cancellation_reasons
+sf_trading.patches.v0_1.set_master_rules_from

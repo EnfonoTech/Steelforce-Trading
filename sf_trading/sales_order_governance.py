@@ -216,6 +216,10 @@ def before_cancel_require_remark_and_branch_head(doc, _method=None):
 			_("A remark is required to cancel a Sales Order."),
 			title=_("Cancellation Remark Required"),
 		)
+	# the reason picked from the Order Cancellation Reason list, as on a sales return
+	from sf_trading.order_cancellation import require_reason
+
+	require_reason(doc)
 
 	user_roles = set(frappe.get_roles(frappe.session.user))
 	if not user_roles & set(CANCEL_APPROVER_ROLES):
@@ -226,8 +230,9 @@ def before_cancel_require_remark_and_branch_head(doc, _method=None):
 
 
 @frappe.whitelist()
-def cancel_sales_order_with_remark(sales_order: str, remark: str):
-	"""Whitelisted entry point for the desk dialog: stamp the remark, then cancel.
+def cancel_sales_order_with_remark(sales_order: str, remark: str = None, reason: str = None, details: str = None):
+	"""Whitelisted entry point: stamp the reason (picked from Order Cancellation Reason) and the
+	remark it makes, then cancel. `remark` alone is still accepted as the details of the reason.
 
 	Permission is re-checked here explicitly (frappe.has_permission), not assumed from the button
 	being visible -- a whitelisted method is a public HTTP endpoint the moment it exists, regardless
@@ -236,11 +241,17 @@ def cancel_sales_order_with_remark(sales_order: str, remark: str):
 	if not frappe.has_permission("Sales Order", "cancel", doc=sales_order):
 		frappe.throw(_("Not permitted to cancel this Sales Order."), frappe.PermissionError)
 
+	from sf_trading.order_cancellation import REASON_FIELD, compose_remark
+
 	remark = cstr(remark).strip()
+	if reason:
+		remark = compose_remark("Sales Order", reason, details or remark)
 	if not remark:
 		frappe.throw(_("A remark is required to cancel a Sales Order."))
 
 	doc = frappe.get_doc("Sales Order", sales_order)
+	if reason:
+		doc.set(REASON_FIELD, cstr(reason).strip())
 	# Set on the object, not via db_set -- db_set would bump `modified` in the database while
 	# cancel() still validates the in-memory copy's own modified timestamp, which is exactly the
 	# TimestampMismatchError trap the account's own coding standard calls out. Setting the field

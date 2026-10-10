@@ -34,26 +34,41 @@ class TestExpiryWindow(FrappeTestCase):
 
 
 class TestDueRows(FrappeTestCase):
-	def test_queries_the_right_parenttype_and_window(self):
-		"""_due_rows must scope by parenttype and pass a BETWEEN window, not just eyeball dates."""
-		with patch(
-			"sf_trading.document_expiry.frappe.get_cached_doc", return_value=_stub_settings(30, 7)
-		), patch("sf_trading.document_expiry.frappe.db.sql", return_value=[]) as sql, patch(
-			"sf_trading.document_expiry.frappe.get_all", return_value=[]
-		):
-			de._due_rows("Customer")
-			args, _kwargs = sql.call_args
-			query, values = args[0], args[1]
-			self.assertIn("parenttype = %s", query)
-			self.assertEqual(values[0], "Customer")
+	"""_due_rows reads validated rows of one party type and keeps those inside each row's own window."""
 
-	def test_skips_rows_already_notified_today_via_sql_guard(self):
-		"""The guard is in the WHERE clause itself, not a Python-side filter afterward."""
-		with patch(
-			"sf_trading.document_expiry.frappe.get_cached_doc", return_value=_stub_settings()
-		), patch("sf_trading.document_expiry.frappe.db.sql", return_value=[]) as sql, patch(
-			"sf_trading.document_expiry.frappe.get_all", return_value=[]
+	def _run(self, rows, parenttype="Customer"):
+		import frappe
+		from frappe.utils import add_days, getdate, nowdate
+
+		today = getdate(nowdate())
+		seen = {}
+
+		def get_all(doctype, **kwargs):
+			if doctype == "Customer Supporting Document":
+				seen["filters"] = kwargs.get("filters")
+				return [frappe._dict(r, expiry_date=add_days(today, r["offset"]),
+					last_notified_on=today if r.get("notified_today") else None) for r in rows]
+			return []
+
+		with patch("sf_trading.document_expiry.frappe.get_cached_doc", return_value=_stub_settings(30, 7)), patch(
+			"sf_trading.document_expiry.frappe.get_all", side_effect=get_all
 		):
-			de._due_rows("Supplier")
-			query = sql.call_args[0][0]
-			self.assertIn("last_notified_on IS NULL OR last_notified_on != %s", query)
+			due = de._due_rows(parenttype)
+		return seen["filters"], [r.name for r in due]
+
+	def test_scopes_by_party_type_and_validated_rows(self):
+		filters, _due = self._run([], parenttype="Supplier")
+		self.assertEqual(filters["parenttype"], "Supplier")
+		self.assertEqual(filters["validate_expiry"], 1)
+
+	def test_each_row_keeps_its_own_window(self):
+		rows = [
+			{"name": "soon", "offset": 20, "days_ahead": 0, "grace_days": 0},
+			{"name": "too-far", "offset": 40, "days_ahead": 0, "grace_days": 0},
+			{"name": "far-but-its-own-window", "offset": 40, "days_ahead": 45, "grace_days": 0},
+			{"name": "just-expired", "offset": -5, "days_ahead": 0, "grace_days": 0},
+			{"name": "past-its-grace", "offset": -5, "days_ahead": 0, "grace_days": 3},
+			{"name": "already-told-today", "offset": 10, "days_ahead": 0, "grace_days": 0, "notified_today": 1},
+		]
+		_filters, due = self._run(rows)
+		self.assertEqual(sorted(due), ["far-but-its-own-window", "just-expired", "soon"])

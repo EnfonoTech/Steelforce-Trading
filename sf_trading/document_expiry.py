@@ -3,8 +3,9 @@
 
 Each Customer Supporting Document row (see fixtures/custom_field.json's
 custom_supporting_documents on Customer and Supplier) carries its own expiry date. This
-walks both parties daily, in a configurable window either side of that date (SF Trading
-Settings: Remind Before / Keep Reminding After), and reminds once a day per row via the
+walks both parties daily, in a window either side of that date -- the row's own Days Ahead
+and Grace Days, else SF Trading Settings' Remind Before / Keep Reminding After -- for rows
+that validate their expiry, and reminds once a day per row via the
 same two guaranteed channels api/overdue_notifications.py uses -- the desk bell always,
 email only when the site actually has an outgoing account. A row already notified today is
 skipped, so re-running the scheduler (or the report's own "check now") never double-sends.
@@ -39,24 +40,34 @@ def _after_days() -> int:
 	return cint(_setting("document_expiry_after_days")) or 7
 
 
-def _due_rows(parenttype: str) -> list:
-	"""Every supporting-document row for this party type due a reminder today."""
-	today = getdate(nowdate())
-	earliest = add_days(today, -_after_days())
-	latest = add_days(today, _before_days())
+#: how far either side of today a row's own Days Ahead / Grace Days may reach
+_WIDEST_WINDOW = 366
 
-	rows = frappe.db.sql(
-		"""
-		SELECT name, parent, document_type, document_number, expiry_date, last_notified_on
-		FROM `tabCustomer Supporting Document`
-		WHERE parenttype = %s
-		  AND expiry_date IS NOT NULL
-		  AND expiry_date BETWEEN %s AND %s
-		  AND (last_notified_on IS NULL OR last_notified_on != %s)
-		""",
-		(parenttype, earliest, latest, today),
-		as_dict=True,
+
+def _due_rows(parenttype: str) -> list:
+	"""Every supporting-document row for this party type due a reminder today.
+
+	A row that validates its expiry is reminded from its own Days Ahead before expiry to its own
+	Grace Days after (each falling back to SF Trading Settings when 0). A row that does not
+	validate its expiry is never reminded.
+	"""
+	today = getdate(nowdate())
+	rows = frappe.get_all(
+		"Customer Supporting Document",
+		filters={
+			"parenttype": parenttype,
+			"validate_expiry": 1,
+			"expiry_date": ["between", [add_days(today, -_WIDEST_WINDOW), add_days(today, _WIDEST_WINDOW)]],
+		},
+		fields=["name", "parent", "document_type", "document_number", "expiry_date", "last_notified_on",
+			"days_ahead", "grace_days"],
 	)
+	rows = [
+		r for r in rows
+		if (not r.last_notified_on or getdate(r.last_notified_on) != today)
+		and add_days(today, -(cint(r.grace_days) or _after_days())) <= getdate(r.expiry_date)
+		<= add_days(today, cint(r.days_ahead) or _before_days())
+	]
 
 	party_field = PARTY_NAME_FIELD[parenttype]
 	parents = list({r.parent for r in rows})

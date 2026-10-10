@@ -25,10 +25,20 @@ def _company():
 class TestPurchaseOrderCancelRemark(FrappeTestCase):
 	def test_no_remark_no_cancel(self):
 		with self.assertRaises(frappe.ValidationError):
-			poc.before_cancel_require_remark(frappe._dict(custom_cancellation_remark="  "))
+			poc.before_cancel_require_remark(frappe._dict(doctype="Purchase Order", custom_cancellation_remark="  ",
+				custom_cancellation_reason="Supplier Cannot Supply"))
 
-	def test_a_remark_lets_it_through(self):
-		poc.before_cancel_require_remark(frappe._dict(custom_cancellation_remark="Supplier out of stock"))
+	def test_a_remark_and_a_reason_let_it_through(self):
+		poc.before_cancel_require_remark(frappe._dict(doctype="Purchase Order",
+			custom_cancellation_remark="Supplier Cannot Supply - out of stock", custom_cancellation_reason="Supplier Cannot Supply"))
+
+	def test_a_remark_without_a_picked_reason_is_refused(self):
+		from sf_trading.order_cancellation import REASON_FIELD
+
+		if not frappe.get_meta("Purchase Order").has_field(REASON_FIELD):
+			self.skipTest("Cancellation Reason field not migrated on this site")
+		with self.assertRaises(frappe.ValidationError):
+			poc.before_cancel_require_remark(frappe._dict(doctype="Purchase Order", custom_cancellation_remark="typed only"))
 
 	def test_the_field_exists_after_setup(self):
 		poc.ensure_custom_fields()

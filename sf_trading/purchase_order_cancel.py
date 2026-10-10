@@ -43,9 +43,13 @@ def ensure_custom_fields():
 
 
 def before_cancel_require_remark(doc, _method=None):
-	"""Purchase Order before_cancel: a remark is mandatory."""
+	"""Purchase Order before_cancel: a remark is mandatory, and so is the reason picked from the
+	Order Cancellation Reason list (sf_trading/order_cancellation.py)."""
 	if not cstr(doc.get(REMARK_FIELD)).strip():
 		frappe.throw(
 			_("A remark is required to cancel a Purchase Order."),
 			title=_("Cancellation Remark Required"),
 		)
+	from sf_trading.order_cancellation import require_reason
+
+	require_reason(doc)

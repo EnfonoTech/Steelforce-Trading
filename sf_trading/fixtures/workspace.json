@@ -436,7 +436,7 @@
  },
  {
   "charts": [],
-  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Credit &amp; Collections</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Branch-wise Credit Outstanding\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivery Person Payment Pending\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Cash Flow Detail\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Item-wise Cash Flow\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"PDC Report\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Mode of Payment Invoice Wise\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Pending Supporting Documents\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Landed Cost Reconciliation\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Receivables\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cash Flow\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cheques & Payments\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Accounting Controls\", \"col\": 4}}]",
+  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Credit &amp; Collections</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Branch-wise Credit Outstanding\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivery Person Payment Pending\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Cash Flow Detail\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Item-wise Cash Flow\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"PDC Report\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Mode of Payment Invoice Wise\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Pending Supporting Documents\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Landed Cost Reconciliation\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Master Data Completeness\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Receivables\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cash Flow\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cheques & Payments\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Accounting Controls\", \"col\": 4}}]",
   "creation": "2026-10-10 12:00:00.000000",
   "docstatus": 0,
   "doctype": "Workspace",
@@ -609,7 +609,7 @@
     "idx": 14,
     "is_query_report": 0,
     "label": "Accounting Controls",
-    "link_count": 4,
+    "link_count": 7,
     "link_to": null,
     "link_type": null,
     "onboard": 0,
@@ -662,9 +662,45 @@
     "link_type": "DocType",
     "onboard": 0,
     "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 19,
+    "is_query_report": 1,
+    "label": "Master Data Completeness",
+    "link_count": 0,
+    "link_to": "Master Data Completeness",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 20,
+    "is_query_report": 0,
+    "label": "Supporting Document Type",
+    "link_count": 0,
+    "link_to": "Supporting Document Type",
+    "link_type": "DocType",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 21,
+    "is_query_report": 0,
+    "label": "Order Cancellation Reason",
+    "link_count": 0,
+    "link_to": "Order Cancellation Reason",
+    "link_type": "DocType",
+    "onboard": 0,
+    "type": "Link"
    }
   ],
-  "modified": "2026-10-10 14:00:00.000000",
+  "modified": "2026-10-11 10:00:00.000000",
   "modified_by": "Administrator",
   "module": "Sf Trading",
   "name": "Credit & Collections",
@@ -730,6 +766,13 @@
     "doc_view": "",
     "label": "Landed Cost Reconciliation",
     "link_to": "Landed Cost Reconciliation",
+    "type": "Report"
+   },
+   {
+    "color": "Pink",
+    "doc_view": "",
+    "label": "Master Data Completeness",
+    "link_to": "Master Data Completeness",
     "type": "Report"
    }
   ],

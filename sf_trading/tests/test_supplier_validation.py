@@ -11,6 +11,26 @@ from frappe.tests.utils import FrappeTestCase
 from sf_trading import supplier_validation
 from sf_trading.supplier_validation import validate_supplier_at_transaction
 
+from unittest.mock import patch
+
+# Not a test of the new-master rules (sf_trading/tests/test_master_rules.py is): parties made here
+# are not held to them, nor to the every-save Company Tax ID check.
+_MASTER_RULES = (
+	patch("sf_trading.party_documents.rules_from", return_value=None),
+	patch("sf_trading.party_documents.validate_supplier_tax_id", return_value=None),
+)
+
+
+def setUpModule():
+	for guard in _MASTER_RULES:
+		guard.start()
+
+
+def tearDownModule():
+	for guard in _MASTER_RULES:
+		guard.stop()
+
+
 GATE = "sf_trading.supplier_validation.validate_supplier_at_transaction"
 BUYING_DOCTYPES = ("Supplier Quotation", "Purchase Order", "Purchase Receipt", "Purchase Invoice", "Payment Entry")
 

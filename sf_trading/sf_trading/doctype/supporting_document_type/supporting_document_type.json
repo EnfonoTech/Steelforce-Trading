@@ -1,0 +1,246 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:document_name",
+ "creation": "2026-10-11 10:00:00.000000",
+ "description": "A kind of document a customer or supplier hands over (Commercial Registration, VAT Certificate, ID...), with the expiry rules its rows follow.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "document_name",
+  "applies_to",
+  "description",
+  "column_break_defaults",
+  "validate_expiry",
+  "days_ahead",
+  "grace_days",
+  "financial_implication",
+  "needs_date_of_birth",
+  "disabled"
+ ],
+ "fields": [
+  {
+   "fieldname": "document_name",
+   "fieldtype": "Data",
+   "label": "Document Name",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1,
+   "bold": 1
+  },
+  {
+   "fieldname": "applies_to",
+   "fieldtype": "Select",
+   "label": "Applies To",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "default": "Customer and Supplier",
+   "options": "Customer and Supplier\nCustomer\nSupplier"
+  },
+  {
+   "fieldname": "description",
+   "fieldtype": "Small Text",
+   "label": "Description"
+  },
+  {
+   "fieldname": "column_break_defaults",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "validate_expiry",
+   "fieldtype": "Check",
+   "label": "Validate Expiry",
+   "in_list_view": 1,
+   "description": "A row of this type needs an Expiry Date, and is reminded about before and after it."
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.validate_expiry",
+   "fieldname": "days_ahead",
+   "fieldtype": "Int",
+   "label": "Days Ahead",
+   "non_negative": 1,
+   "description": "Start reminding this many days before expiry. 0 uses SF Trading Settings."
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.validate_expiry",
+   "fieldname": "grace_days",
+   "fieldtype": "Int",
+   "label": "Grace Days",
+   "non_negative": 1,
+   "description": "Days after expiry the document still counts as valid. 0 uses SF Trading Settings for reminders and allows no grace."
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.validate_expiry",
+   "fieldname": "financial_implication",
+   "fieldtype": "Check",
+   "label": "Financial Implication",
+   "description": "Once a document of this type has expired (after its grace days), the party cannot be invoiced or paid until it is renewed."
+  },
+  {
+   "default": "0",
+   "fieldname": "needs_date_of_birth",
+   "fieldtype": "Check",
+   "label": "Needs Date of Birth",
+   "description": "Personal identity documents (ID card, passport): the row must carry the holder's date of birth."
+  },
+  {
+   "default": "0",
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-11 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "Supporting Document Type",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "role": "System Manager",
+   "write": 1,
+   "create": 1,
+   "delete": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "role": "Accounts Manager",
+   "write": 1,
+   "create": 1,
+   "delete": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "role": "Sales Master Manager",
+   "write": 1,
+   "create": 1,
+   "delete": 0
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "role": "Purchase Master Manager",
+   "write": 1,
+   "create": 1,
+   "delete": 0
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "role": "Credit Approval Officer",
+   "write": 1,
+   "create": 1,
+   "delete": 0
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "role": "Accounts User"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "role": "Sales User"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "role": "Purchase User"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "role": "Branch Head"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "role": "Counter Sale"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "role": "Sales Manager"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "role": "Purchase Manager"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "email": 1,
+   "share": 1,
+   "role": "Stock User"
+  }
+ ],
+ "quick_entry": 1,
+ "search_fields": "document_name",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "document_name",
+ "track_changes": 1
+}

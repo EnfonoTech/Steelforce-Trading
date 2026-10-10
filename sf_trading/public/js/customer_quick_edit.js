@@ -152,15 +152,32 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 				fieldtype: "Data",
 				label: __("Commercial Registration Number"),
 				default: data.custom_commercial_registration_number,
+			},
+			{ fieldtype: "Section Break" },
+			{
+				fieldname: "payment_terms",
+				fieldtype: "Link",
+				options: "Payment Terms Template",
+				label: __("Payment Terms"),
+				default: data.payment_terms,
+				// a new B2B customer must carry them (sf_trading/party_documents.py)
+				mandatory_depends_on: (data.master_rules || {}).applies || data.is_company
+					? "eval:doc.custom_vat_registration_number"
+					: "",
 			}
 		);
 	}
+
+	// A new B2B customer's document must sit in its Supporting Documents grid, with its file; the
+	// upload below becomes that row.
+	const rules = data.master_rules || {};
+	const needs_row = rules.applies && !rules.has_document_row;
 
 	// Shown whenever nothing is attached yet -- covers BOTH missing_credit_customer_requirements'
 	// own attachment rule (GS Issue 13) and customer_override.validate's separate "a VAT number
 	// needs a document" rule, since both simply check whether any File is attached to this
 	// Customer. One upload here satisfies whichever (or both) of them applied.
-	if (!data.has_attachment) {
+	if (!data.has_attachment || needs_row) {
 		fields.push(
 			{ fieldtype: "Section Break", label: __("Attachment") },
 			{
@@ -168,7 +185,18 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 				fieldtype: "Attach",
 				label: __("Attachment (e.g. CR / VAT copy)"),
 				description: __("Needed if this customer is a credit customer, or has a VAT Registration Number."),
-			}
+				reqd: needs_row ? 1 : 0,
+			},
+			{
+				fieldname: "document_type",
+				fieldtype: "Link",
+				options: "Supporting Document Type",
+				label: __("Document Name"),
+				default: "VAT Certificate",
+				depends_on: "eval:doc.attachment",
+			},
+			{ fieldname: "document_number", fieldtype: "Data", label: __("Document #"), depends_on: "eval:doc.attachment" },
+			{ fieldname: "expiry_date", fieldtype: "Date", label: __("Expiry Date"), depends_on: "eval:doc.attachment" }
 		);
 	}
 

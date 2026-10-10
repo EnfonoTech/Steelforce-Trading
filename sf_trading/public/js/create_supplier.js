@@ -40,6 +40,18 @@ function sf_add_create_supplier_btn(frm) {
     $field.before($btn);
 }
 
+// the document's expiry is required when its Supporting Document Type validates expiry
+function sf_party_dialog_expiry_rule(d) {
+    var kind = d.get_value("document_type");
+    if (!kind) {
+        d.set_df_property("expiry_date", "reqd", 0);
+        return;
+    }
+    frappe.db.get_value("Supporting Document Type", kind, "validate_expiry").then(function (r) {
+        d.set_df_property("expiry_date", "reqd", r.message && r.message.validate_expiry ? 1 : 0);
+    });
+}
+
 function sf_open_create_supplier_dialog(frm) {
     var company = frm.doc.company || frappe.defaults.get_default("company");
 
@@ -122,6 +134,37 @@ function sf_open_create_supplier_dialog(frm) {
                     fieldtype: "Attach",
                     label: __("Document Attachment"),
                     reqd: 1,
+                },
+                {
+                    fieldname: "payment_terms",
+                    fieldtype: "Link",
+                    options: "Payment Terms Template",
+                    label: __("Payment Terms"),
+                    reqd: 1,
+                },
+                {
+                    fieldname: "document_type",
+                    fieldtype: "Link",
+                    options: "Supporting Document Type",
+                    label: __("Document Name"),
+                    default: "Commercial Registration",
+                    
+                    get_query: () => ({ filters: { disabled: 0, applies_to: ["in", ["Customer and Supplier", "Supplier"]] } }),
+                    onchange() {
+                        sf_party_dialog_expiry_rule(d);
+                    },
+                },
+                {
+                    fieldname: "document_number",
+                    fieldtype: "Data",
+                    label: __("Document #"),
+                    
+                },
+                {
+                    fieldname: "expiry_date",
+                    fieldtype: "Date",
+                    label: __("Expiry Date"),
+                    
                 },
                 {
                     fieldname: "allow_duplicate_vat",
@@ -297,6 +340,10 @@ function sf_open_create_supplier_dialog(frm) {
                             allow_duplicate_vat:          allow_dup,
                             duplicate_vat_reason:         allow_dup ? dup_reason : null,
                             attachment:                   values.attachment,
+                            payment_terms:                values.payment_terms,
+                            document_type:                values.document_type || null,
+                            document_number:              values.document_number || null,
+                            expiry_date:                  values.expiry_date || null,
                         },
                         callback: function (r) {
                             if (r.message) {
@@ -312,6 +359,7 @@ function sf_open_create_supplier_dialog(frm) {
         });
 
         d.show();
+        sf_party_dialog_expiry_rule(d);
         if (company_country) {
             d.set_value("country", company_country);
         }

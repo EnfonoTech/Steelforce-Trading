@@ -31,7 +31,9 @@
   "landed_cost_section",
   "landed_cost_require_on_lcv",
   "landed_cost_column_break",
-  "landed_cost_require_on_purchase"
+  "landed_cost_require_on_purchase",
+  "master_rules_section",
+  "master_rules_from"
  ],
  "fields": [
   {
@@ -210,12 +212,24 @@
    "fieldname": "landed_cost_require_on_purchase",
    "fieldtype": "Check",
    "label": "Valuation Charges on Purchase Invoice / Receipt Must Name Their Expense Entry"
+  },
+  {
+   "fieldname": "master_rules_section",
+   "fieldtype": "Section Break",
+   "label": "Customer and Supplier Masters",
+   "description": "Suppliers, and B2B customers (VAT Registration Number on file), created at or after the moment below must carry Payment Terms and at least one supporting document with its file attached; suppliers also a mobile number. Older masters are not blocked: the Master Data Completeness report lists what they still lack."
+  },
+  {
+   "fieldname": "master_rules_from",
+   "fieldtype": "Datetime",
+   "label": "New-Master Rules From",
+   "description": "Masters created at or after this moment are held to the rules. Blank switches them off."
   }
  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-10 14:00:00.000000",
+ "modified": "2026-10-11 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",
