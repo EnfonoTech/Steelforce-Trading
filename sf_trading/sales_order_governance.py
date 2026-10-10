@@ -70,7 +70,8 @@ def ensure_custom_fields():
 					"label": "Allow Cash Sales Without Credit Documents",
 					"fieldtype": "Check",
 					"default": "0",
-					"insert_after": "custom_supporting_documents",
+					# stays in Credit Approval; the documents grid has its own section on Settings
+					"insert_after": "custom_approval_status",
 					"description": (
 						"Lets this credit customer be invoiced in Cash mode while their credit "
 						"documents (2 contact numbers, an email address, an attachment) are still "

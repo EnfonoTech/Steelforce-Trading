@@ -2593,7 +2593,7 @@
   "length": 0,
   "link_filters": null,
   "mandatory_depends_on": null,
-  "modified": "2026-09-28 00:00:00.000000",
+  "modified": "2026-10-11 12:00:00.000000",
   "module": null,
   "no_copy": 0,
   "non_negative": 0,
@@ -2618,7 +2618,7 @@
   "fieldname": "custom_supporting_documents",
   "fieldtype": "Table",
   "label": "Supporting Documents",
-  "insert_after": "custom_approval_status",
+  "insert_after": "custom_supporting_documents_section",
   "name": "Customer-custom_supporting_documents"
  },
  {
@@ -2650,7 +2650,7 @@
   "length": 0,
   "link_filters": null,
   "mandatory_depends_on": null,
-  "modified": "2026-09-28 00:00:00.000000",
+  "modified": "2026-10-11 12:00:00.000000",
   "module": null,
   "no_copy": 0,
   "non_negative": 0,
@@ -2675,7 +2675,7 @@
   "fieldname": "custom_supporting_documents",
   "fieldtype": "Table",
   "label": "Supporting Documents",
-  "insert_after": "custom_disable_auto_payment",
+  "insert_after": "custom_supporting_documents_section",
   "name": "Supplier-custom_supporting_documents"
  },
  {
@@ -2791,5 +2791,37 @@
   "translatable": 0,
   "unique": 0,
   "width": null
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Custom Field",
+  "is_system_generated": 0,
+  "module": null,
+  "dt": "Customer",
+  "name": "Customer-custom_supporting_documents_section",
+  "fieldname": "custom_supporting_documents_section",
+  "fieldtype": "Section Break",
+  "label": null,
+  "insert_after": "disabled",
+  "collapsible": 0,
+  "modified": "2026-10-11 12:00:00.000000",
+  "creation": "2026-10-11 12:00:00.000000",
+  "idx": 0
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Custom Field",
+  "is_system_generated": 0,
+  "module": null,
+  "dt": "Supplier",
+  "name": "Supplier-custom_supporting_documents_section",
+  "fieldname": "custom_supporting_documents_section",
+  "fieldtype": "Section Break",
+  "label": null,
+  "insert_after": "column_break_59",
+  "collapsible": 0,
+  "modified": "2026-10-11 12:00:00.000000",
+  "creation": "2026-10-11 12:00:00.000000",
+  "idx": 0
  }
 ]

@@ -1109,6 +1109,9 @@ fixtures = [
 			"Customer-custom_approval_status",
 			"Customer-custom_supporting_documents",
 			"Supplier-custom_supporting_documents",
+			# their own full-width section at the end of each master's Settings tab
+			"Customer-custom_supporting_documents_section",
+			"Supplier-custom_supporting_documents_section",
 			# standardized Sales Return reason picker -- appends into the pre-existing
 			# Sales Invoice-custom_return_reason field, fixtured by whichever app already owns
 			# that field (not this one); see sf_trading/sales_return_reason.py
