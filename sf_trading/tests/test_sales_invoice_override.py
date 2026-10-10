@@ -146,14 +146,14 @@ class TestValidateDriverCashLimitBranchScope(FrappeTestCase):
 
 class TestDriverUncollectedTotal(FrappeTestCase):
 	def test_sums_outstanding_amount_for_the_driver(self):
-		with patch("sf_trading.api.sales_invoice_override.frappe.db.sql", return_value=[{"total": 1234.5}]) as sql:
+		with patch("sf_trading.api.sales_invoice_override.frappe.db.sql", return_value=[frappe._dict(total=1234.5)]) as sql:
 			total = sio._driver_uncollected_total("DRV-0001")
 		self.assertEqual(total, 1234.5)
 		args, _kwargs = sql.call_args
 		self.assertEqual(args[1], ["DRV-0001"])
 
 	def test_exclude_name_is_appended_as_a_query_param(self):
-		with patch("sf_trading.api.sales_invoice_override.frappe.db.sql", return_value=[{"total": 0}]) as sql:
+		with patch("sf_trading.api.sales_invoice_override.frappe.db.sql", return_value=[frappe._dict(total=0)]) as sql:
 			sio._driver_uncollected_total("DRV-0001", exclude_name="ACC-SINV-2026-00042")
 		args, _kwargs = sql.call_args
 		self.assertEqual(args[1], ["DRV-0001", "ACC-SINV-2026-00042"])
@@ -167,7 +167,7 @@ class TestDriverBranchSubLimit(FrappeTestCase):
 
 class TestDriverBranchUncollectedTotal(FrappeTestCase):
 	def test_sums_outstanding_amount_for_the_driver_at_that_branch(self):
-		with patch("sf_trading.api.sales_invoice_override.frappe.db.sql", return_value=[{"total": 250.0}]) as sql:
+		with patch("sf_trading.api.sales_invoice_override.frappe.db.sql", return_value=[frappe._dict(total=250.0)]) as sql:
 			total = sio._driver_branch_uncollected_total("DRV-0001", "Branch A")
 		self.assertEqual(total, 250.0)
 		args, _kwargs = sql.call_args
@@ -177,6 +177,8 @@ class TestDriverBranchUncollectedTotal(FrappeTestCase):
 class DriverStub:
 	def __init__(self, **fields):
 		self.doctype = "Driver"
+		# a real Driver always carries its child table, empty or not
+		self.custom_branch_cash_limits = []
 		self.__dict__.update(fields)
 
 	def get(self, key, default=None):

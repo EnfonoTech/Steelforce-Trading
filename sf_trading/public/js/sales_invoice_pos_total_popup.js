@@ -32,7 +32,8 @@ frappe.ui.form.on("Sales Invoice", {
 	setup: function (frm) {
 		frm.set_query("custom_driver", function (doc) {
 			if (doc.branch) {
-				return { filters: { custom_branch: doc.branch } };
+				// delivery people whose Branches table names this invoice's branch
+				return { filters: [["Driver Branch Cash Limit", "branch", "=", doc.branch]] };
 			}
 			return {};
 		});

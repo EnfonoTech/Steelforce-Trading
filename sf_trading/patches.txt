@@ -15,3 +15,4 @@ sf_trading.patches.v0_1.set_open_items_cutover
 sf_trading.patches.backfill_party_contact_mobile_no
 sf_trading.patches.backfill_mobile_no_from_cache
 sf_trading.patches.v0_1.seed_sales_return_reasons
+sf_trading.patches.v0_1.driver_branches_table

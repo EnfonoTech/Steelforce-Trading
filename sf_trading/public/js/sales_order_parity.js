@@ -11,7 +11,8 @@
 frappe.ui.form.on("Sales Order", {
 	setup(frm) {
 		frm.set_query("custom_driver", function (doc) {
-			if (doc.branch) return { filters: { custom_branch: doc.branch } };
+			// delivery people whose Branches table names this order's branch
+			if (doc.branch) return { filters: [["Driver Branch Cash Limit", "branch", "=", doc.branch]] };
 			return {};
 		});
 	},
@@ -29,19 +30,23 @@ frappe.ui.form.on("Sales Order", {
 	},
 
 	branch(frm) {
-		// the driver list is branch-scoped, so a driver from the old branch has to go
-		if (frm.doc.custom_driver) {
-			frappe.db.get_value("Driver", frm.doc.custom_driver, "custom_branch").then(function (r) {
-				const driver_branch = r && r.message && r.message.custom_branch;
-				if (driver_branch && frm.doc.branch && driver_branch !== frm.doc.branch) {
+		// the driver list is branch-scoped, so a driver who does not serve the new branch has to go.
+		// A driver with no branches at all is left alone -- the server does not check them either.
+		if (!frm.doc.custom_driver || !frm.doc.branch) return;
+		frappe.call({
+			method: "sf_trading.driver_branches.get_driver_branches",
+			args: { driver: frm.doc.custom_driver },
+			callback(r) {
+				const served = (r && r.message) || [];
+				if (served.length && !served.includes(frm.doc.branch)) {
 					frm.set_value("custom_driver", null);
 					frappe.show_alert(
-						{ message: __("Delivery Person cleared — they belong to another branch."), indicator: "orange" },
+						{ message: __("Delivery Person cleared — they do not deliver for this branch."), indicator: "orange" },
 						4
 					);
 				}
-			});
-		}
+			},
+		});
 	},
 });
 

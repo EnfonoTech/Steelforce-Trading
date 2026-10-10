@@ -280,10 +280,13 @@ permission_query_conditions = {
 	"Customer": "sf_trading.customer_permission.permission_query_conditions_for_customer",
 	# a ticket is seen by the people on it, and by Ticket / System Managers
 	"Ticket": "sf_trading.ticket.get_permission_query_conditions",
+	# a branch user sees the delivery people who serve one of their branches (the Branches table)
+	"Driver": "sf_trading.driver_branches.permission_query_conditions",
 }
 
 has_permission = {
 	"Ticket": "sf_trading.ticket.has_permission",
+	"Driver": "sf_trading.driver_branches.has_permission",
 }
 
 # DocType Class
@@ -422,9 +425,13 @@ doc_events = {
 		"after_insert": "sf_trading.supplier_validation.remind_attachment",
 	},
 	"Driver": {
-		# GS Issue 19: keep every branch's own Cash Limit sub-allocation from adding up to more
-		# than this driver's own overall Cash Collection Limit
-		"validate": "sf_trading.api.sales_invoice_override.validate_driver_branch_cash_limit_allocation",
+		"validate": [
+			# GS Issue 19: keep every branch's own Cash Limit sub-allocation from adding up to more
+			# than this driver's own overall Cash Collection Limit
+			"sf_trading.api.sales_invoice_override.validate_driver_branch_cash_limit_allocation",
+			# the Branches table: one row per branch, and a branch user adds only their own
+			"sf_trading.driver_branches.validate_branches",
+		],
 	},
 	"Sales Invoice": {
 		"before_validate": [
@@ -446,6 +453,8 @@ doc_events = {
 			"sf_trading.api.sales_invoice_override.validate_driver_payment",
 			# GS Issue 19: an amount cap on top of the days-only check above
 			"sf_trading.api.sales_invoice_override.validate_driver_cash_limit",
+			# the delivery person must serve this invoice's branch (their Branches table)
+			"sf_trading.driver_branches.validate_driver_serves_branch",
 			# a late return cannot be SAVED, so it cannot be parked in drafts either
 			"sf_trading.sales_return.validate_return_window",
 			_BPL_GUARD,
@@ -498,6 +507,7 @@ doc_events = {
 			_BPL_GUARD,
 			"sf_trading.api.sales_invoice_override.validate_driver_payment",
 			"sf_trading.api.sales_invoice_override.validate_driver_cash_limit",
+			"sf_trading.driver_branches.validate_driver_serves_branch",
 		],
 		# before_submit, not validate: a draft order can still be saved while a customer's
 		# contact details are being fixed elsewhere -- only SUBMIT is refused.

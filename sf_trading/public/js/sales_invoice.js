@@ -712,7 +712,8 @@ function sf_trading_open_invoice_print(frm, format_override) {
 frappe.ui.form.on("Sales Invoice", {
 	setup: function(frm) {
 		frm.set_query("custom_driver", function(doc) {
-			if (doc.branch) return { filters: { custom_branch: doc.branch } };
+			// delivery people whose Branches table names this invoice's branch
+			if (doc.branch) return { filters: [["Driver Branch Cash Limit", "branch", "=", doc.branch]] };
 			return {};
 		});
 	},
