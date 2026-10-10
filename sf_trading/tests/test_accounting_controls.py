@@ -88,7 +88,14 @@ class TestLandedCostControls(FrappeTestCase):
 	def _validate(self, doc, booked=None, taken=None, expense=None):
 		expense = expense or frappe._dict(docstatus=1, company="SF")
 		booked = booked if booked is not None else {FREIGHT: 100}
-		with patch.object(lc.frappe.db, "get_value", return_value=expense), patch.object(
+		real = frappe.db.get_value
+
+		def get_value(doctype, *args, **kwargs):
+			# answer only for the expense entry; everything else (system settings, meta) is real --
+			# a blanket patch here poisons cached settings for every test that follows
+			return expense if doctype in lc.EXPENSE_DOCTYPES else real(doctype, *args, **kwargs)
+
+		with patch.object(lc.frappe.db, "get_value", side_effect=get_value), patch.object(
 			lc, "booked", side_effect=lambda dt, name, account=None: {a: v for a, v in booked.items() if not account or a == account}
 		), patch.object(lc, "absorbed", return_value=taken or frappe._dict(submitted=0.0, draft=0.0, documents=[])):
 			lc.validate_charges(doc)

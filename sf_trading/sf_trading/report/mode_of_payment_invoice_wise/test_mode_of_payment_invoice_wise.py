@@ -218,7 +218,7 @@ class TestModeOfPaymentInvoiceWise(FrappeTestCase):
     def _credit_note_leg(self, invoice, amount, payment_class, label):
         return {
             "invoice": invoice, "voucher_type": "Sales Invoice", "voucher_no": "OTHER",
-            "payment_date": nowdate(), "mode_of_payment": None, "amount": amount, "account": None,
+            "payment_date": getdate(nowdate()), "mode_of_payment": None, "amount": amount, "account": None,
             "reference_no": None, "docstatus": 1, "source": "Credit Note", "mode_missing": 0,
             "_resolved": 1, "mode_label": label, "summary_label": label, "payment_class": payment_class,
         }
