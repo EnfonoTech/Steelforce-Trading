@@ -80,6 +80,10 @@ def capture_cancellation_reason(doc, _method=None):
 	rejected request clears the remark, so the next request -- or a later direct cancel -- has to
 	give its own.
 	"""
+	if doc.flags.get("pm_workflow_action"):
+		# runs before the save's own validation: an order raised before a field became mandatory
+		# (Sales Person, say) must still be able to ask for, and get, its cancellation
+		doc.flags.ignore_mandatory = True
 	before = doc.get_doc_before_save()
 	was = before.get("workflow_state") if before else None
 	now = doc.get("workflow_state")

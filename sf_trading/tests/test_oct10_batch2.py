@@ -164,6 +164,12 @@ class TestApprovalRouting(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			routing.capture_cancellation_reason(doc)
 
+	def test_a_workflow_move_does_not_trip_over_unrelated_mandatory_fields(self):
+		doc, _values = self._order(routing.SUBMITTED, routing.REQUESTED, comment="duplicate")
+		doc.flags.pm_workflow_action = routing.REQUEST
+		routing.capture_cancellation_reason(doc)
+		self.assertTrue(doc.flags.ignore_mandatory)
+
 	def test_a_rejected_request_clears_the_reason(self):
 		doc, values = self._order(routing.REQUESTED, routing.SUBMITTED, remark="old reason")
 		routing.capture_cancellation_reason(doc)
@@ -187,7 +193,7 @@ class TestApprovalRouting(FrappeTestCase):
 class TestColleagueApprovals(FrappeTestCase):
 	def test_colleague_feed_answers(self):
 		try:
-			from permission_manager.api import approvals
+			from permission_manager.permission_manager.api import approvals
 		except ImportError:
 			self.skipTest("permission_manager not installed")
 		if not hasattr(approvals, "get_colleague_approvals"):
