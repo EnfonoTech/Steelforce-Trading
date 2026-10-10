@@ -18,7 +18,7 @@ from __future__ import annotations
 import frappe
 from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
-from frappe.utils import cstr
+from frappe.utils import cint, cstr
 
 from sf_trading.party_contact_cache import party_email_addresses, party_phone_numbers
 
@@ -37,11 +37,18 @@ PENDING_SO_CAP = 2
 
 _OPEN_STATUSES = ("To Deliver and Bill", "To Bill", "To Deliver")
 
+#: Customer checkbox: a credit customer whose credit documents are still missing may buy for CASH.
+#: Credit (and Cheque, which is post-dated credit here) stays refused until the documents are in.
+CASH_OVERRIDE_FIELD = "custom_allow_cash_without_credit_documents"
+CASH_MODE = "Cash"
+#: who may switch it -- the same people who decide a customer's credit approval
+CASH_OVERRIDE_ROLES = ("Credit Approval Officer", "Accounts Manager", "System Manager")
+
 
 def ensure_custom_fields():
-	"""after_migrate: create custom_cancellation_remark if it is not already there.
+	"""after_migrate: create custom_cancellation_remark and the cash-sale override if missing.
 
-	allow_on_submit -- both writers of this field (cancel_sales_order_with_remark and the
+	allow_on_submit -- both writers of the remark (cancel_sales_order_with_remark and the
 	client-side before_cancel event) act on a Sales Order that is already submitted.
 	"""
 	create_custom_fields(
@@ -56,10 +63,47 @@ def ensure_custom_fields():
 					"read_only": 1,
 					"no_copy": 1,
 				}
-			]
+			],
+			"Customer": [
+				{
+					"fieldname": CASH_OVERRIDE_FIELD,
+					"label": "Allow Cash Sales Without Credit Documents",
+					"fieldtype": "Check",
+					"default": "0",
+					"insert_after": "custom_supporting_documents",
+					"description": (
+						"Lets this credit customer be invoiced in Cash mode while their credit "
+						"documents (2 contact numbers, an email address, an attachment) are still "
+						"missing. Credit and Cheque sales stay refused until they are complete. Only a "
+						"Credit Approval Officer, Accounts Manager or System Manager can change this."
+					),
+				}
+			],
 		},
 		ignore_validate=True,
 		update=True,
+	)
+
+
+def cash_sale_overrides_credit_documents(doc) -> bool:
+	"""A Cash-mode document for a customer whose cash-sale override is ticked."""
+	if (doc.get("custom_payment_mode") or "").strip() != CASH_MODE:
+		return False
+	return bool(cint(frappe.db.get_value("Customer", doc.customer, CASH_OVERRIDE_FIELD)))
+
+
+def validate_cash_override_change(doc, _method=None):
+	"""Customer validate: only a credit approver may switch the cash-sale override, either way."""
+	before = doc.get_doc_before_save()
+	was = cint(before.get(CASH_OVERRIDE_FIELD)) if before else 0
+	if cint(doc.get(CASH_OVERRIDE_FIELD)) == was:
+		return
+	if frappe.session.user == "Administrator" or set(frappe.get_roles()) & set(CASH_OVERRIDE_ROLES):
+		return
+	roles = " / ".join(_(role) for role in CASH_OVERRIDE_ROLES)
+	frappe.throw(
+		_("Only a {0} can change Allow Cash Sales Without Credit Documents.").format(roles),
+		title=_("Not Permitted"),
 	)
 
 
@@ -135,6 +179,8 @@ def validate_credit_customer_requirements_at_transaction(doc, _method=None):
 	an attachment on file (GS Issue 13's field/validation half; the approval-workflow half -- who
 	is "credit dept" vs "accounts" -- is still blocked on the client naming those roles)."""
 	if not doc.get("customer"):
+		return
+	if cash_sale_overrides_credit_documents(doc):
 		return
 	missing = missing_credit_customer_requirements(doc.customer)
 	if missing:

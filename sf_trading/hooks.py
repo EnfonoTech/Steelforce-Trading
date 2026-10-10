@@ -231,8 +231,10 @@ after_migrate = [
 	# a secondary Cost Center / Warehouse link, seeded from whoever raised the document, must not
 	# decide who may SEE it -- every parent link field gates the list
 	"sf_trading.user_permission_fields.apply",
-	# GS Issue 17: the Sales Order cancellation-remark field
+	# GS Issue 17: the Sales Order cancellation-remark field, and the Customer cash-sale override
 	"sf_trading.sales_order_governance.ensure_custom_fields",
+	# the Purchase Order cancellation-remark field
+	"sf_trading.purchase_order_cancel.ensure_custom_fields",
 	# GS Issue 11: cached phone field on Customer/Supplier
 	"sf_trading.party_contact_cache.ensure_custom_fields",
 	# GS Issue 25: PDC Rejected-status field
@@ -404,6 +406,8 @@ doc_events = {
 			# more than the customer's own company-wide Credit Limit
 			"sf_trading.customer_permission.validate_branch_credit_limit_allocation",
 			"sf_trading.party_accounts.apply_title_case",
+			# only a credit approver may switch "Allow Cash Sales Without Credit Documents"
+			"sf_trading.sales_order_governance.validate_cash_override_change",
 		],
 		"before_save": [
 			"sf_trading.customer_permission.auto_add_branch_on_credit_limit",
@@ -577,6 +581,8 @@ doc_events = {
 	"Purchase Order": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
 		"validate": [_LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE],
+		# a remark is mandatory, checked before docstatus flips -- see purchase_order_cancel.py
+		"before_cancel": "sf_trading.purchase_order_cancel.before_cancel_require_remark",
 	},
 	"Purchase Receipt": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],

@@ -1,6 +1,6 @@
 import frappe
 from frappe import _
-from frappe.utils import flt
+from frappe.utils import cint, flt, get_link_to_form
 
 from erpnext.accounts.doctype.purchase_invoice.purchase_invoice import PurchaseInvoice
 from erpnext.controllers.taxes_and_totals import calculate_taxes_and_totals
@@ -68,7 +68,51 @@ class SFPurchaseTaxesAndTotals(calculate_taxes_and_totals):
 		self.calculate_write_off_amount()
 
 
+def is_service_item(item_code) -> bool:
+	"""A line that buys a service: not stocked, and not a fixed asset.
+
+	Fixed assets are left needing their order -- they are not stock either, but they are a
+	capital purchase this site approves through the Purchase Order workflow like goods.
+	"""
+	if not item_code:
+		return False
+	is_stock_item, is_fixed_asset = frappe.get_cached_value(
+		"Item", item_code, ["is_stock_item", "is_fixed_asset"]
+	) or (1, 0)
+	return not cint(is_stock_item) and not cint(is_fixed_asset)
+
+
 class CustomPurchaseInvoice(PurchaseInvoice):
+	def po_required(self):
+		"""Buying Settings' "Purchase Order Required", for goods and assets only.
+
+		Core's own check (erpnext purchase_invoice.py `po_required`) demands an order for every
+		line once the setting is Yes -- switched on here 2026-10-01 -- so a bill for a service
+		(transport, repairs, rent) could not be booked without first raising an order nobody
+		needed. A service line passes; a stock or fixed-asset line still needs its order, with
+		core's own message and the same supplier-level and internal-transfer exemptions.
+		"""
+		if (
+			frappe.db.get_single_value("Buying Settings", "po_required") != "Yes"
+			or self.is_internal_transfer()
+			or frappe.db.get_value(
+				"Supplier", self.supplier, "allow_purchase_invoice_creation_without_purchase_order"
+			)
+		):
+			return
+
+		for row in self.get("items"):
+			if row.purchase_order or is_service_item(row.item_code):
+				continue
+			settings_link = get_link_to_form("Buying Settings", "Buying Settings", "Buying Settings")
+			msg = _("Purchase Order Required for item {}").format(frappe.bold(row.item_code))
+			msg += "<br><br>"
+			msg += _("To submit the invoice without purchase order please set {0} as {1} in {2}").format(
+				frappe.bold(_("Purchase Order Required")), frappe.bold(_("No")), settings_link
+			)
+			msg += "<br>" + _("Service items (not stocked, not fixed assets) need no Purchase Order.")
+			frappe.throw(msg, title=_("Mandatory Purchase Order"))
+
 	def calculate_taxes_and_totals(self):
 		"""Run core's calculation through the subclassed calculator.
 
