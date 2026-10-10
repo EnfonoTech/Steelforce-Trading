@@ -41,6 +41,10 @@ SR_PURPOSE = "Stock Reconciliation"
 SR_APPROVER_ROLE = "Inventory Head"
 SR_PREPARER_ROLES = ("Stock User", "Stock Manager")
 
+# indicator colour for a Workflow State this module has to create
+STATE_STYLES = {SUBMITTED: "Primary", REQUESTED: "Warning", CANCELLED: "Danger", "Pending": "Warning",
+	"Approved": "Success", "Rejected": "Danger"}
+
 
 def _active(doctype) -> bool:
 	return bool(frappe.db.exists("PM Workflow", {"document_type": doctype, "is_active": 1}))
@@ -180,6 +184,17 @@ def ensure_workflows():
 		for role in {t["allowed"] for t in definition["transitions"]} | {s["allow_edit"] for s in definition["states"]}:
 			if not frappe.db.exists("Role", role):
 				frappe.get_doc({"doctype": "Role", "role_name": role, "desk_access": 1}).insert(ignore_permissions=True)
+		# states and actions are links to the shared masters, which a site only has for the
+		# names someone has already used
+		for state in {s["state"] for s in definition["states"]}:
+			if not frappe.db.exists("Workflow State", state):
+				frappe.get_doc({"doctype": "Workflow State", "workflow_state_name": state,
+					"style": STATE_STYLES.get(state, "")}).insert(ignore_permissions=True)
+		for action in {t["action"] for t in definition["transitions"]}:
+			if not frappe.db.exists("Workflow Action Master", action):
+				frappe.get_doc({"doctype": "Workflow Action Master", "workflow_action_name": action}).insert(
+					ignore_permissions=True
+				)
 		frappe.get_doc(definition).insert(ignore_permissions=True)
 		created.append(definition["workflow_name"])
 	return created
