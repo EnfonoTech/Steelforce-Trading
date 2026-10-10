@@ -117,7 +117,10 @@ doctype_js = {
 		"public/js/purchase_tax_template.js",
 		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
 		"public/js/document_trail.js",
+		# a Valuation charge names the expense entry that booked it
+		"public/js/landed_cost.js",
 	],
+	"Landed Cost Voucher": "public/js/landed_cost.js",
 	# Payment Advice sits in the Create menu beside Payment Request, under the same conditions
 	"Purchase Order":     [
 		"public/js/purchase_tax_template.js",
@@ -130,6 +133,8 @@ doctype_js = {
 		"public/js/payment_advice_form_action.js",
 		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
 		"public/js/document_trail.js",
+		# a Valuation charge names the expense entry that booked it
+		"public/js/landed_cost.js",
 	],
 	# cancelling a payment must not demand the advice behind it be cancelled as well;
 	# and a cleared post-dated cheque is banked from the cheque's own entry
@@ -245,6 +250,8 @@ after_migrate = [
 	"sf_trading.stock_reconciliation_account.ensure_custom_fields",
 	# support tickets: the Tickets workspace, and Help -> Raise a Support Ticket
 	"sf_trading.ticket.setup",
+	# landed cost charge rows name the expense entry that booked them
+	"sf_trading.landed_cost.ensure_custom_fields",
 ]
 
 # Uninstallation
@@ -585,9 +592,12 @@ doc_events = {
 			_LH_HOOK,
 			_BPL_GUARD,
 			_SUPPLIER_GATE,
+			"sf_trading.landed_cost.validate_charges",
 		],
 		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
 		"on_submit": "sf_trading.api.purchase_return.auto_create_pr_return",
+		# Valuation charges are landed costs: held to the expense entry they name
+		"before_submit": "sf_trading.landed_cost.require_links",
 	},
 	"Purchase Order": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
@@ -597,7 +607,18 @@ doc_events = {
 	},
 	"Purchase Receipt": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_BRANCH_HOOK, _LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE],
+		"validate": [_BRANCH_HOOK, _LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE, "sf_trading.landed_cost.validate_charges"],
+		"before_submit": "sf_trading.landed_cost.require_links",
+	},
+	# every charge names the expense entry it absorbs, and may not take more than it booked
+	"Landed Cost Voucher": {
+		"validate": "sf_trading.landed_cost.validate_charges",
+		"before_submit": "sf_trading.landed_cost.require_links",
+	},
+	# any entry the supporting-document rules cover, posted with nothing attached, says it is now
+	# on the Pending Supporting Documents report (rule check first, so other doctypes cost nothing)
+	"*": {
+		"on_submit": "sf_trading.supporting_documents.remind_on_submit",
 	},
 	"Supplier Quotation": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],

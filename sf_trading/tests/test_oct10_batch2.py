@@ -171,7 +171,7 @@ class TestApprovalRouting(FrappeTestCase):
 
 	def test_a_count_needs_its_sheet_attached(self):
 		doc = frappe._dict(doctype="Stock Reconciliation", name="MAT-RECO-TEST-NONE", purpose="Stock Reconciliation")
-		with patch.object(frappe.session, "user", "someone@example.com"):
+		with patch.object(routing.frappe, "session", frappe._dict(user="someone@example.com")):
 			with self.assertRaises(frappe.ValidationError):
 				routing.require_attachment(doc)
 		routing.require_attachment(frappe._dict(doc, purpose="Opening Stock"))

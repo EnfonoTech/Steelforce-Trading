@@ -34,10 +34,9 @@ class TestPaymentAdvice(FrappeTestCase):
         self.assertEqual(get_payment_type("Supplier"), "Pay")
         self.assertEqual(get_payment_type("Customer"), "Receive")
 
-    def test_payment_type_rejects_employee(self):
-        # party_type offers only Supplier and Customer; Employee was never wired up
-        with self.assertRaises(frappe.ValidationError):
-            get_payment_type("Employee")
+    def test_employee_is_paid_like_a_supplier(self):
+        # PAY_PARTY_TYPES: an Employee advice pays the HR documents another app registers
+        self.assertEqual(get_payment_type("Employee"), "Pay")
 
     def test_payment_type_rejects_unknown_party(self):
         with self.assertRaises(frappe.ValidationError):
@@ -131,11 +130,12 @@ class TestPaymentAdvice(FrappeTestCase):
         with self.assertRaises(frappe.ValidationError):
             advice.validate_payment_amount()
 
-    def test_payment_amount_cannot_exceed_payable(self):
+    def test_payment_amount_is_trimmed_to_the_payable(self):
+        # validate_payment_amount trims (and reports) rather than refusing the save
         advice = self._advice([100], 250)
         advice.compute_totals()
-        with self.assertRaises(frappe.ValidationError):
-            advice.validate_payment_amount()
+        advice.validate_payment_amount()
+        self.assertEqual(flt(advice.payment_amount), 100.0)
 
     def test_status_lifecycle(self):
         advice = self._advice([100], 100)

@@ -206,10 +206,13 @@ def money_rows(filters, accounts, from_date, to_date) -> list:
 
 def wanted(row, filters) -> bool:
 	direction = filters.get("direction")
-	if direction == "Money In" and not flt(row.money_in):
-		return False
-	if direction == "Money Out" and not flt(row.money_out):
-		return False
+	if direction in ("Money In", "Money Out"):
+		# a posting can carry both a debit and a credit (merged GL rows): it is money in or out by
+		# its net, and only that side is shown
+		net = flt(flt(row.money_in) - flt(row.money_out), 3)
+		if (direction == "Money In" and net <= 0) or (direction == "Money Out" and net >= 0):
+			return False
+		row.money_in, row.money_out = (net, 0.0) if net > 0 else (0.0, -net)
 	if filters.get("category") and row.category != filters.category:
 		return False
 	if filters.get("party_type") and row.counter_party_type != filters.party_type:

@@ -12,7 +12,7 @@ Two halves:
 
 import frappe
 from frappe.tests.utils import FrappeTestCase
-from frappe.utils import flt, get_first_day, nowdate
+from frappe.utils import getdate, flt, get_first_day, nowdate
 
 from sf_trading.sf_trading.report.mode_of_payment_invoice_wise.mode_of_payment_invoice_wise import (
     CLASS_ADJUSTMENT,
@@ -55,7 +55,8 @@ class TestModeOfPaymentInvoiceWise(FrappeTestCase):
             "to_date": nowdate(),
         }
         base.update(filters)
-        return execute(base)
+        # execute also returns a message, chart and summary; these tests read columns and rows
+        return execute(base)[:2]
 
     # ---------------------------------------------------------------- classification
 
@@ -127,7 +128,7 @@ class TestModeOfPaymentInvoiceWise(FrappeTestCase):
             "invoice": "SI-TEST-0001",
             "voucher_type": "Payment Entry",
             "voucher_no": "PE-TEST-" + str(amount),
-            "payment_date": nowdate(),
+            "payment_date": getdate(nowdate()),
             "mode_of_payment": mode,
             "amount": amount,
             "account": None,

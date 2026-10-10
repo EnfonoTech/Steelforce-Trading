@@ -64,8 +64,8 @@ class TestPaymentAdviceRouting(FrappeTestCase):
         advice = _advice([{"reference_doctype": "Purchase Order", "reference_record": order}])
         self.assertEqual(compute_approval_route(advice), ROUTE_ACCOUNTANT)
 
-    def test_one_order_skips_the_accountant_route_even_when_large(self):
-        """The order rule is about how many, not how much."""
+    def test_one_large_order_goes_to_the_purchase_manager(self):
+        """A single order over the limit needs the Purchase Manager (compute_approval_route)."""
         order = frappe.db.get_value("Purchase Order", {"docstatus": 1}, "name")
         if not order:
             self.skipTest("no submitted Purchase Order on this site")
@@ -73,7 +73,7 @@ class TestPaymentAdviceRouting(FrappeTestCase):
             [{"reference_doctype": "Purchase Order", "reference_record": order}],
             payment_amount=FINANCE_APPROVAL_LIMIT * 100,
         )
-        self.assertEqual(compute_approval_route(advice), ROUTE_ACCOUNTANT)
+        self.assertEqual(compute_approval_route(advice), ROUTE_PURCHASE_MANAGER)
 
     def test_an_overdue_invoice_goes_to_ho_accounts(self):
         invoice = _invoice(overdue=True)

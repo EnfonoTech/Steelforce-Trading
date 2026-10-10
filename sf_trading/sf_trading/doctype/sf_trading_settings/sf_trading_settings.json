@@ -22,7 +22,16 @@
   "document_expiry_before_days",
   "document_expiry_after_days",
   "supplier_validation_section",
-  "enforce_supplier_completeness"
+  "enforce_supplier_completeness",
+  "supporting_documents_section",
+  "supporting_document_rules",
+  "supporting_documents_column_break",
+  "supporting_documents_from",
+  "supporting_document_alert",
+  "landed_cost_section",
+  "landed_cost_require_on_lcv",
+  "landed_cost_column_break",
+  "landed_cost_require_on_purchase"
  ],
  "fields": [
   {
@@ -69,7 +78,7 @@
   },
   {
    "default": "0",
-   "description": "Send Sales Invoice returns through the PM Workflow for Sales Invoice instead of letting them be submitted directly. While this is on, that workflow governs returns only \u2014 ordinary invoices keep their own Submit button.",
+   "description": "Send Sales Invoice returns through the PM Workflow for Sales Invoice instead of letting them be submitted directly. While this is on, that workflow governs returns only — ordinary invoices keep their own Submit button.",
    "fieldname": "si_return_approval_enabled",
    "fieldtype": "Check",
    "label": "Sales Return Approval Enabled"
@@ -150,12 +159,63 @@
    "fieldname": "enforce_supplier_completeness",
    "fieldtype": "Check",
    "label": "Enforce Supplier Completeness"
+  },
+  {
+   "fieldname": "supporting_documents_section",
+   "fieldtype": "Section Break",
+   "label": "Supporting Documents",
+   "description": "Submitted entries of these types with nothing attached are listed on the Pending Supporting Documents report until a file is attached. With no rows: Journal Entries, Payment Entries (Pay), Purchase Invoices, Landed Cost Vouchers and Expense Claims."
+  },
+  {
+   "fieldname": "supporting_document_rules",
+   "fieldtype": "Table",
+   "label": "Entries That Need a Supporting Document",
+   "options": "SF Supporting Document Rule"
+  },
+  {
+   "fieldname": "supporting_documents_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "supporting_documents_from",
+   "fieldtype": "Date",
+   "label": "Track From",
+   "description": "Entries posted before this date are never listed (leave blank for all)."
+  },
+  {
+   "default": "1",
+   "fieldname": "supporting_document_alert",
+   "fieldtype": "Check",
+   "label": "Remind on Submit",
+   "description": "Tell the person posting an entry without a document that it is now on the list."
+  },
+  {
+   "fieldname": "landed_cost_section",
+   "fieldtype": "Section Break",
+   "label": "Landed Costs",
+   "description": "Each landed cost charge names the expense entry (Purchase Invoice, Journal Entry or Payment Entry) that booked it, and may not take more than that entry booked to the same account."
+  },
+  {
+   "default": "1",
+   "fieldname": "landed_cost_require_on_lcv",
+   "fieldtype": "Check",
+   "label": "Landed Cost Voucher Charges Must Name Their Expense Entry"
+  },
+  {
+   "fieldname": "landed_cost_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "landed_cost_require_on_purchase",
+   "fieldtype": "Check",
+   "label": "Valuation Charges on Purchase Invoice / Receipt Must Name Their Expense Entry"
   }
  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-08-24 15:00:00.000000",
+ "modified": "2026-10-10 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",

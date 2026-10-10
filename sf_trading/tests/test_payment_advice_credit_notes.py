@@ -14,6 +14,21 @@ import sf_trading.sf_trading.doctype.payment_advice.payment_advice as pa
 PI = "Purchase Invoice"
 
 
+def _values(answers):
+	"""A get_value answering {(doctype, fieldname): value} and asking the database for everything
+	else -- meta and controller lookups go through get_value too. Build it before patching."""
+	real = frappe.db.get_value
+
+	def get_value(doctype, *args, **kwargs):
+		field = args[1] if len(args) > 1 else kwargs.get("fieldname")
+		for (dt, fieldname), value in answers.items():
+			if dt == doctype and (fieldname is None or fieldname == field):
+				return value
+		return real(doctype, *args, **kwargs)
+
+	return get_value
+
+
 class TestCreditNotes(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
@@ -86,8 +101,8 @@ class TestCreditNotes(FrappeTestCase):
 			{"voucher_type": "Purchase Order", "voucher_no": "PO-NEG", "invoice_amount": 10, "outstanding_amount": -1,
 				"posting_date": "2026-08-01"},
 		]
-		with patch.object(frappe.db, "get_value", return_value=frappe._dict()):
-			rows = pa.shape_reference_rows(vouchers, from_amount=100)
+		# the names are made up, so the cost centre / status lookup simply finds nothing
+		rows = pa.shape_reference_rows(vouchers, from_amount=100)
 		self.assertEqual([r["reference_record"] for r in rows], ["PI-1", "PI-RET"])
 		self.assertEqual(rows[1]["net_payable_amount"], -65)
 
@@ -99,7 +114,7 @@ class TestCreditNotes(FrappeTestCase):
 		with patch.object(pa, "resolve_party_account", return_value="Creditors"), patch.object(
 			pa, "get_company_account", return_value="Bank"
 		), patch("erpnext.controllers.accounts_controller.get_supplier_block_status", return_value={}), patch.object(
-			frappe.db, "get_value", side_effect=lambda *a, **k: -65 if a[-1] == "outstanding_amount" else "BHD"
+			frappe.db, "get_value", side_effect=_values({(PI, "outstanding_amount"): -65, ("Account", None): "BHD"})
 		), patch.object(pa, "get_company_currency", return_value="BHD"):
 			pe = pa.build_payment_entry(advice)
 		self.assertEqual([flt(r.allocated_amount) for r in pe.references], [500, -65])
@@ -110,7 +125,7 @@ class TestCreditNotes(FrappeTestCase):
 		advice.update({"party": "SUP-X", "name": "PA-TEST"})
 		advice.payment_advice_reference[0].allocated_amount = 500
 		advice.payment_advice_reference[1].allocated_amount = -65
-		with patch.object(frappe.db, "get_value", return_value=-20):
+		with patch.object(frappe.db, "get_value", side_effect=_values({(PI, "outstanding_amount"): -20})):
 			with self.assertRaises(frappe.ValidationError) as caught:
 				pa.build_payment_entry(advice)
 		self.assertIn("PI-1", str(caught.exception))

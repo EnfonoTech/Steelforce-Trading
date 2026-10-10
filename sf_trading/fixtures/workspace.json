@@ -436,7 +436,7 @@
  },
  {
   "charts": [],
-  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Credit &amp; Collections</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Branch-wise Credit Outstanding\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivery Person Payment Pending\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Cash Flow Detail\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Item-wise Cash Flow\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"PDC Report\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Mode of Payment Invoice Wise\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Receivables\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cash Flow\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cheques & Payments\", \"col\": 4}}]",
+  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Credit &amp; Collections</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Branch-wise Credit Outstanding\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivery Person Payment Pending\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Cash Flow Detail\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Item-wise Cash Flow\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"PDC Report\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Mode of Payment Invoice Wise\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Pending Supporting Documents\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Landed Cost Reconciliation\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Receivables\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cash Flow\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cheques & Payments\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Accounting Controls\", \"col\": 4}}]",
   "creation": "2026-10-10 12:00:00.000000",
   "docstatus": 0,
   "doctype": "Workspace",
@@ -602,9 +602,69 @@
     "link_type": "DocType",
     "onboard": 0,
     "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 14,
+    "is_query_report": 0,
+    "label": "Accounting Controls",
+    "link_count": 4,
+    "link_to": null,
+    "link_type": null,
+    "onboard": 0,
+    "type": "Card Break"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 15,
+    "is_query_report": 1,
+    "label": "Pending Supporting Documents",
+    "link_count": 0,
+    "link_to": "Pending Supporting Documents",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 16,
+    "is_query_report": 1,
+    "label": "Landed Cost Reconciliation",
+    "link_count": 0,
+    "link_to": "Landed Cost Reconciliation",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 17,
+    "is_query_report": 0,
+    "label": "Landed Cost Voucher",
+    "link_count": 0,
+    "link_to": "Landed Cost Voucher",
+    "link_type": "DocType",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 18,
+    "is_query_report": 0,
+    "label": "SF Trading Settings",
+    "link_count": 0,
+    "link_to": "SF Trading Settings",
+    "link_type": "DocType",
+    "onboard": 0,
+    "type": "Link"
    }
   ],
-  "modified": "2026-10-10 12:00:00.000000",
+  "modified": "2026-10-10 14:00:00.000000",
   "modified_by": "Administrator",
   "module": "Sf Trading",
   "name": "Credit & Collections",
@@ -656,6 +716,20 @@
     "doc_view": "",
     "label": "Mode of Payment Invoice Wise",
     "link_to": "Mode of Payment Invoice Wise",
+    "type": "Report"
+   },
+   {
+    "color": "Red",
+    "doc_view": "",
+    "label": "Pending Supporting Documents",
+    "link_to": "Pending Supporting Documents",
+    "type": "Report"
+   },
+   {
+    "color": "Yellow",
+    "doc_view": "",
+    "label": "Landed Cost Reconciliation",
+    "link_to": "Landed Cost Reconciliation",
     "type": "Report"
    }
   ],
