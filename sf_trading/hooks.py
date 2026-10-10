@@ -264,6 +264,8 @@ after_migrate = [
 	"sf_trading.order_cancellation.seed_reasons",
 	# the standard Supporting Document Types (a fresh install marks the seed patch done unrun)
 	"sf_trading.party_documents.seed_document_types",
+	# the documents grid at the end of each master's Settings tab, saved field orders included
+	"sf_trading.party_documents.place_documents_grid",
 	# PM's own Actions entry for a cancellation request stays hidden until a reason is picked
 	"sf_trading.approval_routing.ensure_request_condition",
 ]

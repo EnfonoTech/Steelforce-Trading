@@ -2818,9 +2818,9 @@
   "fieldname": "custom_supporting_documents_section",
   "fieldtype": "Section Break",
   "label": null,
-  "insert_after": "column_break_59",
+  "insert_after": "release_date",
   "collapsible": 0,
-  "modified": "2026-10-11 12:00:00.000000",
+  "modified": "2026-10-11 13:00:00.000000",
   "creation": "2026-10-11 12:00:00.000000",
   "idx": 0
  }

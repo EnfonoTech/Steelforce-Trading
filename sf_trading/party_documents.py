@@ -75,6 +75,33 @@ def seed_document_types():
 			"needs_date_of_birth": dob}).insert(ignore_permissions=True)
 
 
+#: the documents grid sits in its own full-width section at the end of each master's Settings tab
+GRID_PLACE = {"Customer": "disabled", "Supplier": "release_date"}
+GRID_SECTION = "custom_supporting_documents_section"
+
+
+def place_documents_grid():
+	"""after_migrate: a field order saved from Customize Form pins every field it lists, so a grid
+	listed there would stay where it was. Move the grid and its section to the end of the Settings
+	tab in any such saved order (fields it does not list follow their own insert_after)."""
+	import json
+
+	for doctype, anchor in GRID_PLACE.items():
+		name = frappe.db.get_value("Property Setter", {"doc_type": doctype, "property": "field_order"}, "name")
+		if not name:
+			continue
+		order = json.loads(frappe.db.get_value("Property Setter", name, "value") or "[]")
+		if TABLE not in order and GRID_SECTION not in order:
+			continue
+		order = [f for f in order if f not in (TABLE, GRID_SECTION)]
+		if anchor not in order:
+			continue
+		at = order.index(anchor) + 1
+		order[at:at] = [GRID_SECTION, TABLE]
+		frappe.db.set_value("Property Setter", name, "value", json.dumps(order), update_modified=False)
+		frappe.clear_cache(doctype=doctype)
+
+
 # ─── policy ──────────────────────────────────────────────────────────────────────────────────────
 
 
