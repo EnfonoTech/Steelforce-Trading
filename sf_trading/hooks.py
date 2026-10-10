@@ -55,6 +55,8 @@ app_include_js = [
 	# GS Issue 17: prompts for a cancellation remark before the cancel HTTP call fires.
 	# The actual gate is server-side (sales_order_governance.py) -- this is UX only.
 	f"/assets/sf_trading/js/sales_order_cancel.js?{_v}",
+	# filters + formatting shared by the two cash-flow reports (a report script cannot import another's)
+	f"/assets/sf_trading/js/cash_flow_filters.js?{_v}",
 	# GS Issue 15: "N similar records found" while typing, on Item/Customer/Supplier/Account.
 	# UX only -- the real uniqueness rule stays server-side.
 	f"/assets/sf_trading/js/duplicate_check_popup.js?{_v}",
@@ -385,7 +387,12 @@ doc_events = {
 			# a row's cost centre follows the Branch on that row; core seeds it from the
 			# company default instead, which put every branch entry on head office
 			"sf_trading.journal_entry_cost_center.set_cost_center_from_branch",
+			# a returned-cheque journal never reverses more than is left on its cheque
+			"sf_trading.pdc_transfer.journal_validate",
 		],
+		# a returned-cheque journal moves its cheque to Returned, and back when cancelled
+		"on_submit": "sf_trading.pdc_transfer.journal_on_change",
+		"on_cancel": "sf_trading.pdc_transfer.journal_on_change",
 		# `cost_center` on Journal Entry Account carries allow_on_submit, so it can still be
 		# edited on a SUBMITTED entry -- and `validate` never runs on that path. Core's
 		# on_update_after_submit reposts the ledger when a row changes, so the same rule has to
@@ -525,11 +532,13 @@ doc_events = {
 			"sf_trading.sales_order_governance.validate_credit_customer_requirements_at_transaction",
 		],
 		"before_cancel": [
-			# GS Issue 17: a remark is mandatory, and only a Branch Head may cancel -- both
-			# checked here because before_cancel is the one hook that runs before docstatus
-			# flips, see sf_trading/sales_order_governance.py
+			# GS Issue 17 / tracker #23: a remark is mandatory, and only a Sales Manager may cancel
+			# (everyone else requests it) -- checked here because before_cancel is the one hook that
+			# runs before docstatus flips, see sf_trading/sales_order_governance.py
 			"sf_trading.sales_order_governance.before_cancel_require_remark_and_branch_head",
 		],
+		# a cancellation request carries its reason into the Cancellation Remark
+		"before_update_after_submit": "sf_trading.approval_routing.capture_cancellation_reason",
 	},
 	"Quotation": {
 		"before_validate": [_CC_HOOK, _BPL_HOOK],
@@ -554,6 +563,8 @@ doc_events = {
 	"Stock Reconciliation": {
 		"before_validate": "sf_trading.stock_reconciliation_account.set_difference_account",
 		"validate": "sf_trading.stock_reconciliation_account.validate_difference_account",
+		# tracker #22: a reconciliation posts only with its count sheet attached
+		"before_submit": "sf_trading.approval_routing.require_attachment",
 	},
 	"Purchase Invoice": {
 		"before_validate": [
@@ -1044,7 +1055,7 @@ fixtures = [
 	},
 	{
 		"doctype": "Workspace",
-		"filters": [["name", "in", ("Supplier Payments", "Open Items")]],
+		"filters": [["name", "in", ("Supplier Payments", "Open Items", "Credit & Collections")]],
 	},
 	{
 		"doctype": "Number Card",
@@ -1062,7 +1073,11 @@ fixtures = [
 # it asks rather than assumes: this resolver tells it that a Sales Invoice workflow here governs
 # returns above the configured threshold and nothing else. Without it, such a workflow would take
 # the Submit button off every ordinary sale. Policy lives here, the machinery stays there.
-pm_workflow_applicability = ["sf_trading.sales_return.workflow_applicability"]
+pm_workflow_applicability = [
+	"sf_trading.sales_return.workflow_applicability",
+	# Sales Order cancellation + Stock Reconciliation approval -- see sf_trading/approval_routing.py
+	"sf_trading.approval_routing.workflow_applicability",
+]
 
 
 # ─── Scheduler ────────────────────────────────────────────────────────────────

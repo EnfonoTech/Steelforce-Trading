@@ -23,11 +23,13 @@ frappe.query_reports["PDC Report"] = {
         },
         {
             fieldname: "status", label: __("Status"), fieldtype: "Select",
-            options: ["", "Pending", "Cleared"].join("\n"), default: "",
+            options: ["", "Pending", "Partly Cleared", "Cleared", "Partly Returned", "Returned"].join("\n"),
+            default: "",
         },
         {
             fieldname: "transfer_status", label: __("Transfer Status"), fieldtype: "Select",
-            options: ["", "Not Transferred", "Draft Transfer", "Transferred"].join("\n"), default: "",
+            options: ["", "Not Transferred", "Draft Transfer", "Partly Transferred", "Transferred"].join("\n"),
+            default: "",
         },
         { fieldname: "include_cancelled", label: __("Include Cancelled"), fieldtype: "Check", default: 0 },
     ],
@@ -65,9 +67,22 @@ frappe.query_reports["PDC Report"] = {
             }
         }
 
+        if (column.fieldname === "status") {
+            const colour = {
+                Pending: "orange-500", "Partly Cleared": "blue-500", Cleared: "green-600",
+                Returned: "red-500", "Partly Returned": "red-500",
+            }[data.status];
+            if (colour) value = `<span style="color:var(--${colour})"><b>${value}</b></span>`;
+        }
+        if (column.fieldname === "remaining_amount" && flt(data.remaining_amount) > 0) {
+            value = `<b>${value}</b>`;
+        }
+
         // the one column that answers "has this cheque been banked?"
         if (column.fieldname === "transfer_status") {
-            if (data.transfer_status === "Transferred") {
+            if (data.transfer_status === "Partly Transferred") {
+                value = `<span style="color:var(--blue-500)"><b>${value}</b></span>`;
+            } else if (data.transfer_status === "Transferred") {
                 value = `<span style="color:var(--green-600)"><b>${value}</b></span>`;
             } else if (data.transfer_status === "Draft Transfer") {
                 value = `<span style="color:var(--orange-500)">${value}</span>`;
@@ -96,14 +111,27 @@ function sf_pdc_transfer_selected(report) {
         return;
     }
 
-    const already = rows.filter((row) => row.transfer_status !== "Not Transferred");
-    if (already.length) {
+    // a cheque with nothing left, or with a transfer still in draft, cannot be banked again;
+    // part-banked cheques are banked for what is left on them
+    const blocked = rows.filter(
+        (row) => flt(row.remaining_amount) <= 0 || row.transfer_status === "Draft Transfer"
+    );
+    if (blocked.length) {
         frappe.msgprint({
-            title: __("Already Transferred"),
-            message: __("{0} of the selected cheques already have an internal transfer: {1}", [
-                already.length,
-                already.map((row) => row.payment_entry).join(", "),
+            title: __("Cannot Bank These"),
+            message: __("{0} of the selected cheques have nothing left to bank or a transfer still in draft: {1}", [
+                blocked.length,
+                blocked.map((row) => row.payment_entry).join(", "),
             ]),
+            indicator: "red",
+        });
+        return;
+    }
+    const directions = Array.from(new Set(rows.map((row) => row.payment_type)));
+    if (directions.length > 1) {
+        frappe.msgprint({
+            title: __("One Direction at a Time"),
+            message: __("Bank cheques received and cheques issued separately: they move money opposite ways."),
             indicator: "red",
         });
         return;
@@ -119,14 +147,14 @@ function sf_pdc_transfer_selected(report) {
         return;
     }
 
-    const total = rows.reduce((sum, row) => sum + flt(row.amount), 0);
+    const total = rows.reduce((sum, row) => sum + flt(row.remaining_amount), 0);
     const d = new frappe.ui.Dialog({
         title: __("Create Internal Transfer"),
         fields: [
             {
                 fieldname: "summary",
                 fieldtype: "HTML",
-                options: `<p>${__("Banking {0} cheque(s), {1} in total, out of the cheque account.", [
+                options: `<p>${__("Banking {0} cheque(s), {1} in total: everything still held on each.", [
                     rows.length,
                     format_currency(total, rows[0].currency),
                 ])}</p>`,
@@ -135,7 +163,7 @@ function sf_pdc_transfer_selected(report) {
                 fieldname: "to_account",
                 fieldtype: "Link",
                 options: "Account",
-                label: __("Credited To (Bank Account)"),
+                label: directions[0] === "Pay" ? __("Paid From (Bank Account)") : __("Credited To (Bank Account)"),
                 reqd: 1,
                 get_query: function () {
                     return {

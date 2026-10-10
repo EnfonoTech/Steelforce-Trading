@@ -30,6 +30,7 @@ No SQL is constructed here: reads go through frappe.db.get_value / frappe.get_al
 import frappe
 from frappe import _
 from frappe.model.document import Document
+from frappe.query_builder.functions import Sum
 from frappe.utils import add_days, cint, flt, getdate, get_link_to_form, money_in_words, nowdate
 
 from erpnext.accounts.party import get_party_account
@@ -85,6 +86,24 @@ ORDER_LINK_FIELD = {"Purchase Order": "purchase_order", "Sales Order": "sales_or
 ALLOWED_REFERENCE_DOCTYPES = tuple(
     sorted({dt for types in VALID_REFERENCE_DOCTYPES.values() for dt in types})
 )
+
+# A return invoice that carries its own negative outstanding -- a debit note from a supplier, a
+# credit note to a customer, raised with "update outstanding for self" -- is money the party
+# already owes back. An advice that leaves it out pays the invoice in full and leaves the note
+# sitting open: the supplier is paid twice. Such a row rides on the advice at its negative
+# outstanding, is always applied in full, and nets the payment down; ERPNext's Payment Entry
+# takes the same negative allocation against it.
+CREDIT_NOTE_DOCTYPES = ("Purchase Invoice", "Sales Invoice")
+
+TOLERANCE = 0.0005
+
+
+def is_credit_row(row):
+    """True for a return invoice offsetting the advice (negative outstanding of its own)."""
+    return (
+        row.get("reference_doctype") in CREDIT_NOTE_DOCTYPES
+        and flt(row.get("net_payable_amount")) < -TOLERANCE
+    )
 
 
 def registered_reference_doctypes(party_type):
@@ -150,6 +169,7 @@ class PaymentAdvice(Document):
         self.set_party_name()
         self.set_reference_details()
         self.compute_totals()
+        self.set_ledger_context()
         self.validate_transaction_reference()
         self.validate_payment_amount()
         self.allocate_payment()
@@ -354,7 +374,8 @@ class PaymentAdvice(Document):
         )
 
         for clash in clashes:
-            if flt(clash.allocated_amount) <= 0:
+            # a debit note is held by its negative allocation just as an invoice is by its own
+            if abs(flt(clash.allocated_amount)) < TOLERANCE:
                 continue
             advice_status = frappe.db.get_value("Payment Advice", clash.parent, "status")
             if advice_status == STATUS_CANCELLED:
@@ -492,6 +513,25 @@ class PaymentAdvice(Document):
             self.amount_paid_in_trans_curr = flt(flt(self.amount_paid) / rate, 3)
             self.amount_to_be_settled_trans_curr = flt(flt(self.amount_to_be_settled) / rate, 3)
 
+    def set_ledger_context(self):
+        """What the approver needs beside the invoices: the debit / credit notes this advice sets
+        off, and any advance the party already holds unallocated (which this advice would pay on
+        top of)."""
+        if self.meta.has_field("credit_notes_amount"):
+            self.credit_notes_amount = flt(
+                -sum(flt(r.net_payable_amount) for r in self.payment_advice_reference if is_credit_row(r)), 3
+            )
+        if not self.meta.has_field("unapplied_advance_amount"):
+            return
+        advances = unapplied_advances(self.company, self.party_type, self.party)
+        self._unapplied_advances = advances
+        self.unapplied_advance_amount = flt(sum(a.amount for a in advances), 3)
+        if self.meta.has_field("unapplied_advances"):
+            self.unapplied_advances = "\n".join(
+                "%s %s: %s" % (a.voucher_type, a.voucher_no, frappe.utils.fmt_money(a.amount, precision=3))
+                for a in advances[:20]
+            ) + ("\n" + _("and %s more") % (len(advances) - 20) if len(advances) > 20 else "")
+
     def validate_transaction_reference(self):
         """Mirror ERPNext's PaymentEntry.validate_transaction_reference().
 
@@ -575,6 +615,22 @@ class PaymentAdvice(Document):
                 }
             )
 
+        advances = getattr(self, "_unapplied_advances", None)
+        if advances:
+            # money already paid to this party and never set against a bill: paying the bills
+            # in full on top of it pays twice
+            sections.append(
+                _("%(party)s already holds %(total)s in unapplied advances (%(list)s). Set them "
+                  "against these invoices with Payment Reconciliation first, or this advice pays "
+                  "that much twice.")
+                % {
+                    "party": frappe.bold(self.party_name or self.party),
+                    "total": frappe.bold(frappe.utils.fmt_money(self.unapplied_advance_amount)),
+                    "list": ", ".join(a.voucher_no for a in advances[:5])
+                    + (" …" if len(advances) > 5 else ""),
+                }
+            )
+
         if getattr(self, "_unpayable_orders", None):
             # a row that has crossed from "order awaiting a bill" into "bill awaiting payment":
             # the money is still owed, but on the invoice, and ERPNext will not take a payment
@@ -606,7 +662,15 @@ class PaymentAdvice(Document):
         """
         self._payment_amount_trim = None
 
-        if flt(self.payment_amount) <= 0:
+        credits = [r for r in self.payment_advice_reference if is_credit_row(r)]
+        if flt(self.payment_amount) <= 0 or (credits and flt(self.amount_to_be_settled) <= 0):
+            if credits and flt(self.amount_to_be_settled) <= 0:
+                frappe.throw(
+                    _("The debit / credit notes on this advice (%(notes)s) cover everything it would "
+                      "pay, so there is nothing left to pay. Set them off against the invoices with "
+                      "Payment Reconciliation instead, or add the invoices they belong to.")
+                    % {"notes": ", ".join(frappe.bold(r.reference_record) for r in credits)}
+                )
             frappe.throw(_("Payment Amount must be greater than zero."))
 
         payable = flt(self.amount_to_be_settled)
@@ -635,9 +699,17 @@ class PaymentAdvice(Document):
 
         deliberate = []
         automatic = []
+        credit = 0.0
         for row in self.payment_advice_reference:
             payable = flt(row.net_payable_amount)
             allocated = flt(row.allocated_amount)
+
+            if is_credit_row(row):
+                # a note is set off whole: the payment is net of it, and leaving part of it
+                # open is what Payment Reconciliation is for, not a payment
+                row.allocated_amount = flt(payable, 3)
+                credit = flt(credit - payable, 3)
+                continue
 
             if allocated < 0:
                 allocated = 0.0
@@ -653,7 +725,8 @@ class PaymentAdvice(Document):
             untouched_new = row.name not in stored
             (automatic if (was_ours or untouched_new) else deliberate).append(row)
 
-        budget = flt(self.payment_amount)
+        # the invoices may take the payment plus whatever the notes give back
+        budget = flt(flt(self.payment_amount) + credit, 3)
         held = flt(sum(flt(r.allocated_amount) for r in deliberate), 3)
 
         if held > budget:
@@ -789,13 +862,29 @@ def compute_approval_route(advice):
 
     # One order or several, the purchase route applies as soon as the money is worth a second
     # opinion from the person who knows the purchase.
-    if orders and (len(orders) > 1 or flt(advice.get("payment_amount")) > FINANCE_APPROVAL_LIMIT):
+    amount = route_amount(advice)
+    if orders and (len(orders) > 1 or amount > FINANCE_APPROVAL_LIMIT):
         return ROUTE_PURCHASE_MANAGER
 
-    if flt(advice.get("payment_amount")) <= FINANCE_APPROVAL_LIMIT:
+    if amount <= FINANCE_APPROVAL_LIMIT:
         return ROUTE_ACCOUNTANT
 
     return ROUTE_FINANCE
+
+
+def route_amount(advice):
+    """The figure the approval limit is tested on: the payment, or -- when debit notes net it
+    down -- everything the advice settles. BHD 4,800 of invoices less BHD 4,500 of notes moves
+    only 300 in cash, but it closes 4,800 of payables, and that is what the approver signs for."""
+    settled = flt(
+        sum(
+            flt(r.get("allocated_amount"))
+            for r in (advice.get("payment_advice_reference") or [])
+            if flt(r.get("allocated_amount")) > 0
+        ),
+        3,
+    )
+    return max(flt(advice.get("payment_amount")), settled)
 
 
 def _has_overdue_invoice(invoice_names):
@@ -878,13 +967,71 @@ def get_reference_amounts(doctype, name, meta=None):
 
     if meta.has_field("total_debit"):
         total = value("total_debit")
-        return total, total
+        # what is still open against the journal on the party ledger: it used to read the
+        # journal's total for ever, so a journal already paid still looked fully payable
+        outstanding = journal_outstanding(name)
+        return total, (total if outstanding is None else max(0.0, outstanding))
 
     total = value("base_grand_total")
     if not total and meta.has_field("grand_total"):
         rate = flt(frappe.db.get_value(doctype, name, "conversion_rate")) or 1.0
         total = flt(flt(frappe.db.get_value(doctype, name, "grand_total")) * rate, 3)
     return total, total
+
+
+def journal_outstanding(journal_entry):
+    """What the party ledger still holds open against a Journal Entry, or None when the journal
+    never touched a party account (nothing to measure, so the caller keeps its total).
+
+    Payment Ledger amounts are signed so a positive figure is owed: debit less credit on a
+    receivable, credit less debit on a payable."""
+    rows = frappe.get_all(
+        "Payment Ledger Entry",
+        filters={
+            "against_voucher_type": "Journal Entry",
+            "against_voucher_no": journal_entry,
+            "delinked": 0,
+        },
+        fields=["amount"],
+    )
+    if not rows:
+        return None
+    return flt(sum(flt(r.amount) for r in rows), 3)
+
+
+def unapplied_advances(company, party_type, party):
+    """The party's payments and journals still sitting unallocated on its ledger.
+
+    An unallocated advance to a supplier is money already paid. An advice that pays the invoices
+    in full while it sits there pays the supplier twice, so the advice shows it to whoever
+    approves. Read off the Payment Ledger: a voucher still standing against itself with a
+    negative balance (paid out to a supplier, or received from a customer) is an advance.
+    """
+    if not (company and party_type and party):
+        return []
+    ple = frappe.qb.DocType("Payment Ledger Entry")
+    account_type = "Receivable" if party_type in RECEIVE_PARTY_TYPES else "Payable"
+    total = Sum(ple.amount)
+    rows = (
+        frappe.qb.from_(ple)
+        .select(ple.against_voucher_type, ple.against_voucher_no, total.as_("amount"))
+        .where(
+            (ple.company == company)
+            & (ple.party_type == party_type)
+            & (ple.party == party)
+            & (ple.account_type == account_type)
+            & (ple.delinked == 0)
+            & ple.against_voucher_type.isin(["Payment Entry", "Journal Entry"])
+        )
+        .groupby(ple.against_voucher_type, ple.against_voucher_no)
+        .having(total < -TOLERANCE)
+        .run(as_dict=True)
+    )
+    return [
+        frappe._dict(voucher_type=r.against_voucher_type, voucher_no=r.against_voucher_no,
+                     amount=flt(-flt(r.amount), 3))
+        for r in rows
+    ]
 
 
 def get_document_total(doctype, name, meta=None):
@@ -1213,9 +1360,30 @@ def build_payment_entry(advice):
     if not advice.payment_advice_reference:
         frappe.throw(_("Add at least one reference before creating a Payment Entry."))
 
-    allocations = [r for r in advice.payment_advice_reference if flt(r.allocated_amount) > 0]
-    if not allocations:
+    allocations = [
+        r for r in advice.payment_advice_reference if abs(flt(r.allocated_amount)) >= TOLERANCE
+    ]
+    if not [r for r in allocations if flt(r.allocated_amount) > 0]:
         frappe.throw(_("Nothing is allocated for payment on this advice."))
+
+    # A debit note set off on this advice may have been used elsewhere since it was approved
+    # (reconciled against another bill). ERPNext then refuses the whole Payment Entry with
+    # "Allocated Amount cannot be greater than outstanding amount"; name the note instead.
+    for row in allocations:
+        if flt(row.allocated_amount) >= 0 or row.reference_doctype not in CREDIT_NOTE_DOCTYPES:
+            continue
+        open_now = flt(frappe.db.get_value(row.reference_doctype, row.reference_record, "outstanding_amount"))
+        if flt(row.allocated_amount) < open_now - TOLERANCE:
+            frappe.throw(
+                _("Row #%(idx)s: %(name)s now has only %(open)s open (this advice sets off %(alloc)s). "
+                  "It was used elsewhere after approval. Cancel this advice and amend it.")
+                % {
+                    "idx": row.idx,
+                    "name": frappe.bold(row.reference_record),
+                    "open": frappe.utils.fmt_money(-open_now),
+                    "alloc": frappe.utils.fmt_money(-flt(row.allocated_amount)),
+                }
+            )
 
     # An order that has since been billed is no longer payable, and ERPNext reports that with
     # the wrong sentence — "has already been fully paid" — because its test is per_billed and
@@ -1457,7 +1625,7 @@ def get_reference_details(reference_doctype: str, reference_record: str, company
             "reference_record": reference_record,
             "parenttype": "Payment Advice",
             "docstatus": ["!=", 2],
-            "allocated_amount": [">", 0],
+            "allocated_amount": ["!=", 0],
         },
         fields=["parent"],
         limit=1,
@@ -1481,7 +1649,9 @@ def get_reference_details(reference_doctype: str, reference_record: str, company
             )
 
     total, outstanding = get_reference_amounts(reference_doctype, reference_record, meta)
-    if outstanding <= 0:
+    # a return invoice with its own negative outstanding nets the advice down (is_credit_row)
+    is_note = reference_doctype in CREDIT_NOTE_DOCTYPES and outstanding < -TOLERANCE
+    if outstanding <= 0 and not is_note:
         if reference_doctype in ORDER_DOCTYPES:
             frappe.throw(
                 _("%s is already fully advanced, so there is nothing left to pay against it.")
@@ -1608,11 +1778,14 @@ def shape_reference_rows(vouchers, cost_center=None, from_amount=None, to_amount
     for voucher in vouchers:
         voucher = frappe._dict(voucher)
         outstanding = flt(voucher.get("outstanding_amount"))
-        if outstanding <= 0:
+        # ERPNext lists the open debit / credit notes alongside the invoices, at a negative
+        # outstanding; they stay on the advice so its payment is net of them
+        note = voucher.get("voucher_type") in CREDIT_NOTE_DOCTYPES and outstanding < -TOLERANCE
+        if outstanding <= 0 and not note:
             continue
-        if from_amount and outstanding < flt(from_amount):
+        if not note and from_amount and outstanding < flt(from_amount):
             continue
-        if to_amount and outstanding > flt(to_amount):
+        if not note and to_amount and outstanding > flt(to_amount):
             continue
 
         doctype = voucher.get("voucher_type")
@@ -1647,7 +1820,8 @@ def shape_reference_rows(vouchers, cost_center=None, from_amount=None, to_amount
             }
         )
 
-    rows.sort(key=lambda r: (-r["ageing"], -r["net_payable_amount"]))
+    # oldest invoices first, the notes that offset them after
+    rows.sort(key=lambda r: (r["net_payable_amount"] < 0, -r["ageing"], -abs(r["net_payable_amount"])))
     return rows
 
 

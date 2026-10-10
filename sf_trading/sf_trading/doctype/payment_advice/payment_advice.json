@@ -33,6 +33,9 @@
   "column_break_amounts",
   "payment_amount",
   "pending_amount",
+  "credit_notes_amount",
+  "unapplied_advance_amount",
+  "unapplied_advances",
   "currency_section",
   "transaction_currency",
   "exchange_rate",
@@ -140,14 +143,14 @@
    "read_only": 1
   },
   {
+   "description": "Worked out from the references when the advice is saved, and read by the approval workflow to decide who signs it off.",
    "fieldname": "approval_route",
    "fieldtype": "Select",
-   "label": "Approval Route",
-   "options": "\nAccountant\nPurchase Manager\nHO Accounts\nFinance",
-   "read_only": 1,
-   "no_copy": 1,
    "in_standard_filter": 1,
-   "description": "Worked out from the references when the advice is saved, and read by the approval workflow to decide who signs it off."
+   "label": "Approval Route",
+   "no_copy": 1,
+   "options": "\nAccountant\nPurchase Manager\nHO Accounts\nFinance",
+   "read_only": 1
   },
   {
    "default": "0",
@@ -252,6 +255,31 @@
    "fieldtype": "Currency",
    "label": "Pending Amount",
    "options": "Company:company:default_currency",
+   "read_only": 1
+  },
+  {
+   "description": "Open return invoices on this advice. They are set off in full, so the Payment Amount is net of them.",
+   "fieldname": "credit_notes_amount",
+   "fieldtype": "Currency",
+   "label": "Debit / Credit Notes Set Off",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "bold": 1,
+   "description": "Payments already made to (or received from) this party and never set against a bill. Reconcile them before paying, or the advice pays twice.",
+   "fieldname": "unapplied_advance_amount",
+   "fieldtype": "Currency",
+   "label": "Party's Unapplied Advances",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "depends_on": "eval:doc.unapplied_advance_amount",
+   "fieldname": "unapplied_advances",
+   "fieldtype": "Small Text",
+   "label": "Unapplied Advance Vouchers",
+   "no_copy": 1,
    "read_only": 1
   },
   {
@@ -478,7 +506,7 @@
  "index_web_pages_for_search": 1,
  "is_submittable": 1,
  "links": [],
- "modified": "2026-07-30 07:00:00",
+ "modified": "2026-10-10 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "Payment Advice",

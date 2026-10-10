@@ -190,16 +190,26 @@ def validate_credit_customer_requirements_at_transaction(doc, _method=None):
 		)
 
 
+#: Who approves -- and so may carry out -- a Sales Order cancellation (client tracker #23: "Sales
+#: Manager should approve"). Everyone else asks: Actions > Request Cancellation, which the Sales
+#: Manager approves from the Approvals page (sf_trading/approval_routing.py); approving runs this
+#: same cancel as the Sales Manager.
+CANCEL_APPROVER_ROLES = ("Sales Manager", "System Manager")
+
+
 def before_cancel_require_remark_and_branch_head(doc, _method=None):
-	"""Sales Order before_cancel: a remark is mandatory, and only a Branch Head may cancel.
+	"""Sales Order before_cancel: a remark is mandatory, and only a Sales Manager may cancel.
+
+	(The name is kept from when the role was Branch Head; hooks and tests refer to it.)
 
 	``before_cancel`` is the correct hook for both checks -- it runs BEFORE docstatus flips to 2,
 	so throwing here genuinely leaves the order uncancelled. (``on_cancel`` is too late: docstatus
 	is already 2 by the time it runs, which is the account's own well-documented cancel-ordering
 	trap.) The remark itself is expected to already be on the in-memory document by this point --
-	set by ``cancel_sales_order_with_remark`` below, or by the client-side ``before_cancel`` form
-	event for a cancel started from the desk -- never asked for here, because a hook that runs after
-	the cancel HTTP call has already begun cannot itself pop a dialog.
+	set by the cancellation request (approval_routing.capture_cancellation_reason), by
+	``cancel_sales_order_with_remark`` below, or by the client-side ``before_cancel`` form event for
+	a cancel started from the desk -- never asked for here, because a hook that runs after the
+	cancel HTTP call has already begun cannot itself pop a dialog.
 	"""
 	if not cstr(doc.get("custom_cancellation_remark")).strip():
 		frappe.throw(
@@ -207,11 +217,11 @@ def before_cancel_require_remark_and_branch_head(doc, _method=None):
 			title=_("Cancellation Remark Required"),
 		)
 
-	user_roles = frappe.get_roles(frappe.session.user)
-	if ROLE_BRANCH_HEAD not in user_roles and "System Manager" not in user_roles:
+	user_roles = set(frappe.get_roles(frappe.session.user))
+	if not user_roles & set(CANCEL_APPROVER_ROLES):
 		frappe.throw(
-			_("Only a %s may cancel a Sales Order.") % ROLE_BRANCH_HEAD,
-			title=_("Not Permitted"),
+			_("Only a Sales Manager may cancel a Sales Order. Use Actions > Request Cancellation to ask for it."),
+			title=_("Approval Required"),
 		)
 
 

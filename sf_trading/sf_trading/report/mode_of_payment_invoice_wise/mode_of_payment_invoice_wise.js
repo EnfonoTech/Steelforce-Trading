@@ -77,6 +77,8 @@ frappe.query_reports["Mode of Payment Invoice Wise"] = {
 				"Bank Transfer",
 				"Other",
 				"Adjustment",
+				"Credit Adjusted",
+				"Returned",
 				"Settled (no voucher)",
 				"Credit",
 				"Refund Due",
@@ -142,6 +144,8 @@ frappe.query_reports["Mode of Payment Invoice Wise"] = {
 			Credit: "var(--red-500)",
 			"Refund Due": "var(--red-500)",
 			Adjustment: "var(--text-muted)",
+			"Credit Adjusted": "var(--gray-600)",
+			Returned: "var(--gray-600)",
 			"Settled (no voucher)": "var(--orange-600)",
 		};
 

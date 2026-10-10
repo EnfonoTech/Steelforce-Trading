@@ -21,7 +21,9 @@ from sf_trading.sf_trading.report.mode_of_payment_invoice_wise.mode_of_payment_i
     CLASS_CASH,
     CLASS_CHEQUE,
     CLASS_CREDIT,
+    CLASS_CREDIT_ADJUSTED,
     CLASS_NO_VOUCHER,
+    CLASS_RETURNED,
     CLASS_WALLET,
     CREDIT_LABEL,
     INVOICE_TYPES,
@@ -211,6 +213,42 @@ class TestModeOfPaymentInvoiceWise(FrappeTestCase):
         self.assertEqual(rows[0]["payment_class"], CLASS_NO_VOUCHER)
         self.assertEqual(flt(rows[0]["amt_settled_no_voucher"]), -27.001)
         self.assertIn(NO_VOUCHER_LABEL, rows[0]["mode_of_payment"])
+
+    def _credit_note_leg(self, invoice, amount, payment_class, label):
+        return {
+            "invoice": invoice, "voucher_type": "Sales Invoice", "voucher_no": "OTHER",
+            "payment_date": nowdate(), "mode_of_payment": None, "amount": amount, "account": None,
+            "reference_no": None, "docstatus": 1, "source": "Credit Note", "mode_missing": 0,
+            "_resolved": 1, "mode_label": label, "summary_label": label, "payment_class": payment_class,
+        }
+
+    def test_a_credit_note_netted_onto_its_invoice_shows_the_adjustment_not_settled(self):
+        """With Update Outstanding for Self off, the note's outstanding is 0 and no voucher names it."""
+        leg = self._credit_note_leg("SI-TEST-0001", -27.001, CLASS_CREDIT_ADJUSTED, "Adjusted against SI-X")
+        rows = self._fabricated([leg], outstanding=0.0, grand_total=-27.001, declared="Credit")
+        self.assertEqual(rows[0]["payment_class"], CLASS_CREDIT_ADJUSTED)
+        self.assertEqual(flt(rows[0]["amt_settled_no_voucher"]), 0.0)
+        self.assertEqual(flt(rows[0]["amt_credit_adjusted"]), -27.001)
+        self.assertIsNone(rows[0]["mode_mismatch"])  # a Credit return reducing credit is consistent
+
+    def test_a_cash_declared_return_that_refunded_no_cash_is_flagged(self):
+        leg = self._credit_note_leg("SI-TEST-0001", -27.001, CLASS_CREDIT_ADJUSTED, "Adjusted against SI-X")
+        rows = self._fabricated([leg], outstanding=0.0, grand_total=-27.001, declared="Cash")
+        self.assertEqual(rows[0]["mode_mismatch"], "Mismatch")
+
+    def test_the_invoice_a_credit_note_reduced_explains_the_reduction(self):
+        """Original 100: 30 paid in cash, 50 returned, 20 still open."""
+        legs = [self._leg("Cash-SFSB", 30), self._credit_note_leg("SI-TEST-0001", 50, CLASS_RETURNED, "Credit Note CN-1")]
+        rows = self._fabricated(legs, outstanding=20, declared="Credit")
+        self.assertEqual(flt(rows[0]["amt_settled_no_voucher"]), 0.0)
+        self.assertEqual(flt(rows[0]["amt_returned"]), 50.0)
+        self.assertEqual(rows[0]["is_mixed"], 1)  # cash + credit, the return counts as credit
+
+    def test_mode_summary_groups_credit_notes_under_one_label(self):
+        legs = [self._credit_note_leg("SI-TEST-0001", 50, CLASS_RETURNED, "Credit Note")]
+        rows = self._fabricated(legs, outstanding=50)
+        labels = {row["mode_of_payment"] for row in mode_summary(rows)}
+        self.assertIn("Credit Note", labels)
 
     def test_rounding_gap_is_not_reported_as_a_missing_voucher(self):
         rows = self._fabricated([self._leg("Cash-SFSB", 100.01)], grand_total=100.0)

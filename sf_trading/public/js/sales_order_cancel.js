@@ -56,6 +56,18 @@ function sf_prompt_cancellation_remark(frm, title) {
 
 frappe.ui.form.on("Sales Order", {
 	before_cancel(frm) {
+		// Only a Sales Manager cancels an order (sales_order_governance.CANCEL_APPROVER_ROLES);
+		// anyone else asks, and the Sales Manager's approval does the cancelling.
+		if (!frappe.user.has_role(["Sales Manager", "System Manager"])) {
+			frappe.msgprint({
+				title: __("Approval Required"),
+				indicator: "orange",
+				message: __("A Sales Manager approves order cancellations. Use Actions > Request Cancellation and give the reason."),
+			});
+			// the form's own cancel flow stops cleanly when a before_cancel handler clears this
+			frappe.validated = false;
+			return Promise.resolve();
+		}
 		return sf_prompt_cancellation_remark(frm, __("Why is this order being cancelled?"));
 	},
 });

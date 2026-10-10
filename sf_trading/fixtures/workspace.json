@@ -7,7 +7,7 @@
   "doctype": "Workspace",
   "for_user": "",
   "hide_custom": 0,
-  "icon": "money-coins-1",
+  "icon": "accounting",
   "idx": 0,
   "is_hidden": 0,
   "label": "Supplier Payments",
@@ -433,5 +433,232 @@
    }
   ],
   "title": "Open Items"
+ },
+ {
+  "charts": [],
+  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Credit &amp; Collections</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Branch-wise Credit Outstanding\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivery Person Payment Pending\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Cash Flow Detail\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Item-wise Cash Flow\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"PDC Report\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Mode of Payment Invoice Wise\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Receivables\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cash Flow\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cheques & Payments\", \"col\": 4}}]",
+  "creation": "2026-10-10 12:00:00.000000",
+  "docstatus": 0,
+  "doctype": "Workspace",
+  "for_user": "",
+  "hide_custom": 0,
+  "icon": "accounting",
+  "idx": 0,
+  "is_hidden": 0,
+  "label": "Credit & Collections",
+  "links": [
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 1,
+    "is_query_report": 0,
+    "label": "Receivables",
+    "link_count": 4,
+    "link_to": null,
+    "link_type": null,
+    "onboard": 0,
+    "type": "Card Break"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 2,
+    "is_query_report": 1,
+    "label": "Branch-wise Credit Outstanding",
+    "link_count": 0,
+    "link_to": "Branch-wise Credit Outstanding",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 3,
+    "is_query_report": 1,
+    "label": "Delivery Person Payment Pending",
+    "link_count": 0,
+    "link_to": "Delivery Person Payment Pending",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 4,
+    "is_query_report": 1,
+    "label": "Mode of Payment Invoice Wise",
+    "link_count": 0,
+    "link_to": "Mode of Payment Invoice Wise",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 5,
+    "is_query_report": 0,
+    "label": "Customer",
+    "link_count": 0,
+    "link_to": "Customer",
+    "link_type": "DocType",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 6,
+    "is_query_report": 0,
+    "label": "Cash Flow",
+    "link_count": 3,
+    "link_to": null,
+    "link_type": null,
+    "onboard": 0,
+    "type": "Card Break"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 7,
+    "is_query_report": 1,
+    "label": "Cash Flow Detail",
+    "link_count": 0,
+    "link_to": "Cash Flow Detail",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 8,
+    "is_query_report": 1,
+    "label": "Cash Flow Money In vs Money Out",
+    "link_count": 0,
+    "link_to": "Cash Flow Money In vs Money Out",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 9,
+    "is_query_report": 1,
+    "label": "Item-wise Cash Flow",
+    "link_count": 0,
+    "link_to": "Item-wise Cash Flow",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 10,
+    "is_query_report": 0,
+    "label": "Cheques & Payments",
+    "link_count": 3,
+    "link_to": null,
+    "link_type": null,
+    "onboard": 0,
+    "type": "Card Break"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 11,
+    "is_query_report": 1,
+    "label": "PDC Report",
+    "link_count": 0,
+    "link_to": "PDC Report",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 12,
+    "is_query_report": 0,
+    "label": "Payment Entry",
+    "link_count": 0,
+    "link_to": "Payment Entry",
+    "link_type": "DocType",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 13,
+    "is_query_report": 0,
+    "label": "Payment Advice",
+    "link_count": 0,
+    "link_to": "Payment Advice",
+    "link_type": "DocType",
+    "onboard": 0,
+    "type": "Link"
+   }
+  ],
+  "modified": "2026-10-10 12:00:00.000000",
+  "modified_by": "Administrator",
+  "module": "Sf Trading",
+  "name": "Credit & Collections",
+  "number_cards": [],
+  "owner": "Administrator",
+  "parent_page": "",
+  "public": 1,
+  "quick_lists": [],
+  "roles": [],
+  "sequence_id": 42.0,
+  "shortcuts": [
+   {
+    "color": "Blue",
+    "doc_view": "",
+    "label": "Branch-wise Credit Outstanding",
+    "link_to": "Branch-wise Credit Outstanding",
+    "type": "Report"
+   },
+   {
+    "color": "Orange",
+    "doc_view": "",
+    "label": "Delivery Person Payment Pending",
+    "link_to": "Delivery Person Payment Pending",
+    "type": "Report"
+   },
+   {
+    "color": "Green",
+    "doc_view": "",
+    "label": "Cash Flow Detail",
+    "link_to": "Cash Flow Detail",
+    "type": "Report"
+   },
+   {
+    "color": "Cyan",
+    "doc_view": "",
+    "label": "Item-wise Cash Flow",
+    "link_to": "Item-wise Cash Flow",
+    "type": "Report"
+   },
+   {
+    "color": "Purple",
+    "doc_view": "",
+    "label": "PDC Report",
+    "link_to": "PDC Report",
+    "type": "Report"
+   },
+   {
+    "color": "Grey",
+    "doc_view": "",
+    "label": "Mode of Payment Invoice Wise",
+    "link_to": "Mode of Payment Invoice Wise",
+    "type": "Report"
+   }
+  ],
+  "title": "Credit & Collections"
  }
 ]

@@ -70,6 +70,15 @@ CLASS_ADJUSTMENT = "Adjustment"
 CLASS_NO_VOUCHER = "Settled (no voucher)"
 CLASS_CREDIT = "Credit"
 CLASS_REFUND = "Refund Due"
+#: A return that settled by reducing what the customer owed on another invoice -- no money moved.
+#: Shown on the credit note itself ("Adjusted against <invoice>", "Netted in <receipt>").
+CLASS_CREDIT_ADJUSTED = "Credit Adjusted"
+#: The other side of the same thing, on the invoice a credit note reduced ("Credit Note <name>").
+CLASS_RETURNED = "Returned"
+
+#: Classes that move a balance between documents rather than money. For the declared-mode check
+#: and the mixed-mode flag they count as Credit: the customer's credit balance is what they change.
+NEUTRAL_CLASSES = (CLASS_CREDIT_ADJUSTED, CLASS_RETURNED)
 
 #: Buckets that get their own amount column, in display order.
 CLASS_COLUMNS = (
@@ -80,6 +89,8 @@ CLASS_COLUMNS = (
     CLASS_BANK,
     CLASS_OTHER,
     CLASS_ADJUSTMENT,
+    CLASS_CREDIT_ADJUSTED,
+    CLASS_RETURNED,
     CLASS_NO_VOUCHER,
     CLASS_CREDIT,
     CLASS_REFUND,
@@ -164,7 +175,7 @@ def execute(filters=None):
 def strip_internal(rows):
     """Drop the leg/aggregate scratch keys — they would otherwise ride along to the client."""
     for row in rows:
-        for key in ("_legs", "_classes", "_modes", "_precision"):
+        for key in ("_legs", "_classes", "_modes", "_summary", "_summary_classes", "_precision"):
             row.pop(key, None)
     return rows
 
@@ -328,6 +339,7 @@ def get_payment_legs(filters, invoice_names):
         pos_legs(invoice_names)
         + payment_entry_legs(filters, invoice_names)
         + journal_legs(filters, invoice_names)
+        + credit_note_legs(invoice_names)
     )
     for leg in sources:
         legs.setdefault(leg["invoice"], []).append(leg)
@@ -400,20 +412,86 @@ def payment_entry_legs(filters, invoice_names):
     for row in rows:
         # On a refund (payment_type "Pay") the money leaves through paid_from.
         account = row.paid_from if row.payment_type == "Pay" else row.paid_to
-        legs.append(
-            {
-                "invoice": row.invoice,
-                "voucher_type": "Payment Entry",
-                "voucher_no": row.voucher_no,
-                "payment_date": getdate(row.posting_date) if row.posting_date else None,
-                "mode_of_payment": row.mode_of_payment,
-                "amount": flt(row.allocated_amount),
-                "account": account,
-                "reference_no": row.reference_no,
-                "docstatus": row.docstatus,
-                "source": "Payment Entry",
-            }
-        )
+        leg = {
+            "invoice": row.invoice,
+            "voucher_type": "Payment Entry",
+            "voucher_no": row.voucher_no,
+            "payment_date": getdate(row.posting_date) if row.posting_date else None,
+            "mode_of_payment": row.mode_of_payment,
+            "amount": flt(row.allocated_amount),
+            "account": account,
+            "reference_no": row.reference_no,
+            "docstatus": row.docstatus,
+            "source": "Payment Entry",
+        }
+        if row.payment_type == "Receive" and flt(row.allocated_amount) < 0:
+            # A credit note netted inside a customer receipt: it reduced what the receipt had to
+            # collect, and no money went back. Reading paid_to here called it a cash refund.
+            netted_label = _("Netted in {0}").format(row.voucher_no)
+            leg.update(
+                mode_of_payment=None,
+                mode_label=netted_label,
+                summary_label=_("Netted in a receipt"),
+                payment_class=CLASS_CREDIT_ADJUSTED,
+                mode_missing=0,
+                _resolved=1,
+            )
+        legs.append(leg)
+    return legs
+
+
+def credit_note_legs(invoice_names):
+    """Credit notes that settled by reducing another invoice's outstanding.
+
+    With "Update Outstanding for Self" off, ERPNext books the credit note against the invoice it
+    returns (`return_against`): the note's own outstanding stays 0 and the original's goes down.
+    No voucher references either document, so both used to land in "Settled (no voucher)". The
+    Payment Ledger row that does it -- voucher = the credit note, against = the original -- is read
+    from both ends: on the note it is "Adjusted against <invoice>", on the invoice it is
+    "Credit Note <note>".
+    """
+    ple = frappe.qb.DocType("Payment Ledger Entry")
+    scope = set(invoice_names)
+    found = {}
+    for chunk in chunks(invoice_names):
+        for side in (ple.voucher_no, ple.against_voucher_no):
+            query = (
+                frappe.qb.from_(ple)
+                .select(ple.name, ple.voucher_no, ple.against_voucher_no, ple.amount_in_account_currency, ple.posting_date)
+                .where(ple.delinked == 0)
+                .where(ple.voucher_type == "Sales Invoice")
+                .where(ple.against_voucher_type == "Sales Invoice")
+                .where(ple.voucher_no != ple.against_voucher_no)
+                .where(side.isin(chunk))
+            )
+            for row in query.run(as_dict=True):
+                found[row.name] = row
+
+    legs = []
+    for row in found.values():
+        amount = flt(row.amount_in_account_currency)
+        if not amount:
+            continue
+        common = {
+            "payment_date": getdate(row.posting_date) if row.posting_date else None,
+            "mode_of_payment": None,
+            "account": None,
+            "reference_no": None,
+            "docstatus": 1,
+            "source": "Credit Note",
+            "mode_missing": 0,
+            "_resolved": 1,
+            "voucher_type": "Sales Invoice",
+        }
+        if row.voucher_no in scope:
+            adjusted_label = _("Adjusted against {0}").format(row.against_voucher_no)
+            legs.append(dict(common, invoice=row.voucher_no, voucher_no=row.against_voucher_no, amount=amount,
+                mode_label=adjusted_label, summary_label=_("Adjusted against an invoice"),
+                payment_class=CLASS_CREDIT_ADJUSTED))
+        if row.against_voucher_no in scope:
+            returned_label = _("Credit Note {0}").format(row.voucher_no)
+            legs.append(dict(common, invoice=row.against_voucher_no, voucher_no=row.voucher_no, amount=-amount,
+                mode_label=returned_label, summary_label=_("Credit Note"), payment_class=CLASS_RETURNED))
     return legs
 
 
@@ -452,27 +530,55 @@ def journal_legs(filters, invoice_names):
         return []
 
     bank_accounts = journal_bank_accounts({row.voucher_no for row in rows})
+    set_off = journal_invoice_references({row.voucher_no for row in rows if not bank_accounts.get(row.voucher_no)})
 
     legs = []
     for row in rows:
         amount = flt(row.credit) - flt(row.debit)
         if not amount:
             continue
-        legs.append(
-            {
-                "invoice": row.invoice,
-                "voucher_type": "Journal Entry",
-                "voucher_no": row.voucher_no,
-                "payment_date": getdate(row.posting_date) if row.posting_date else None,
-                "mode_of_payment": row.mode_of_payment,
-                "amount": amount,
-                "account": bank_accounts.get(row.voucher_no),
-                "reference_no": row.cheque_no,
-                "docstatus": row.docstatus,
-                "source": "Journal Entry",
-            }
-        )
+        leg = {
+            "invoice": row.invoice,
+            "voucher_type": "Journal Entry",
+            "voucher_no": row.voucher_no,
+            "payment_date": getdate(row.posting_date) if row.posting_date else None,
+            "mode_of_payment": row.mode_of_payment,
+            "amount": amount,
+            "account": bank_accounts.get(row.voucher_no),
+            "reference_no": row.cheque_no,
+            "docstatus": row.docstatus,
+            "source": "Journal Entry",
+        }
+        others = sorted((set_off.get(row.voucher_no) or set()) - {row.invoice})
+        if not leg["account"] and not (row.mode_of_payment or "").strip() and others:
+            # No money leg, and the journal names other invoices: Payment Reconciliation's own
+            # "Credit Note" journal, or a contra -- one invoice's balance set off against another.
+            label_target = ", ".join(others[:3])
+            if amount < 0:
+                leg.update(mode_label=_("Set off against {0}").format(label_target),
+                    summary_label=_("Adjusted against an invoice"), payment_class=CLASS_CREDIT_ADJUSTED)
+            else:
+                leg.update(mode_label=_("Set off by {0}").format(label_target),
+                    summary_label=_("Credit Note"), payment_class=CLASS_RETURNED)
+            leg.update(mode_missing=0, _resolved=1)
+        legs.append(leg)
     return legs
+
+
+def journal_invoice_references(journal_names):
+    """{journal: {invoice, ...}} -- every Sales Invoice a journal's rows reference."""
+    jea = frappe.qb.DocType("Journal Entry Account")
+    found = {}
+    for chunk in chunks(journal_names):
+        query = (
+            frappe.qb.from_(jea)
+            .select(jea.parent, jea.reference_name)
+            .where(jea.parent.isin(chunk))
+            .where(jea.reference_type == "Sales Invoice")
+        )
+        for row in query.run(as_dict=True):
+            found.setdefault(row.parent, set()).add(row.reference_name)
+    return found
 
 
 def journal_bank_accounts(journal_names):
@@ -666,19 +772,29 @@ def build_invoice_rows(invoices, legs):
 
         by_class = {}
         by_mode = {}
+        # the Mode Summary groups on a generic label ("Credit Note"), not one per document
+        by_summary = {}
+        summary_classes = {}
         for leg in invoice_legs:
             amount = flt(leg["amount"], precision)
             if not amount:
                 continue
             by_class[leg["payment_class"]] = flt(by_class.get(leg["payment_class"])) + amount
             by_mode[leg["mode_label"]] = flt(by_mode.get(leg["mode_label"])) + amount
+            key = leg.get("summary_label") or leg["mode_label"]
+            by_summary[key] = flt(by_summary.get(key)) + amount
+            summary_classes[key] = leg["payment_class"]
 
         if outstanding > ROUNDING_TOLERANCE:
             by_class[CLASS_CREDIT] = flt(by_class.get(CLASS_CREDIT)) + outstanding
             by_mode[CREDIT_LABEL] = flt(by_mode.get(CREDIT_LABEL)) + outstanding
+            by_summary[CREDIT_LABEL] = flt(by_summary.get(CREDIT_LABEL)) + outstanding
+            summary_classes[CREDIT_LABEL] = CLASS_CREDIT
         elif outstanding < -ROUNDING_TOLERANCE:
             by_class[CLASS_REFUND] = flt(by_class.get(CLASS_REFUND)) + outstanding
             by_mode[REFUND_LABEL] = flt(by_mode.get(REFUND_LABEL)) + outstanding
+            by_summary[REFUND_LABEL] = flt(by_summary.get(REFUND_LABEL)) + outstanding
+            summary_classes[REFUND_LABEL] = CLASS_REFUND
 
         # Whatever the vouchers do not explain. Mostly ePromise-migrated history whose
         # outstanding was written straight onto the invoice; keeps every row balanced.
@@ -686,6 +802,8 @@ def build_invoice_rows(invoices, legs):
         if abs(no_voucher) > ROUNDING_TOLERANCE:
             by_class[CLASS_NO_VOUCHER] = flt(by_class.get(CLASS_NO_VOUCHER)) + no_voucher
             by_mode[NO_VOUCHER_LABEL] = flt(by_mode.get(NO_VOUCHER_LABEL)) + no_voucher
+            by_summary[NO_VOUCHER_LABEL] = flt(by_summary.get(NO_VOUCHER_LABEL)) + no_voucher
+            summary_classes[NO_VOUCHER_LABEL] = CLASS_NO_VOUCHER
         else:
             no_voucher = 0.0
 
@@ -724,12 +842,14 @@ def build_invoice_rows(invoices, legs):
             ),
             "mode_mismatch": mismatch_label(invoice.custom_payment_mode, by_class),
             "mode_not_set": 1 if any(leg["mode_missing"] for leg in invoice_legs) else 0,
-            "is_mixed": 1 if len(ordered_classes) > 1 else 0,
+            "is_mixed": 1 if len(money_classes(by_class)) > 1 else 0,
             "sales_person": invoice.custom_sales_person,
             "return_against": invoice.return_against,
             "_legs": invoice_legs,
             "_classes": by_class,
             "_modes": by_mode,
+            "_summary": by_summary,
+            "_summary_classes": summary_classes,
             "_precision": precision,
         }
         for payment_class in CLASS_COLUMNS:
@@ -752,11 +872,23 @@ def mismatch_label(declared, by_class):
     if not declared or not by_class:
         return None
 
-    actual = {label for label, amount in by_class.items() if amount}
+    actual = money_classes(by_class)
     expected = {"Cash": CLASS_CASH, "Cheque": CLASS_CHEQUE, "Credit": CLASS_CREDIT}.get(declared)
     if expected and actual == {expected}:
         return None
     return _("Mismatch")
+
+
+def money_classes(by_class):
+    """The classes an invoice actually settled in. A credit note moving a balance between two
+    invoices (Credit Adjusted / Returned) changes what the customer owes on credit, so it counts as
+    Credit -- a credit sale partly returned is not "mixed", and a "Cash" return that refunded no
+    cash is still flagged."""
+    return {
+        CLASS_CREDIT if label in NEUTRAL_CLASSES else label
+        for label, amount in by_class.items()
+        if amount
+    }
 
 
 def class_fieldname(payment_class):
@@ -879,15 +1011,16 @@ def mode_summary(rows):
         )
 
     for row in rows:
-        for label, amount in row["_modes"].items():
-            bucket = bucket_for(label, class_of_label(label), row["currency"])
+        summary_rows = row.get("_summary") or row["_modes"]
+        classes = row.get("_summary_classes") or {}
+        for label, amount in summary_rows.items():
+            bucket = bucket_for(label, classes.get(label) or class_of_label(label), row["currency"])
             bucket["invoices"] += 1
             bucket["amount"] = flt(bucket["amount"]) + flt(amount)
         for leg in row["_legs"]:
             if flt(leg["amount"]):
-                bucket_for(leg["mode_label"], leg["payment_class"], row["currency"])[
-                    "transactions"
-                ] += 1
+                key = leg.get("summary_label") or leg["mode_label"]
+                bucket_for(key, leg["payment_class"], row["currency"])["transactions"] += 1
 
     grand_total = sum(abs(flt(bucket["amount"])) for bucket in totals.values()) or 1.0
     out = sorted(totals.values(), key=lambda bucket: -abs(flt(bucket["amount"])))

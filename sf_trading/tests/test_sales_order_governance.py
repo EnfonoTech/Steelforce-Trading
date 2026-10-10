@@ -78,13 +78,20 @@ class TestCancellationControl(FrappeTestCase):
 			with self.assertRaises(frappe.ValidationError):
 				gov.before_cancel_require_remark_and_branch_head(doc)
 
-	def test_a_branch_head_with_a_remark_may_cancel(self):
+	def test_a_sales_manager_with_a_remark_may_cancel(self):
 		doc = sales_order(custom_cancellation_remark="Customer changed their mind")
-		with patch("frappe.get_roles", return_value=[gov.ROLE_BRANCH_HEAD]):
+		with patch("frappe.get_roles", return_value=["Sales Manager"]):
 			gov.before_cancel_require_remark_and_branch_head(doc)  # must not raise
 
+	def test_a_branch_head_now_has_to_ask(self):
+		"""Client tracker #23: the Sales Manager approves; a Branch Head requests like anyone else."""
+		doc = sales_order(custom_cancellation_remark="Customer changed their mind")
+		with patch("frappe.get_roles", return_value=[gov.ROLE_BRANCH_HEAD]):
+			with self.assertRaises(frappe.ValidationError):
+				gov.before_cancel_require_remark_and_branch_head(doc)
+
 	def test_a_system_manager_may_also_cancel(self):
-		"""So Administrator/support can always unblock a mistake, without needing Branch Head."""
+		"""So Administrator/support can always unblock a mistake, without needing Sales Manager."""
 		doc = sales_order(custom_cancellation_remark="testing")
 		with patch("frappe.get_roles", return_value=["System Manager"]):
 			gov.before_cancel_require_remark_and_branch_head(doc)  # must not raise

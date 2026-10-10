@@ -1,327 +1,407 @@
 # apps/sf_trading/sf_trading/report/cash_flow_detail/cash_flow_detail.py
-"""Cash Flow Detail - what is behind a figure on the Cash Flow summary.
+"""Cash Flow Detail - what is behind a figure on the Cash Flow summary, and where it went.
 
-Reached by clicking a period on Cash Flow Money In vs Money Out, which passes its own dates
-through, so the detail opens already showing that period and nothing else. It can also be run
-on its own for any range.
+Reached by clicking a period on Cash Flow Money In vs Money Out (its own dates and filters are
+carried through), or run on its own. The money rows, their categories and every filter come from
+sf_trading.cash_flow, the same code the summary uses, so the two always agree.
 
-Five readings of the same money, chosen with Group By:
+Views (Group By):
 
-    Transactions        one row per ledger movement, with a running balance
-    By Party            who it went to and came from
-    By Voucher Type     which kind of document moved it
-    By Account          which till or bank account it moved through
-    By Mode of Payment  cash, card, transfer, cheque
+    Transactions             one row per ledger movement, with a running balance when it means one
+    Category                 customers, suppliers, expenses, transfers ... (sf_trading.cash_flow)
+    Category and Party       the same, opened up party by party
+    Party / Voucher Type / Account / Mode of Payment / Branch / Day / Month
+    Receivables and Payables what customers owed us and we owed suppliers: opening, invoiced,
+                             returned, collected or paid, adjusted, closing
 
-Direction narrows to money in or money out alone, which is what a click on one of those
-columns is really asking about.
-
-The account, mode-of-payment and internal-transfer filters are the same code the summary uses,
-imported rather than copied, so the detail can never add up to something the summary does not.
+Every grouped row links to the Transactions behind it, with that group as a filter, so any figure
+can be opened down to the vouchers.
 """
+
+import json
+from collections import defaultdict
+from urllib.parse import urlencode
 
 import frappe
 from frappe import _
-from frappe.utils import add_months, cint, flt, getdate, nowdate
+from frappe.utils import add_months, cint, flt, getdate
 
-from sf_trading.sf_trading.report.cash_flow_money_in_vs_money_out.cash_flow_money_in_vs_money_out import (
-    _message,
-    _money_accounts,
-    _opening,
-)
+from sf_trading import cash_flow as cf
 
 ROW_CAP = 5000
+TRANSACTIONS = "Transactions"
+CATEGORY_PARTY = "Category and Party"
+RECEIVABLES_PAYABLES = "Receivables and Payables"
+NOT_SET = "(not set)"
+
+#: group-by -> (row key, drill filter, label)
+GROUPS = {
+	"Category": ("category", "category", "Category"),
+	"Party": ("counter_party", "party", "Party"),
+	"Voucher Type": ("voucher_type", "voucher_type", "Voucher Type"),
+	"Account": ("account", "account", "Account"),
+	"Mode of Payment": ("mode_of_payment", "mode_of_payment", "Mode of Payment"),
+	"Branch": ("branch", "branch", "Branch"),
+	"Day": ("posting_date", None, "Day"),
+	"Month": ("month", None, "Month"),
+}
+#: the old option names, still in saved links and the summary's drill-down
+LEGACY_GROUPS = {"By Party": "Party", "By Voucher Type": "Voucher Type", "By Account": "Account",
+	"By Mode of Payment": "Mode of Payment"}
+#: filters a drill link carries forward
+CARRIED = ("account", "branch", "cost_center", "direction", "category", "party_type", "party", "voucher_type",
+	"mode_of_payment", "exclude_internal_transfers", "exclude_pdc_accounts")
 
 
 def execute(filters=None):
-    filters = frappe._dict(filters or {})
-    company = filters.company or frappe.defaults.get_user_default("Company")
-    if not company:
-        frappe.throw(_("Please choose a company."))
+	filters = normalise(filters)
+	from_date, to_date = cf.as_dates(filters, lambda to: add_months(to, -1))
+	currency = frappe.get_cached_value("Company", filters.company, "default_currency")
+	group_by = LEGACY_GROUPS.get(filters.get("group_by"), filters.get("group_by")) or TRANSACTIONS
 
-    to_date = getdate(filters.to_date or nowdate())
-    from_date = getdate(filters.from_date or add_months(to_date, -1))
-    if from_date > to_date:
-        frappe.throw(_("From Date is after To Date."))
+	if group_by == RECEIVABLES_PAYABLES:
+		return receivables_payables_view(filters, from_date, to_date, currency)
 
-    accounts = _money_accounts(company, filters.get("account"))
-    if not accounts:
-        frappe.msgprint(_("No Cash or Bank accounts found for {0}.").format(company))
-        return _txn_columns(company), []
+	accounts = cf.selected_accounts(filters)
+	if not accounts:
+		frappe.msgprint(_("No Cash or Bank accounts found for this company."))
+		return transaction_columns(True), []
 
-    group_by = filters.get("group_by") or "Transactions"
-    if group_by == "Transactions":
-        opening = _opening(company, accounts, from_date)
-        return _transactions(company, accounts, from_date, to_date, filters, opening)
-    return _grouped(company, accounts, from_date, to_date, filters, group_by)
+	rows = cf.money_rows(filters, accounts, from_date, to_date)
+	reconciles = cf.balance_reconciles(filters)
+	opening = cf.opening_balance(filters, accounts, from_date) if reconciles else None
+	summary = cards(rows, opening, currency)
+	message = note(filters, accounts, reconciles)
 
-
-def _transactions(company, accounts, from_date, to_date, filters, opening):
-    """Every ledger movement on a money account, with a running balance.
-
-    Capped: a full year on this company is over thirty thousand rows and the browser will not
-    thank anybody for that. When the cap bites the report says so and names the figure, rather
-    than quietly showing a partial answer that looks complete.
-    """
-    params = {
-        "company": company,
-        "accounts": tuple(accounts),
-        "from_date": from_date,
-        "to_date": to_date,
-        "cap": ROW_CAP + 1,
-    }
-    where, params = _voucher_filters(filters, params)
-
-    rows = frappe.db.sql(
-        "SELECT gle.posting_date, gle.voucher_type, gle.voucher_no, gle.account,"
-        "       gle.party_type, gle.party, gle.against, gle.remarks, gle.cost_center,"
-        "       gle.debit AS money_in, gle.credit AS money_out"
-        " FROM `tabGL Entry` gle"
-        " WHERE gle.company = %(company)s AND gle.is_cancelled = 0"
-        "   AND gle.account IN %(accounts)s"
-        "   AND gle.posting_date BETWEEN %(from_date)s AND %(to_date)s"
-        + where +
-        " ORDER BY gle.posting_date, gle.creation LIMIT %(cap)s",
-        params,
-        as_dict=True,
-    )
-
-    truncated = len(rows) > ROW_CAP
-    rows = rows[:ROW_CAP]
-
-    modes = _modes_for(rows)
-    running, total_in, total_out = opening, 0.0, 0.0
-    data = [{
-        "period": _("Opening Balance"), "running": opening, "is_opening": 1,
-        "money_in": None, "money_out": None, "net": None,
-    }]
-    for r in rows:
-        running = flt(running + flt(r.money_in) - flt(r.money_out), 3)
-        total_in += flt(r.money_in)
-        total_out += flt(r.money_out)
-        data.append({
-            "posting_date": r.posting_date,
-            "voucher_type": r.voucher_type,
-            "voucher_no": r.voucher_no,
-            "account": r.account,
-            "party": r.party or "",
-            "against": r.against or "",
-            "mode_of_payment": modes.get(r.voucher_no, ""),
-            "remarks": (r.remarks or "")[:140],
-            "money_in": flt(r.money_in, 3),
-            "money_out": flt(r.money_out, 3),
-            "net": flt(flt(r.money_in) - flt(r.money_out), 3),
-            "running": running,
-        })
-
-    data.append({
-        "period": _("Total"), "voucher_type": _("Total"),
-        "money_in": flt(total_in, 3), "money_out": flt(total_out, 3),
-        "net": flt(total_in - total_out, 3), "running": running, "is_total": 1,
-    })
-
-    msg = _message(accounts, filters)
-    if truncated:
-        msg += (
-            "<div style='margin-top:6px;padding:8px 10px;border-left:3px solid #b71c1c;"
-            "background:#fdecea'>"
-            + _("Showing the first {0} transactions of this period; there are more. Narrow the "
-                "dates, pick a single account, or use one of the By views to see everything "
-                "summarised.").format(ROW_CAP)
-            + "</div>"
-        )
-
-    summary = [
-        {"label": _("Opening Balance"), "value": opening, "datatype": "Currency", "indicator": "Blue"},
-        {"label": _("Money In"), "value": flt(total_in, 3), "datatype": "Currency", "indicator": "Green"},
-        {"label": _("Money Out"), "value": flt(total_out, 3), "datatype": "Currency", "indicator": "Red"},
-        {"label": _("Transactions"), "value": len(rows), "datatype": "Int"},
-        {"label": _("Closing Balance"), "value": running, "datatype": "Currency",
-         "indicator": "Blue" if running >= 0 else "Red"},
-    ]
-    return _txn_columns(company), data, msg, None, summary
+	if group_by == TRANSACTIONS:
+		return transaction_columns(reconciles), transaction_rows(rows, opening, currency), message, None, summary
+	if group_by == CATEGORY_PARTY:
+		data = category_party_rows(rows, filters, from_date, to_date, currency)
+		return grouped_columns(_("Category / Party")), data, message, None, summary
+	key, drill, label = GROUPS.get(group_by, GROUPS["Category"])
+	data = grouped_rows(rows, key, drill, filters, from_date, to_date, currency)
+	return grouped_columns(_(label)), data, message, chart(data), summary
 
 
-def _grouped(company, accounts, from_date, to_date, filters, view):
-    """The same money, totalled by whatever the reader is asking about."""
-    field = {
-        "By Party": "gle.party",
-        "By Voucher Type": "gle.voucher_type",
-        "By Account": "gle.account",
-    }.get(view)
-    if not field and view != "By Mode of Payment":
-        frappe.throw(_("Unknown grouping: {0}").format(view))
-
-    params = {"company": company, "accounts": tuple(accounts),
-              "from_date": from_date, "to_date": to_date}
-    where, params = _voucher_filters(filters, params)
-
-    if view == "By Mode of Payment":
-        return _by_mode(company, accounts, from_date, to_date, filters, params, where)
-
-    rows = frappe.db.sql(
-        "SELECT COALESCE(NULLIF(" + field + ", ''), '" + _("(not set)") + "') AS grp,"
-        "       ROUND(SUM(gle.debit), 3) AS money_in,"
-        "       ROUND(SUM(gle.credit), 3) AS money_out,"
-        "       COUNT(*) AS txns"
-        " FROM `tabGL Entry` gle"
-        " WHERE gle.company = %(company)s AND gle.is_cancelled = 0"
-        "   AND gle.account IN %(accounts)s"
-        "   AND gle.posting_date BETWEEN %(from_date)s AND %(to_date)s"
-        + where +
-        " GROUP BY grp ORDER BY (SUM(gle.debit) + SUM(gle.credit)) DESC",
-        params,
-        as_dict=True,
-    )
-    return _finish_grouped(company, rows, view, accounts, filters)
+def normalise(filters):
+	filters = frappe._dict(filters or {})
+	filters.company = filters.company or frappe.defaults.get_user_default("Company")
+	if not filters.company:
+		frappe.throw(_("Please choose a company."))
+	branch = filters.get("branch")
+	if isinstance(branch, str):
+		# a drill link carries a list as JSON or as "A,B"
+		try:
+			branch = json.loads(branch)
+		except ValueError:
+			branch = [b.strip() for b in branch.split(",")]
+	if isinstance(branch, (list, tuple)):
+		filters.branch = [b for b in branch if b]
+	else:
+		filters.branch = [branch] if branch else []
+	return filters
 
 
-def _by_mode(company, accounts, from_date, to_date, filters, params, where):
-    """Mode of payment lives on the Payment Entry, not on the ledger row, so it is joined in.
-
-    Everything that moved money by another route - journals, POS settlements - lands under
-    'No payment entry', which on this site is a large number and worth seeing rather than
-    hiding.
-    """
-    rows = frappe.db.sql(
-        "SELECT COALESCE(NULLIF(pe.mode_of_payment, ''), '" + _("No payment entry") + "') AS grp,"
-        "       ROUND(SUM(gle.debit), 3) AS money_in,"
-        "       ROUND(SUM(gle.credit), 3) AS money_out,"
-        "       COUNT(*) AS txns"
-        " FROM `tabGL Entry` gle"
-        " LEFT JOIN `tabPayment Entry` pe"
-        "        ON pe.name = gle.voucher_no AND gle.voucher_type = 'Payment Entry'"
-        " WHERE gle.company = %(company)s AND gle.is_cancelled = 0"
-        "   AND gle.account IN %(accounts)s"
-        "   AND gle.posting_date BETWEEN %(from_date)s AND %(to_date)s"
-        + where +
-        " GROUP BY grp ORDER BY (SUM(gle.debit) + SUM(gle.credit)) DESC",
-        params,
-        as_dict=True,
-    )
-    return _finish_grouped(company, rows, "By Mode of Payment", accounts, filters)
+# ── transactions ────────────────────────────────────────────────────────────────────────────────
 
 
-def _finish_grouped(company, rows, view, accounts, filters):
-    data, total_in, total_out = [], 0.0, 0.0
-    for r in rows:
-        total_in += flt(r.money_in)
-        total_out += flt(r.money_out)
-        data.append({
-            "group": r.grp,
-            "txns": cint(r.txns),
-            "money_in": flt(r.money_in, 3),
-            "money_out": flt(r.money_out, 3),
-            "net": flt(flt(r.money_in) - flt(r.money_out), 3),
-        })
-    data.append({
-        "group": _("Total"), "txns": sum(cint(r.txns) for r in rows),
-        "money_in": flt(total_in, 3), "money_out": flt(total_out, 3),
-        "net": flt(total_in - total_out, 3), "is_total": 1,
-    })
-
-    chart = {
-        "data": {
-            "labels": [d["group"] for d in data[:-1]][:12],
-            "datasets": [
-                {"name": _("Money In"), "values": [flt(d["money_in"]) for d in data[:-1]][:12]},
-                {"name": _("Money Out"), "values": [flt(d["money_out"]) for d in data[:-1]][:12]},
-            ],
-        },
-        "type": "bar",
-        "colors": ["#2e7d32", "#c62828"],
-        "fieldtype": "Currency",
-    } if len(data) > 1 else None
-
-    summary = [
-        {"label": _("Money In"), "value": flt(total_in, 3), "datatype": "Currency", "indicator": "Green"},
-        {"label": _("Money Out"), "value": flt(total_out, 3), "datatype": "Currency", "indicator": "Red"},
-        {"label": _("Net Movement"), "value": flt(total_in - total_out, 3), "datatype": "Currency",
-         "indicator": "Green" if total_in >= total_out else "Red"},
-        {"label": _("Groups"), "value": len(rows), "datatype": "Int"},
-    ]
-    return _grouped_columns(company, view), data, _message(accounts, filters), chart, summary
+def transaction_rows(rows, opening, currency):
+	"""Every movement, capped for the browser. Totals and cards always cover every row."""
+	data = []
+	running = opening
+	if opening is not None:
+		data.append({"posting_date": None, "voucher_type": _("Opening Balance"), "running": opening,
+			"is_opening": 1, "currency": currency})
+	for r in rows[:ROW_CAP]:
+		net = flt(r.money_in - r.money_out, 3)
+		if running is not None:
+			running = flt(running + net, 3)
+		data.append({
+			"posting_date": r.posting_date, "voucher_type": r.voucher_type, "voucher_no": r.voucher_no,
+			"account": r.account, "branch": r.branch, "category": r.category,
+			"party_type": r.counter_party_type, "party": r.counter_party, "mode_of_payment": r.mode_of_payment,
+			"remarks": (r.remarks or "")[:140], "money_in": r.money_in, "money_out": r.money_out,
+			"net": net, "running": running, "currency": currency,
+		})
+	total_in, total_out = summarise(rows)
+	closing = flt(opening + total_in - total_out, 3) if opening is not None else None
+	data.append({"voucher_type": _("Total"), "money_in": flt(total_in, 3), "money_out": flt(total_out, 3),
+		"net": flt(total_in - total_out, 3), "running": closing, "is_total": 1, "currency": currency})
+	if len(rows) > ROW_CAP:
+		capped = _("Showing the first {0} of {1} movements; totals and cards cover all of them.")
+		frappe.msgprint(capped.format(ROW_CAP, len(rows)) + " " + _("Narrow the dates or group the report to see the rest."))
+	return data
 
 
-def _voucher_filters(filters, params):
-    """The account / mode-of-payment / internal-transfer / direction filters."""
-    where = ""
-    direction = filters.get("direction")
-    if direction == "Money In":
-        where += " AND gle.debit > 0"
-    elif direction == "Money Out":
-        where += " AND gle.credit > 0"
-    if cint(filters.get("exclude_internal_transfers")):
-        where += (
-            " AND gle.voucher_no NOT IN ("
-            "   SELECT x.voucher_no FROM `tabGL Entry` x"
-            "   WHERE x.company = %(company)s AND x.is_cancelled = 0"
-            "     AND x.account IN %(accounts)s"
-            "     AND x.posting_date BETWEEN %(from_date)s AND %(to_date)s"
-            "   GROUP BY x.voucher_no HAVING COUNT(DISTINCT x.account) > 1)"
-        )
-    if filters.get("mode_of_payment"):
-        vouchers = frappe.get_all(
-            "Payment Entry",
-            filters={"company": params["company"], "docstatus": 1,
-                     "mode_of_payment": filters.get("mode_of_payment")},
-            pluck="name",
-        )
-        params["vouchers"] = tuple(vouchers) if vouchers else ("__none__",)
-        where += " AND gle.voucher_no IN %(vouchers)s"
-    return where, params
+def transaction_columns(reconciles):
+	columns = [
+		{"label": _("Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 95},
+		{"label": _("Voucher Type"), "fieldname": "voucher_type", "fieldtype": "Data", "width": 120},
+		{"label": _("Voucher"), "fieldname": "voucher_no", "fieldtype": "Dynamic Link", "options": "voucher_type", "width": 150},
+		{"label": _("Account"), "fieldname": "account", "fieldtype": "Link", "options": "Account", "width": 190},
+		{"label": _("Branch"), "fieldname": "branch", "fieldtype": "Link", "options": "Branch", "width": 75},
+		{"label": _("Category"), "fieldname": "category", "fieldtype": "Data", "width": 120},
+		{"label": _("Party Type"), "fieldname": "party_type", "fieldtype": "Data", "width": 85},
+		{"label": _("Party"), "fieldname": "party", "fieldtype": "Dynamic Link", "options": "party_type", "width": 160},
+		{"label": _("Mode"), "fieldname": "mode_of_payment", "fieldtype": "Data", "width": 120},
+		money("money_in", _("Money In")),
+		money("money_out", _("Money Out")),
+		money("net", _("Net")),
+	]
+	if reconciles:
+		columns.append(money("running", _("Running Balance"), 140))
+	columns += [{"label": _("Remarks"), "fieldname": "remarks", "fieldtype": "Data", "width": 260}, CURRENCY]
+	return columns
 
 
-def _modes_for(rows):
-    """Mode of payment for the payment entries among these rows, in one query."""
-    names = list({r.voucher_no for r in rows if r.voucher_type == "Payment Entry"})
-    if not names:
-        return {}
-    return {
-        r.name: r.mode_of_payment
-        for r in frappe.get_all("Payment Entry", filters={"name": ["in", names]},
-                                fields=["name", "mode_of_payment"])
-    }
+# ── grouped ─────────────────────────────────────────────────────────────────────────────────────
 
 
-def _txn_columns(company):
-    currency = frappe.db.get_value("Company", company, "default_currency")
-    return [
-        {"label": _("Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 95},
-        {"label": _("Type"), "fieldname": "voucher_type", "fieldtype": "Data", "width": 120},
-        {"label": _("Voucher"), "fieldname": "voucher_no", "fieldtype": "Dynamic Link",
-         "options": "voucher_type", "width": 175},
-        {"label": _("Money Account"), "fieldname": "account", "fieldtype": "Link",
-         "options": "Account", "width": 180},
-        {"label": _("Party"), "fieldname": "party", "fieldtype": "Data", "width": 150},
-        {"label": _("Against"), "fieldname": "against", "fieldtype": "Data", "width": 180},
-        {"label": _("Mode"), "fieldname": "mode_of_payment", "fieldtype": "Data", "width": 110},
-        {"label": _("Money In"), "fieldname": "money_in", "fieldtype": "Currency",
-         "options": "currency", "width": 120},
-        {"label": _("Money Out"), "fieldname": "money_out", "fieldtype": "Currency",
-         "options": "currency", "width": 120},
-        {"label": _("Running Balance"), "fieldname": "running", "fieldtype": "Currency",
-         "options": "currency", "width": 140},
-        {"label": _("Remarks"), "fieldname": "remarks", "fieldtype": "Data", "width": 240},
-        {"label": _("Currency"), "fieldname": "currency", "fieldtype": "Data", "width": 1,
-         "hidden": 1, "default": currency},
-    ]
+def group_value(row, key):
+	if key == "month":
+		return getdate(row.posting_date).strftime("%Y-%m")
+	value = row.get(key)
+	if key == "posting_date":
+		return str(value)
+	return value or NOT_SET
 
 
-def _grouped_columns(company, view):
-    currency = frappe.db.get_value("Company", company, "default_currency")
-    label = {"By Party": _("Party"), "By Voucher Type": _("Voucher Type"),
-             "By Account": _("Money Account"), "By Mode of Payment": _("Mode of Payment")}.get(
-        view, _("Group"))
-    return [
-        {"label": label, "fieldname": "group", "fieldtype": "Data", "width": 280},
-        {"label": _("Transactions"), "fieldname": "txns", "fieldtype": "Int", "width": 110},
-        {"label": _("Money In"), "fieldname": "money_in", "fieldtype": "Currency",
-         "options": "currency", "width": 150},
-        {"label": _("Money Out"), "fieldname": "money_out", "fieldtype": "Currency",
-         "options": "currency", "width": 150},
-        {"label": _("Net"), "fieldname": "net", "fieldtype": "Currency",
-         "options": "currency", "width": 150},
-        {"label": _("Currency"), "fieldname": "currency", "fieldtype": "Data", "width": 1,
-         "hidden": 1, "default": currency},
-    ]
+def drill_args(filters, from_date, to_date, extra):
+	args = {"company": filters.company, "from_date": str(from_date), "to_date": str(to_date), "group_by": TRANSACTIONS}
+	for key in CARRIED:
+		value = filters.get(key)
+		if value:
+			args[key] = ",".join(value) if isinstance(value, (list, tuple)) else value
+	args.update({k: v for k, v in extra.items() if v is not None})
+	return args
+
+
+def drill_link(label, args):
+	url = "/app/query-report/Cash Flow Detail?" + urlencode(args)
+	return "<a href='%s'>%s</a>" % (frappe.utils.escape_html(url), frappe.utils.escape_html(str(label)))
+
+
+def group_drill(key, drill, value, row_sample, filters, from_date, to_date):
+	"""The filters that open exactly this group's transactions, or None when nothing can."""
+	if key == "posting_date":
+		extra = {"from_date": value, "to_date": value}
+	elif key == "month":
+		first = getdate(value + "-01")
+		last = getdate(frappe.utils.get_last_day(first))
+		extra = {"from_date": str(max(first, getdate(from_date))), "to_date": str(min(last, getdate(to_date)))}
+	elif key == "counter_party":
+		if not row_sample.counter_party:
+			return None
+		extra = {"party_type": row_sample.counter_party_type, "party": row_sample.counter_party}
+	elif drill and value != NOT_SET:
+		extra = {drill: value}
+	else:
+		return None
+	return drill_args(filters, from_date, to_date, extra)
+
+
+def summarise(rows):
+	return sum(r.money_in for r in rows) or 0.0, sum(r.money_out for r in rows) or 0.0
+
+
+def grouped_rows(rows, key, drill, filters, from_date, to_date, currency):
+	groups = defaultdict(lambda: frappe._dict(money_in=0.0, money_out=0.0, count=0, sample=None))
+	for r in rows:
+		g = groups[group_value(r, key)]
+		g.money_in += r.money_in
+		g.money_out += r.money_out
+		g.count += 1
+		g.sample = g.sample or r
+	total_in, total_out = summarise(rows)
+	if key in ("posting_date", "month"):
+		ordered = sorted(groups.items())
+	else:
+		ordered = sorted(groups.items(), key=lambda kv: -(kv[1].money_in + kv[1].money_out))
+	data = []
+	for value, g in ordered:
+		args = group_drill(key, drill, value, g.sample, filters, from_date, to_date)
+		data.append(group_row(drill_link(value, args) if args else value, value, g, total_in, total_out, currency))
+	data.append(total_row(rows, currency))
+	return data
+
+
+def category_party_rows(rows, filters, from_date, to_date, currency):
+	"""Category rows, each opened up by party (indent 1) -- a two-level drill on one screen."""
+	by_category = defaultdict(list)
+	for r in rows:
+		by_category[r.category].append(r)
+	total_in, total_out = summarise(rows)
+	data = []
+	for category in sorted(by_category, key=lambda c: -sum(r.money_in + r.money_out for r in by_category[c])):
+		members = by_category[category]
+		g = frappe._dict(money_in=sum(r.money_in for r in members), money_out=sum(r.money_out for r in members),
+			count=len(members))
+		cell = drill_link(category, drill_args(filters, from_date, to_date, {"category": category}))
+		data.append(dict(group_row(cell, category, g, total_in, total_out, currency), indent=0))
+		parties = defaultdict(lambda: frappe._dict(money_in=0.0, money_out=0.0, count=0))
+		for r in members:
+			p = parties[(r.counter_party_type, r.counter_party)]
+			p.money_in += r.money_in
+			p.money_out += r.money_out
+			p.count += 1
+		for (party_type, party), p in sorted(parties.items(), key=lambda kv: -(kv[1].money_in + kv[1].money_out)):
+			if party:
+				extra = {"category": category, "party_type": party_type, "party": party}
+				cell, label = drill_link(party, drill_args(filters, from_date, to_date, extra)), party
+			else:
+				cell = label = _("(no party)")
+			data.append(dict(group_row(cell, label, p, total_in, total_out, currency), indent=1))
+	data.append(total_row(rows, currency))
+	return data
+
+
+def group_row(cell, label, g, total_in, total_out, currency):
+	return {
+		"group": cell, "label": label, "count": g.count,
+		"money_in": flt(g.money_in, 3), "money_out": flt(g.money_out, 3), "net": flt(g.money_in - g.money_out, 3),
+		"share_in": flt(g.money_in * 100 / total_in, 1) if total_in else None,
+		"share_out": flt(g.money_out * 100 / total_out, 1) if total_out else None,
+		"currency": currency,
+	}
+
+
+def total_row(rows, currency):
+	total_in, total_out = summarise(rows)
+	return {"group": _("Total"), "label": _("Total"), "count": len(rows), "money_in": flt(total_in, 3),
+		"money_out": flt(total_out, 3), "net": flt(total_in - total_out, 3), "is_total": 1, "currency": currency}
+
+
+def grouped_columns(label):
+	return [
+		{"label": label, "fieldname": "group", "fieldtype": "Data", "width": 260},
+		{"label": _("Movements"), "fieldname": "count", "fieldtype": "Int", "width": 90},
+		money("money_in", _("Money In")),
+		{"label": _("% of In"), "fieldname": "share_in", "fieldtype": "Percent", "width": 80},
+		money("money_out", _("Money Out")),
+		{"label": _("% of Out"), "fieldname": "share_out", "fieldtype": "Percent", "width": 80},
+		money("net", _("Net")),
+		CURRENCY,
+	]
+
+
+# ── receivables and payables ────────────────────────────────────────────────────────────────────
+
+
+def receivables_payables_view(filters, from_date, to_date, currency):
+	model = cf.receivables_and_payables(filters, from_date, to_date)
+	receivable = model["lines"]["Receivable"]
+	payable = model["lines"]["Payable"]
+	ar_open = flt(model["opening"].get("Receivable"), 3)
+	ar_close = flt(model["closing"].get("Receivable"), 3)
+	# payables are credit balances; shown as what is owed, a positive figure
+	ap_open = -flt(model["opening"].get("Payable"), 3)
+	ap_close = -flt(model["closing"].get("Payable"), 3)
+
+	def link(label, extra):
+		return drill_link(label, drill_args(filters, from_date, to_date, extra))
+
+	data = [
+		{"line": _("Receivables: what customers owe"), "is_header": 1},
+		line(_("Opening balance"), ar_open, currency, bold=1),
+		line(_("+ Sales invoiced"), receivable["invoiced"], currency),
+		line(_("- Sales returns"), -receivable["returned"], currency),
+		line(link(_("- Collected"), {"category": cf.CUSTOMERS, "direction": "Money In"}), -receivable["settled"], currency),
+		line(link(_("+ Refunds paid out"), {"category": cf.CUSTOMERS, "direction": "Money Out"}), receivable["refunded"], currency),
+		line(_("+/- Adjustments (set-offs, write-offs, journals)"), receivable["adjusted"], currency),
+		line(_("Closing balance"), ar_close, currency, bold=1),
+		{"line": ""},
+		{"line": _("Payables: what we owe suppliers"), "is_header": 1},
+		line(_("Opening balance"), ap_open, currency, bold=1),
+		line(_("+ Purchases billed"), payable["invoiced"], currency),
+		line(_("- Purchase returns"), -payable["returned"], currency),
+		line(link(_("- Paid"), {"category": cf.SUPPLIERS, "direction": "Money Out"}), -payable["settled"], currency),
+		line(link(_("+ Refunds received"), {"category": cf.SUPPLIERS, "direction": "Money In"}), payable["refunded"], currency),
+		line(_("+/- Adjustments (set-offs, write-offs, journals)"), payable["adjusted"], currency),
+		line(_("Closing balance"), ap_close, currency, bold=1),
+		{"line": ""},
+		{"line": _("Net position"), "is_header": 1},
+		line(_("Receivables less payables, opening"), ar_open - ap_open, currency),
+		line(_("Receivables less payables, closing"), ar_close - ap_close, currency, bold=1),
+	]
+	collectible = ar_open + receivable["invoiced"] - receivable["returned"]
+	payable_due = ap_open + payable["invoiced"] - payable["returned"]
+	data += [
+		{"line": _("Collection ratio (collected / opening + net sales)"),
+			"ratio": flt(receivable["settled"] * 100 / collectible, 1) if collectible else None},
+		{"line": _("Payment ratio (paid / opening + net purchases)"),
+			"ratio": flt(payable["settled"] * 100 / payable_due, 1) if payable_due else None},
+	]
+	columns = [
+		{"label": _("Line"), "fieldname": "line", "fieldtype": "Data", "width": 360},
+		money("amount", _("Amount"), 160),
+		{"label": _("Ratio"), "fieldname": "ratio", "fieldtype": "Percent", "width": 90},
+		CURRENCY,
+	]
+	summary = [
+		card(_("Receivables, closing"), ar_close, currency, "Blue"),
+		card(_("Collected"), receivable["settled"], currency, "Green"),
+		card(_("Payables, closing"), ap_close, currency, "Orange"),
+		card(_("Paid"), payable["settled"], currency, "Red"),
+	]
+	return columns, data, None, None, summary
+
+
+def line(label, amount, currency, bold=0):
+	return {"line": label, "amount": flt(amount, 3), "currency": currency, "bold": bold}
+
+
+# ── shared bits ─────────────────────────────────────────────────────────────────────────────────
+
+
+CURRENCY = {"label": "Currency", "fieldname": "currency", "fieldtype": "Link", "options": "Currency", "hidden": 1}
+
+
+def money(fieldname, label, width=130):
+	return {"label": label, "fieldname": fieldname, "fieldtype": "Currency", "options": "currency", "width": width}
+
+
+def card(label, value, currency, indicator):
+	return {"label": label, "value": flt(value, 3), "datatype": "Currency", "currency": currency, "indicator": indicator}
+
+
+def cards(rows, opening, currency):
+	total_in, total_out = summarise(rows)
+	out = [
+		card(_("Money In"), total_in, currency, "Green"),
+		card(_("Money Out"), total_out, currency, "Red"),
+		card(_("Net"), total_in - total_out, currency, "Green" if total_in >= total_out else "Red"),
+	]
+	if opening is not None:
+		closing = opening + total_in - total_out
+		out = [card(_("Opening Balance"), opening, currency, "Blue")] + out
+		out.append(card(_("Closing Balance"), closing, currency, "Blue" if closing >= 0 else "Red"))
+	return out
+
+
+def note(filters, accounts, reconciles):
+	reading = _("Reading {0} cash / bank account(s).").format(len(accounts))
+	bits = [reading + " " + _("Each movement is classed by the other side of its voucher.")]
+	if not reconciles:
+		bits.append(_("A movement filter is set (direction, category, party, voucher type, mode or transfers), "
+			"so no running balance is shown: a balance cannot be filtered that way."))
+	elif not cint(filters.get("exclude_internal_transfers")):
+		bits.append(_("Transfers between your own accounts appear on both sides and net to nil."))
+	return "<div style='padding:8px 10px;border-left:3px solid #1f6f54'>" + "<br>".join(bits) + "</div>"
+
+
+def chart(data):
+	points = [d for d in data if not d.get("is_total")][:20]
+	if not points:
+		return None
+	return {
+		"data": {
+			"labels": [str(d.get("label")) for d in points],
+			"datasets": [
+				{"name": _("Money In"), "values": [flt(d.get("money_in")) for d in points]},
+				{"name": _("Money Out"), "values": [flt(d.get("money_out")) for d in points]},
+			],
+		},
+		"type": "bar",
+		"colors": ["#2e7d32", "#c62828"],
+		"fieldtype": "Currency",
+	}

@@ -29,6 +29,7 @@ from frappe.utils import add_days, cint, flt, getdate, nowdate
 from sf_trading.sf_trading.doctype.payment_advice.payment_advice import (
     ORDER_DOCTYPES,
     BUILDER_PARTY_TYPES,
+    CREDIT_NOTE_DOCTYPES,
     PAY_PARTY_TYPES,
     RECEIVE_PARTY_TYPES,
     get_party_account,
@@ -159,7 +160,8 @@ def _already_advised(records):
             "reference_record": ["in", records],
             "parenttype": "Payment Advice",
             "docstatus": ["!=", 2],
-            "allocated_amount": [">", 0],
+            # a debit note is held by its negative allocation
+            "allocated_amount": ["!=", 0],
         },
         fields=["reference_record", "parent"],
     )
@@ -502,7 +504,9 @@ def create_advices_from_documents(documents, options=None):
             continue
 
         total, payable = get_reference_amounts(doctype, row.name, meta)
-        if payable <= 0:
+        # an open debit / credit note rides along at its negative outstanding and nets its
+        # party's advice down (payment_advice.is_credit_row)
+        if payable <= 0 and not (doctype in CREDIT_NOTE_DOCTYPES and payable < -0.0005):
             skipped_nothing_due.append(row.name)
             continue
 

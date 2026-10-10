@@ -352,6 +352,14 @@ frappe.ui.form.on("Payment Advice", {
 		if (unallocated > 0.0005) {
 			msg += " — " + __("{0} unallocated", [format_currency(unallocated)]);
 		}
+		// open debit / credit notes are set off in full and net the payment down
+		const notes = frm.doc.payment_advice_reference.filter((d) => flt(d.allocated_amount) < 0);
+		if (notes.length) {
+			msg += " — " + __("net of {0} in {1} debit / credit note(s)", [
+				format_currency(-notes.reduce((sum, d) => sum + flt(d.allocated_amount), 0)),
+				notes.length,
+			]);
+		}
 		frm.dashboard.set_headline(msg);
 	},
 

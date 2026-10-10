@@ -11,18 +11,19 @@ when a row carries no reference date at all. The notification "PDC Cheque Date R
 time, so the alert and the Reminder Date column still name the same day — the column exists
 so an accountant can see, in the report, the day the alert lands. Keep the two in step.
 
-Internal Transfer: a cheque is banked by an Internal Transfer Payment Entry out of the
-cheque holding account, created by `sf_trading.pdc_transfer`, which names the cheque in
-`custom_pdc_source_payment_entry` and stamps `clearance_date` on it when submitted. The
-Transfer and Transfer Status columns read that link, so "has this cheque been banked?" is
-answered on the row rather than by hunting for a matching amount.
+Internal Transfer: a cheque is banked -- in full or in parts -- by Internal Transfer Payment
+Entries created by `sf_trading.pdc_transfer`, each naming the cheque in
+`custom_pdc_source_payment_entry`; a cheque returned unpaid is reversed by a Journal Entry that
+names it the same way. Status, Cleared, Returned and Remaining are worked out here from those
+documents (`pdc_transfer.position_of`), so the report is right even where the stored PDC Status
+on the cheque has not been refreshed yet.
 """
 
 import frappe
 from frappe import _
 from frappe.utils import add_days, cint, date_diff, flt, getdate, nowdate
 
-from sf_trading.pdc_transfer import REJECTION_FIELD, transfers_for
+from sf_trading.pdc_transfer import REJECTION_FIELD, position_of, return_rows, transfer_rows
 
 # days before the posting date that the PDC reminder notification fires
 REMINDER_LEAD_DAYS = 3
@@ -76,15 +77,10 @@ def get_data(filters):
     # rather than simply not knowing about Rejected yet.
     has_rejection_field = frappe.db.has_column("Payment Entry", REJECTION_FIELD)
 
+    # applied per row below, from the cheque's own transfers and returns; "Rejected" is the
+    # name the report used before returns were posted, and asks for both kinds of return
     status = filters.get("status")
-    if status == "Pending":
-        conds.append(["Payment Entry", "clearance_date", "is", "not set"])
-        if has_rejection_field:
-            conds.append(["Payment Entry", REJECTION_FIELD, "is", "not set"])
-    elif status == "Cleared":
-        conds.append(["Payment Entry", "clearance_date", "is", "set"])
-    elif status == "Rejected" and has_rejection_field:
-        conds.append(["Payment Entry", REJECTION_FIELD, "is", "set"])
+    wanted = {"Rejected": {"Returned", "Partly Returned"}}.get(status, {status} if status else None)
 
     fields = [
         "name", "payment_type", "posting_date", "reference_date", "reference_no",
@@ -102,7 +98,8 @@ def get_data(filters):
         order_by="reference_date asc, name asc",
     )
 
-    transfers = transfers_for([r.name for r in rows])
+    names = [r.name for r in rows]
+    transfers, returns = transfer_rows(names), return_rows(names)
     transfer_filter = filters.get("transfer_status")
 
     today = getdate(nowdate())
@@ -123,26 +120,33 @@ def get_data(filters):
         days_to_anchor = date_diff(anchor, today) if anchor else None
         days_to_posting = date_diff(posting_date, today) if posting_date else None
 
-        transfer = transfers.get(r.name)
-        if transfer:
-            transfer_state = "Transferred" if cint(transfer.docstatus) == 1 else "Draft Transfer"
-        else:
+        cheque_transfers = transfers.get(r.name, [])
+        pos = position_of(r, transfers=cheque_transfers, returns=returns.get(r.name, []))
+        submitted = [t for t in cheque_transfers if cint(t.docstatus) == 1]
+        transfer = (submitted or cheque_transfers or [None])[-1]
+        if any(cint(t.docstatus) == 0 for t in cheque_transfers):
+            transfer_state = "Draft Transfer"
+        elif not submitted:
             transfer_state = "Not Transferred"
+        elif pos.remaining > 0.0005 and pos.status == "Partly Cleared":
+            transfer_state = "Partly Transferred"
+        else:
+            transfer_state = "Transferred"
         if transfer_filter and transfer_filter != transfer_state:
             continue
 
         rejection_date = r.get(REJECTION_FIELD) if has_rejection_field else None
         if r.docstatus == 2:
             state = "Cancelled"
-        elif rejection_date:
-            # Checked before Cleared/Pending: a bounced cheque has no clearance_date either, so
-            # without this it read as "Pending" forever (GS Issue 25) -- indistinguishable from
-            # one still genuinely waiting on the bank.
-            state = "Rejected"
-        elif r.clearance_date:
-            state = "Cleared"
+        elif r.docstatus == 0:
+            state = "Draft"
+        elif r.payment_type == "Internal Transfer":
+            state = "Transfer"
         else:
-            state = "Pending"
+            state = pos.status
+        if wanted and state not in wanted:
+            continue
+        settled = r.docstatus == 1
         out.append({
             "payment_entry": r.name,
             "payment_type": r.payment_type,
@@ -155,6 +159,7 @@ def get_data(filters):
             "days_to_reminder_anchor": days_to_anchor,
             "status": state,
             "internal_transfer": transfer.name if transfer else None,
+            "transfers": len(cheque_transfers),
             "transfer_status": transfer_state,
             "transfer_date": getdate(transfer.posting_date) if transfer and transfer.posting_date else None,
             "transfer_account": transfer.paid_to if transfer else None,
@@ -163,6 +168,10 @@ def get_data(filters):
             "party_name": r.party_name,
             "mode_of_payment": r.mode_of_payment,
             "amount": amount,
+            "cleared_amount": pos.cleared if settled else 0,
+            "returned_amount": pos.returned if settled else 0,
+            "remaining_amount": pos.remaining if settled else 0,
+            "return_journal": (returns.get(r.name) or [frappe._dict(name=None)])[-1].name,
             "currency": currency,
             "bank_account": bank,
             "clearance_date": r.clearance_date,
@@ -182,9 +191,10 @@ def get_columns():
         {"label": _("Cheque Date"), "fieldname": "cheque_date", "fieldtype": "Date", "width": 100},
         {"label": _("Cheque / Ref No"), "fieldname": "reference_no", "fieldtype": "Data", "width": 170},
         {"label": _("Days to Cheque Date"), "fieldname": "days_to_cheque_date", "fieldtype": "Int", "width": 125},
-        {"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 90},
+        {"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 115},
         {"label": _("Transfer Status"), "fieldname": "transfer_status", "fieldtype": "Data", "width": 125},
         {"label": _("Internal Transfer"), "fieldname": "internal_transfer", "fieldtype": "Link", "options": "Payment Entry", "width": 165},
+        {"label": _("Transfers"), "fieldname": "transfers", "fieldtype": "Int", "width": 80},
         {"label": _("Transferred On"), "fieldname": "transfer_date", "fieldtype": "Date", "width": 110},
         {"label": _("Transferred To"), "fieldname": "transfer_account", "fieldtype": "Link", "options": "Account", "width": 170},
         {"label": _("Party Type"), "fieldname": "party_type", "fieldtype": "Data", "width": 90},
@@ -192,9 +202,13 @@ def get_columns():
         {"label": _("Party Name"), "fieldname": "party_name", "fieldtype": "Data", "width": 180},
         {"label": _("Mode of Payment"), "fieldname": "mode_of_payment", "fieldtype": "Link", "options": "Mode of Payment", "width": 120},
         {"label": _("Amount"), "fieldname": "amount", "fieldtype": "Currency", "options": "currency", "width": 120},
+        {"label": _("Cleared"), "fieldname": "cleared_amount", "fieldtype": "Currency", "options": "currency", "width": 115},
+        {"label": _("Returned"), "fieldname": "returned_amount", "fieldtype": "Currency", "options": "currency", "width": 115},
+        {"label": _("Remaining"), "fieldname": "remaining_amount", "fieldtype": "Currency", "options": "currency", "width": 115},
         {"label": _("Currency"), "fieldname": "currency", "fieldtype": "Link", "options": "Currency", "width": 70},
         {"label": _("Bank / Cash Account"), "fieldname": "bank_account", "fieldtype": "Link", "options": "Account", "width": 170},
         {"label": _("Cleared On"), "fieldname": "clearance_date", "fieldtype": "Date", "width": 100},
-        {"label": _("Rejected On"), "fieldname": "rejection_date", "fieldtype": "Date", "width": 100},
+        {"label": _("Returned On"), "fieldname": "rejection_date", "fieldtype": "Date", "width": 100},
+        {"label": _("Return Journal"), "fieldname": "return_journal", "fieldtype": "Link", "options": "Journal Entry", "width": 150},
         {"label": _("Company"), "fieldname": "company", "fieldtype": "Link", "options": "Company", "width": 150},
     ]
