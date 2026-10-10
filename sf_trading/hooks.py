@@ -74,7 +74,7 @@ doctype_js = {
 		"public/js/customer_quick_edit.js",
 		# copies the picked Sales Return Reason into Remarks; makes Remarks mandatory while the
 		# reason is "Other" -- a different, narrower concern than sales_return_window.js's
-		# window/approval gate
+		# window/approval gate (the picker itself is marked mandatory by its Custom Field)
 		"public/js/sales_return_reason.js",
 		# Sales Team's Sales Person picker only offers salespersons valid for this Company
 		"public/js/salesperson_by_company.js",
@@ -364,6 +364,9 @@ _MASTER_GATE = "sf_trading.party_documents.validate_party_at_transaction"
 # window/approval gate: this is only about WHY a return is being made. See
 # sf_trading/sales_return_reason.py.
 _RETURN_REASON_HOOK = "sf_trading.sales_return_reason.validate_return_reason"
+# ...and requires a return to pick custom_return_reason_template at all -- on the requester's own
+# save, submit and Send for Approval, never on an approver's action (sales_return_reason.py)
+_RETURN_REASON_REQUIRED = "sf_trading.sales_return_reason.require_reason_template"
 
 # Picks the purchase tax template matching the document currency (default
 # template for company-currency docs, "Import VAT 0%" otherwise).
@@ -512,6 +515,7 @@ doc_events = {
 			_BRANCH_HOOK,
 			_LH_HOOK,
 			_SP_HOOK,
+			_RETURN_REASON_REQUIRED,
 			_RETURN_REASON_HOOK,
 			# freezes the valuation rate on rows invoiced ahead of delivery
 			"sf_trading.sbnd.freeze_valuation_rate",

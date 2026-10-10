@@ -1,5 +1,7 @@
-// "Return Reason Template" (custom_return_reason_template, Link to Sales Return Reason) is a
-// convenience picker only -- Return/Debit Reason (custom_return_reason) is a pre-existing,
+// "Return Reason Template" (custom_return_reason_template, Link to Sales Return Reason) is required
+// on a return -- its Custom Field's mandatory_depends_on marks it, and
+// sf_trading.sales_return_reason.require_reason_template is the server half. It is still a picker
+// over the free text, not a replacement for it: Return/Debit Reason (custom_return_reason) is a pre-existing,
 // independently-used free-text field (reporting, print, debit notes) and this never repurposes or
 // replaces it. Picking a template APPENDS its label into whatever is already typed there, without
 // disturbing it; picking a different template swaps the appended text for the new one; clearing

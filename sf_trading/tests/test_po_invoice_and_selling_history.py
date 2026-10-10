@@ -9,7 +9,19 @@ from frappe.utils import add_days, add_months, flt, nowdate
 
 from sf_trading.api.purchase_order_invoice import make_purchase_invoice, set_update_stock
 from sf_trading.api.selling_history import _branches_to_read, get_selling_history
-from sf_trading.tests.test_open_items import CUSTOMER, SUPPLIER, TestOpenItems
+from sf_trading.tests.test_open_items import CUSTOMER, SUPPLIER, TestOpenItems, _MASTER_RULES
+
+
+# test_open_items' own module guards (master rules, Return Reason Template) do not run for this
+# module, which reuses its fixtures
+def setUpModule():
+	for guard in _MASTER_RULES:
+		guard.start()
+
+
+def tearDownModule():
+	for guard in _MASTER_RULES:
+		guard.stop()
 
 
 class TestPurchaseInvoiceUpdateStock(FrappeTestCase):

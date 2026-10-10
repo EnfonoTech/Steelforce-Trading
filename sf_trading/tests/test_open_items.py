@@ -31,6 +31,9 @@ from unittest.mock import patch
 _MASTER_RULES = (
 	patch("sf_trading.party_documents.rules_from", return_value=None),
 	patch("sf_trading.party_documents.validate_supplier_tax_id", return_value=None),
+	# nor are the credit notes made here asked for a Return Reason Template
+	# (sf_trading/tests/test_sales_return_reason.py covers that rule)
+	patch("sf_trading.sales_return_reason.require_reason_template", return_value=None),
 )
 
 
