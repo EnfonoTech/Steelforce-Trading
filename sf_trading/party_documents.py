@@ -153,7 +153,8 @@ def _types(rows) -> dict:
 
 def _changed_rows(doc) -> list:
 	"""Rows that are new, or whose type or dates changed since the last save."""
-	before = doc.get_doc_before_save() if hasattr(doc, "get_doc_before_save") else None
+	getter = getattr(doc, "get_doc_before_save", None)
+	before = getter() if callable(getter) else None
 	old = {r.name: r for r in (before.get(TABLE) or [])} if before else {}
 	changed = []
 	for row in doc.get(TABLE) or []:
