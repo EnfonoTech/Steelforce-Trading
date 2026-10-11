@@ -1,5 +1,5 @@
 // sf_trading/sf_trading/report/master_data_completeness/master_data_completeness.js
-// Which B2B customers and suppliers still lack documents, payment terms or contact details.
+// Which credit customers and suppliers still lack documents, payment terms or contact details.
 
 frappe.query_reports["Master Data Completeness"] = {
 	filters: [
@@ -14,8 +14,8 @@ frappe.query_reports["Master Data Completeness"] = {
 			fieldname: "scope",
 			label: __("Suppliers"),
 			fieldtype: "Select",
-			options: ["B2B Customers and Suppliers with Tax ID", "B2B Customers and All Suppliers"].join("\n"),
-			default: "B2B Customers and Suppliers with Tax ID",
+			options: ["Credit Customers and Suppliers with Tax ID", "Credit Customers and All Suppliers"].join("\n"),
+			default: "Credit Customers and Suppliers with Tax ID",
 		},
 		{
 			fieldname: "missing",

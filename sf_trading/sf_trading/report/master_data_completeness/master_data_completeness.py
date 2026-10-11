@@ -1,7 +1,7 @@
 # sf_trading/sf_trading/report/master_data_completeness/master_data_completeness.py
 """Master Data Completeness: which customers and suppliers still lack what they should carry.
 
-One row per B2B customer (VAT Registration Number on file) and per supplier -- by default the
+One row per credit customer (a Customer Credit Limit above zero) and per supplier -- by default the
 suppliers with a Tax ID, or every supplier -- with what is missing: a supporting document, a file
 attached to one, Payment Terms, a mobile number, an email, an address, Tax ID or CR number, and any
 document already expired. Masters created on or after SF Trading Settings > New-Master Rules From
@@ -21,8 +21,8 @@ from frappe.utils import add_days, cint, cstr, get_datetime, getdate, nowdate
 
 from sf_trading import party_documents as pd
 
-SCOPE_TAXED = "B2B Customers and Suppliers with Tax ID"
-SCOPE_ALL = "B2B Customers and All Suppliers"
+SCOPE_TAXED = "Credit Customers and Suppliers with Tax ID"
+SCOPE_ALL = "Credit Customers and All Suppliers"
 CHECKS = ("Supporting Document", "Document Attachment", "Payment Terms", "Mobile", "Email", "Address",
 	"Tax ID", "CR Number", "Expired Document")
 CHUNK = 1000
@@ -72,19 +72,29 @@ def _common_filters(filters, conditions):
 		conditions["disabled"] = 0
 
 
+def credit_customers() -> list:
+	"""Customers with a credit limit above zero (party_documents.is_credit_customer)."""
+	return frappe.get_all("Customer Credit Limit", filters={"parenttype": "Customer", "credit_limit": [">", 0]},
+		pluck="parent", distinct=True)
+
+
 def customers(filters) -> list:
-	conditions = {"custom_vat_registration_number": ["is", "set"]}
+	names = credit_customers()
+	if not names:
+		return []
+	conditions = {"name": ["in", names]}
 	_common_filters(filters, conditions)
 	masters = frappe.get_list("Customer", filters=conditions, fields=["name", "customer_name as party_name",
 		"custom_vat_registration_number as tax_id", "custom_commercial_registration_number as cr", "payment_terms",
 		"mobile_no", "custom_mobile_no", "email_id", "customer_primary_address as primary_address", "creation",
 		"disabled"], limit_page_length=0)
-	return build("Customer", [m for m in masters if cstr(m.tax_id).strip()], "Sales Invoice", "customer")
+	return build("Customer", masters, "Sales Invoice", "customer")
 
 
 def suppliers(filters) -> list:
 	conditions = {}
-	if (filters.get("scope") or SCOPE_TAXED) == SCOPE_TAXED:
+	# an older saved filter still says "B2B Customers and ..."; only the "All Suppliers" part matters
+	if "All Suppliers" not in (filters.get("scope") or SCOPE_TAXED):
 		conditions["tax_id"] = ["is", "set"]
 	_common_filters(filters, conditions)
 	masters = frappe.get_list("Supplier", filters=conditions, fields=["name", "supplier_name as party_name",
@@ -193,7 +203,8 @@ def build(party_type, masters, invoice_doctype, party_field) -> list:
 			missing.append("Address")
 		if party_type == "Supplier" and m.get("supplier_type") == "Company" and not cstr(m.tax_id).strip():
 			missing.append("Tax ID")
-		if party_type == "Customer" and not cstr(m.cr).strip():
+		if party_type == "Customer" and cstr(m.tax_id).strip() and not cstr(m.cr).strip():
+			# a VAT-registered customer carries its CR (party_completeness); an individual has none
 			missing.append("CR Number")
 		if d.expired:
 			missing.append("Expired Document")

@@ -57,7 +57,7 @@ def create_customer_with_address(
     document_number=None,
     expiry_date=None,
 ):
-    from sf_trading.party_documents import dialog_document_row, rules_from
+    from sf_trading.party_documents import dialog_document_row
 
     if not customer_name:
         frappe.throw(_("Customer Name is required"))
@@ -146,9 +146,8 @@ def create_customer_with_address(
         "custom_commercial_registration_number": commercial_registration_number or None,
         "payment_terms": payment_terms or None,
     })
-    if is_b2b and rules_from() and not payment_terms:
-        frappe.throw(_("Payment Terms are required for a new B2B customer."))
-    # a B2B customer's upload is its first supporting document (sf_trading/party_documents.py)
+    # an upload is the customer's first supporting document (sf_trading/party_documents.py); the
+    # document and Payment Terms rules themselves follow credit status, set later on the master
     if attachment:
         customer.append("custom_supporting_documents",
             dialog_document_row("Customer", document_type, document_number, expiry_date, attachment))

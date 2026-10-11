@@ -155,8 +155,8 @@ def save_quick_edit_data(customer: str, values) -> dict:
 			doc.set(VAT_FIELD, vat)
 		if payment_terms:
 			doc.payment_terms = payment_terms
-		if attachment and (doc.get(VAT_FIELD) or "").strip():
-			# a B2B customer's upload is a supporting document of its own, as in the create dialog
+		if attachment and ((doc.get(VAT_FIELD) or "").strip() or is_credit_customer(customer)):
+			# a credit (or VAT-registered) customer's upload is a supporting document of its own
 			from sf_trading.party_documents import TABLE, dialog_document_row
 
 			doc.append(TABLE, dialog_document_row("Customer", values.get("document_type") or "VAT Certificate",

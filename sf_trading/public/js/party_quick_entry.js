@@ -48,7 +48,8 @@ frappe.provide("frappe.ui.form");
 				mark("tax_id", "mandatory_depends_on", "eval:doc.supplier_type=='Company'");
 				mark("country", "reqd", 1);
 			} else {
-				mark("payment_terms", "mandatory_depends_on", B2B);
+				// Payment Terms follow credit status (party_documents.is_governed), which the quick entry
+				// never sets: only CR is asked of a VAT-registered customer here
 				mark("custom_commercial_registration_number", "mandatory_depends_on", B2B);
 			}
 			dialog.refresh_dependency();

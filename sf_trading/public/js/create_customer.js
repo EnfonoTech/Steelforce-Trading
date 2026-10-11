@@ -157,7 +157,6 @@ function sf_open_create_customer_dialog(frm, field_name) {
                     options: "Payment Terms Template",
                     label: __("Payment Terms"),
                     depends_on: b2b,
-                    mandatory_depends_on: b2b,
                 },
                 {
                     fieldname: "document_type",

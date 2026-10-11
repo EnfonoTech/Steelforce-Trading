@@ -4,7 +4,7 @@
 //
 //   * Picking a Document Name fills the row from its Supporting Document Type: Validate, Days
 //     Ahead, Grace Days, Financial Implication.
-//   * On a master the rules govern (every supplier, a B2B customer, created on or after SF Trading
+//   * On a master the rules govern (every supplier, a credit customer, created on or after SF Trading
 //     Settings > New-Master Rules From) Payment Terms and the documents grid are marked required,
 //     and the form says what is still missing. The server enforces the same rules.
 
@@ -21,7 +21,7 @@ function sf_party_rules_apply(frm) {
 			args: {
 				doctype: frm.doctype,
 				name: frm.is_new() ? null : frm.doc.name,
-				customer_vat: frm.doc.custom_vat_registration_number || null,
+				is_credit: (frm.doc.credit_limits || []).some((row) => flt(row.credit_limit) > 0) ? 1 : 0,
 			},
 		})
 		.then((r) => (r && r.message) || {});
@@ -60,11 +60,17 @@ function sf_party_mark_required(frm) {
 		refresh(frm) {
 			sf_party_mark_required(frm);
 		},
-		custom_vat_registration_number(frm) {
-			// a customer becomes B2B -- and governed -- the moment a VAT number is entered
-			if (frm.is_new()) sf_party_mark_required(frm);
-		},
 	});
+});
+
+// a customer becomes a credit customer -- and governed -- the moment a credit limit is entered
+frappe.ui.form.on("Customer Credit Limit", {
+	credit_limit(frm) {
+		if (frm.is_new()) sf_party_mark_required(frm);
+	},
+	credit_limits_remove(frm) {
+		if (frm.is_new()) sf_party_mark_required(frm);
+	},
 });
 
 frappe.ui.form.on("Customer Supporting Document", {

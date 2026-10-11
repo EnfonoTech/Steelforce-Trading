@@ -1,8 +1,10 @@
 # sf_trading/party_documents.py
 """Supporting documents and the other details a new customer or supplier must carry.
 
-Who is governed: every Supplier, and every B2B Customer (a VAT Registration Number on file --
-party_completeness.is_b2b_customer). Which of them are held to the rules: masters created at or
+Who is governed: every Supplier, and every credit Customer (a Customer Credit Limit above zero --
+the same marker as sales_order_governance.is_credit_customer; 2026-10-11, client: the documents are
+for credit customers, not for every B2B / VAT-registered one). Which of them are held to the rules:
+masters created at or
 after SF Trading Settings > New-Master Rules From (a date and time, set to the moment of the
 deploy). Older masters are never blocked by this module; the Master Data Completeness report lists
 what they still lack so it can be filled in.
@@ -32,9 +34,9 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, cstr, get_datetime, getdate, nowdate
+from frappe.utils import add_days, cint, cstr, flt, get_datetime, getdate, nowdate
 
-from sf_trading.party_completeness import is_b2b_customer, only_status_fields_changed
+from sf_trading.party_completeness import only_status_fields_changed
 
 SETTINGS = "SF Trading Settings"
 TABLE = "custom_supporting_documents"
@@ -111,11 +113,16 @@ def rules_from():
 	return get_datetime(value) if value else None
 
 
+def is_credit_customer(doc) -> bool:
+	"""A credit limit above zero on the Customer in hand (a limit added in this very save counts)."""
+	return any(flt(row.get("credit_limit")) > 0 for row in doc.get("credit_limits") or [])
+
+
 def is_governed(doc) -> bool:
-	"""Suppliers always; customers when B2B (VAT on file)."""
+	"""Suppliers always; customers when they are credit customers."""
 	if doc.doctype == "Supplier":
 		return True
-	return doc.doctype == "Customer" and is_b2b_customer(doc)
+	return doc.doctype == "Customer" and is_credit_customer(doc)
 
 
 def is_new_master(doc) -> bool:
@@ -275,8 +282,9 @@ def get_document_type_defaults(document_type: str) -> dict:
 
 
 @frappe.whitelist()
-def get_master_rules(doctype: str, name: str = None, customer_vat: str = None) -> dict:
-	"""For a form or dialog that has no onload to read: do the new-master rules apply here?"""
+def get_master_rules(doctype: str, name: str = None, customer_vat: str = None, is_credit: int = 0) -> dict:
+	"""For a form or dialog that has no onload to read: do the new-master rules apply here?
+	(`customer_vat` is still accepted from older clients and no longer decides anything.)"""
 	if doctype not in PARTY_DOCTYPES:
 		frappe.throw(_("Only Customer and Supplier carry these rules."))
 	start = rules_from()
@@ -284,8 +292,8 @@ def get_master_rules(doctype: str, name: str = None, customer_vat: str = None) -
 		frappe.has_permission(doctype, "read", doc=name, throw=True)
 		doc = frappe.get_doc(doctype, name)
 		return {"applies": is_governed(doc) and is_new_master(doc), "rules_from": str(start or "")}
-	b2b = doctype == "Supplier" or bool(cstr(customer_vat).strip())
-	return {"applies": bool(start) and b2b, "rules_from": str(start or "")}
+	governed = doctype == "Supplier" or bool(cint(is_credit))
+	return {"applies": bool(start) and governed, "rules_from": str(start or "")}
 
 
 def dialog_document_row(party_type, document_type=None, document_number=None, expiry_date=None, attachment=None):
@@ -336,6 +344,16 @@ def _party_of(doc):
 	return None, None
 
 
+def _cash_sale_allowed(doc, party_type) -> bool:
+	"""A Cash-mode sale to a credit customer whose "Allow Cash Sales Without Credit Documents" is
+	ticked -- the same override the credit-customer requirements honour (sales_order_governance)."""
+	if party_type != "Customer":
+		return False
+	from sf_trading.sales_order_governance import cash_sale_overrides_credit_documents
+
+	return cash_sale_overrides_credit_documents(doc)
+
+
 def validate_party_at_transaction(doc, _method=None):
 	"""Buying documents, supplier payments (validate) and selling documents (before_submit): the
 	party must be complete if it is a governed new master, and must hold no expired document that
@@ -348,7 +366,7 @@ def validate_party_at_transaction(doc, _method=None):
 
 	problems = []
 	master = frappe.get_doc(party_type, party)
-	if is_governed(master) and is_new_master(master):
+	if is_governed(master) and is_new_master(master) and not _cash_sale_allowed(doc, party_type):
 		problems += missing_details(master, after_insert=True)
 	for row in expired_financial_rows(party_type, party):
 		problems.append(_("{0} {1} expired on {2}").format(row.document_type, row.document_number or "",

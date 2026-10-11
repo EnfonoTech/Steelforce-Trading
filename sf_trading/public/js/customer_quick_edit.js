@@ -160,15 +160,13 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 				options: "Payment Terms Template",
 				label: __("Payment Terms"),
 				default: data.payment_terms,
-				// a new B2B customer must carry them (sf_trading/party_documents.py)
-				mandatory_depends_on: (data.master_rules || {}).applies || data.is_company
-					? "eval:doc.custom_vat_registration_number"
-					: "",
+				// a new credit customer must carry them (sf_trading/party_documents.py)
+				reqd: (data.master_rules || {}).applies ? 1 : 0,
 			}
 		);
 	}
 
-	// A new B2B customer's document must sit in its Supporting Documents grid, with its file; the
+	// A new credit customer's document must sit in its Supporting Documents grid, with its file; the
 	// upload below becomes that row.
 	const rules = data.master_rules || {};
 	const needs_row = rules.applies && !rules.has_document_row;

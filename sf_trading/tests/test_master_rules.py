@@ -55,10 +55,12 @@ class TestWhoIsGoverned(FrappeTestCase):
 		patch.object(pd, "rules_from", return_value=START).start()
 		self.addCleanup(patch.stopall)
 
-	def test_suppliers_always_customers_only_when_b2b(self):
+	def test_suppliers_always_customers_only_when_on_credit(self):
 		self.assertTrue(pd.is_governed(Party("Supplier")))
-		self.assertTrue(pd.is_governed(Party("Customer", custom_vat_registration_number="300000000000003")))
-		self.assertFalse(pd.is_governed(Party("Customer")))
+		self.assertTrue(pd.is_governed(Party("Customer", credit_limits=[frappe._dict(credit_limit=500)])))
+		self.assertFalse(pd.is_governed(Party("Customer", credit_limits=[frappe._dict(credit_limit=0)])))
+		# a VAT number alone no longer makes a customer governed (2026-10-11)
+		self.assertFalse(pd.is_governed(Party("Customer", custom_vat_registration_number="300000000000003")))
 
 	def test_new_means_created_on_or_after_the_start(self):
 		self.assertTrue(pd.is_new_master(Party("Supplier", new=True)))
@@ -110,12 +112,23 @@ class TestMasterSave(FrappeTestCase):
 	def test_an_old_master_is_not_blocked(self):
 		pd.validate_master(Party("Supplier", created=str(add_days(TODAY, -400))))
 
-	def test_a_b2c_customer_is_not_governed(self):
+	def test_a_cash_customer_is_not_governed(self):
 		pd.validate_master(Party("Customer", new=True))
+		pd.validate_master(Party("Customer", new=True, custom_vat_registration_number="300000000000003"))
 
-	def test_a_new_b2b_customer_needs_payment_terms(self):
+	def test_a_new_credit_customer_needs_payment_terms(self):
 		with self.assertRaises(frappe.ValidationError):
-			pd.validate_master(Party("Customer", new=True, custom_vat_registration_number="300000000000003"))
+			pd.validate_master(Party("Customer", new=True, credit_limits=[frappe._dict(credit_limit=500)]))
+
+	def test_a_cash_sale_with_the_override_skips_the_document_gate(self):
+		customer = Party("Customer", created=str(TODAY), credit_limits=[frappe._dict(credit_limit=500)])
+		invoice = frappe._dict(doctype="Sales Invoice", customer="P-1", custom_payment_mode="Cash")
+		with patch.object(frappe.db, "exists", return_value=True), patch.object(frappe, "get_doc", return_value=customer), \
+				patch.object(pd, "expired_financial_rows", return_value=[]):
+			with patch("sf_trading.sales_order_governance.cash_sale_overrides_credit_documents", return_value=False):
+				self.assertRaises(frappe.ValidationError, pd.validate_party_at_transaction, invoice)
+			with patch("sf_trading.sales_order_governance.cash_sale_overrides_credit_documents", return_value=True):
+				pd.validate_party_at_transaction(invoice)
 
 	def test_an_import_stands_aside(self):
 		frappe.flags.in_import = True
@@ -250,7 +263,9 @@ class TestMasterDataCompleteness(FrappeTestCase):
 		from frappe.desk.query_report import run
 
 		for view in ("Detail", "Summary"):
-			for scope in ("B2B Customers and Suppliers with Tax ID", "B2B Customers and All Suppliers"):
+			# the old "B2B ..." labels may still sit in a saved filter and must keep working
+			for scope in ("Credit Customers and Suppliers with Tax ID", "Credit Customers and All Suppliers",
+					"B2B Customers and All Suppliers"):
 				with self.subTest(view=view, scope=scope):
 					result = run("Master Data Completeness", filters={"view": view, "scope": scope},
 						ignore_prepared_report=True)
@@ -261,3 +276,10 @@ class TestMasterDataCompleteness(FrappeTestCase):
 
 		rows = execute({"missing": "Payment Terms"})[1]
 		self.assertTrue(all("Payment Terms" in r.missing_list for r in rows))
+
+	def test_customers_listed_are_credit_customers(self):
+		from sf_trading.sf_trading.report.master_data_completeness.master_data_completeness import credit_customers, execute
+
+		credit = set(credit_customers())
+		rows = execute({"party_type": "Customer", "show_complete": 1, "include_disabled": 1})[1]
+		self.assertTrue(all(r.party in credit for r in rows))
