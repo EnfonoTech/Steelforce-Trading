@@ -114,7 +114,8 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 					"</div>"
 				: '<div class="alert alert-success">' + __("Nothing currently blocking billing.") + "</div>",
 		},
-		{ fieldname: "phone_1", fieldtype: "Data", label: __("Mobile No (1)"), default: data.phone_1 },
+		// every customer needs at least one contact number (missing.any_phone)
+		{ fieldname: "phone_1", fieldtype: "Data", label: __("Mobile No (1)"), default: data.phone_1, reqd: 1 },
 	];
 
 	if (is_credit) {
@@ -122,15 +123,19 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 			{
 				fieldname: "phone_2",
 				fieldtype: "Data",
-				label: __("Mobile No (2) -- required for a credit customer"),
+				label: __("Mobile No (2)"),
+				description: __("Required for a credit customer."),
 				default: data.phone_2,
+				reqd: 1,
 			},
 			{
 				fieldname: "email",
 				fieldtype: "Data",
 				options: "Email",
-				label: __("Email -- required for a credit customer"),
+				label: __("Email"),
+				description: __("Required for a credit customer."),
 				default: data.email,
+				reqd: 1,
 			}
 		);
 	}
@@ -156,6 +161,8 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 				fieldtype: "Data",
 				label: __("Commercial Registration Number"),
 				default: data.custom_commercial_registration_number,
+				// a customer with a VAT Registration Number must carry it (party_completeness)
+				mandatory_depends_on: "eval:doc.custom_vat_registration_number",
 			}
 		);
 	}
@@ -192,7 +199,11 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 				fieldtype: "Attach",
 				label: __("Attachment (e.g. CR / VAT copy)"),
 				description: __("Needed if this customer is a credit customer, or has a VAT Registration Number."),
-				reqd: needs_row ? 1 : 0,
+				// one expression: a static reqd would be reset by the dependency refresh. A VAT number
+				// typed in this very dialog needs a document too (customer_override.validate)
+				mandatory_depends_on: needs_row || (is_credit && !data.has_attachment)
+					? "eval:1"
+					: "eval:doc.custom_vat_registration_number",
 			},
 			{
 				fieldname: "document_type",
@@ -203,7 +214,14 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 				depends_on: "eval:doc.attachment",
 			},
 			{ fieldname: "document_number", fieldtype: "Data", label: __("Document #"), depends_on: "eval:doc.attachment" },
-			{ fieldname: "expiry_date", fieldtype: "Date", label: __("Expiry Date"), depends_on: "eval:doc.attachment" }
+			{
+				fieldname: "expiry_date",
+				fieldtype: "Date",
+				label: __("Expiry Date"),
+				depends_on: "eval:doc.attachment",
+				// the standard types that validate their expiry (party_documents.DOCUMENT_TYPES)
+				mandatory_depends_on: "eval:doc.attachment && ['Commercial Registration', 'Trade License', 'National ID / CPR', 'Passport', 'Contract / Agreement'].includes(doc.document_type)",
+			}
 		);
 	}
 

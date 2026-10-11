@@ -62,8 +62,10 @@ function sf_render_supplier_quick_edit(supplier, data, on_saved) {
 					"</div>"
 				: '<div class="alert alert-success">' + __("Nothing currently blocking purchases or payments.") + "</div>",
 		},
-		{ fieldname: "mobile", fieldtype: "Data", label: __("Mobile Number"), default: data.mobile, reqd: data.rules_apply ? 1 : 0 },
-		{ fieldname: "email", fieldtype: "Data", options: "Email", label: __("Email"), default: data.email },
+		// a new supplier needs a mobile (party_documents); with Enforce Supplier Completeness on, every
+		// supplier needs a phone and an email (supplier_validation)
+		{ fieldname: "mobile", fieldtype: "Data", label: __("Mobile Number"), default: data.mobile, reqd: data.rules_apply || data.enforced ? 1 : 0 },
+		{ fieldname: "email", fieldtype: "Data", options: "Email", label: __("Email"), default: data.email, reqd: data.enforced ? 1 : 0 },
 		{ fieldtype: "Column Break" },
 		{ fieldname: "address_line1", fieldtype: "Data", label: __("Address Line 1"), default: data.address_line1 },
 		{ fieldname: "address_city", fieldtype: "Data", label: __("City"), default: data.address_city },

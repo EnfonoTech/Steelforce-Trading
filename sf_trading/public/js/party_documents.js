@@ -27,10 +27,14 @@ function sf_party_rules_apply(frm) {
 		.then((r) => (r && r.message) || {});
 }
 
-function sf_party_mark_required(frm) {
+function sf_party_mark_required(frm, quiet) {
 	sf_party_rules_apply(frm).then((rules) => {
 		const required = rules.applies ? 1 : 0;
-		frm.toggle_reqd("payment_terms", required);
+		// Payment Terms: every credit customer, old or new (sales_order_governance), as well as a
+		// governed new master
+		const credit = frm.doctype === "Customer" && (frm.doc.credit_limits || []).some((row) => flt(row.credit_limit) > 0);
+		frm.toggle_reqd("payment_terms", required || credit ? 1 : 0);
+		if (quiet) return;
 		if (frm.fields_dict.custom_supporting_documents) {
 			// a Company supplier / a VAT-registered customer needs one whatever its age
 			frm.set_df_property("custom_supporting_documents", "reqd", required || rules.needs_document ? 1 : 0);
@@ -68,10 +72,10 @@ function sf_party_mark_required(frm) {
 // (Customer Group carries the same child table: only a Customer form asks)
 frappe.ui.form.on("Customer Credit Limit", {
 	credit_limit(frm) {
-		if (frm.doctype === "Customer" && frm.is_new()) sf_party_mark_required(frm);
+		if (frm.doctype === "Customer") sf_party_mark_required(frm, !frm.is_new());
 	},
 	credit_limits_remove(frm) {
-		if (frm.doctype === "Customer" && frm.is_new()) sf_party_mark_required(frm);
+		if (frm.doctype === "Customer") sf_party_mark_required(frm, !frm.is_new());
 	},
 });
 

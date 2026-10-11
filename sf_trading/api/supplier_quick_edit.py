@@ -70,6 +70,7 @@ def blocking(doc) -> frappe._dict:
 		missing=unique,
 		expired=[_expired_text(r) for r in pd.expired_financial_rows(PARTY, doc.name)],
 		has_document_row=rows,
+		enforced=enforced,
 		needs_document=bool((applies and not rows) or pd.missing_document(doc)
 			or (enforced and not sv.has_attachment(doc.name))),
 	)
@@ -97,6 +98,7 @@ def get_quick_edit_data(supplier: str) -> dict:
 		"address_city": frappe.db.get_value("Address", address, "city") if address else "",
 		"rules_apply": state.applies,
 		"has_document_row": state.has_document_row,
+		"enforced": state.enforced,
 		"needs_document": state.needs_document,
 		"blocking": state.missing,
 		"expired": state.expired,
