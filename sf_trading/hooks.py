@@ -98,6 +98,8 @@ doctype_js = {
 	"Supplier":         [
 		"public/js/party_mobile_no_prefill.js",
 		"public/js/party_documents.js",
+		# "Quick Edit Billing Fields" -- the supplier twin of the Customer one
+		"public/js/supplier_quick_edit.js",
 	],
 	"Quotation":        "public/js/quotation.js",
 	# Receive Payment on a submitted order — the invoice popup's twin — and the three fields the
@@ -126,6 +128,8 @@ doctype_js = {
 		"public/js/document_trail.js",
 		# a Valuation charge names the expense entry that booked it
 		"public/js/landed_cost.js",
+		# fix the supplier's billing-blocking details from inside the draft
+		"public/js/supplier_quick_edit.js",
 	],
 	"Landed Cost Voucher": "public/js/landed_cost.js",
 	# Payment Advice sits in the Create menu beside Payment Request, under the same conditions
@@ -134,6 +138,8 @@ doctype_js = {
 		"public/js/payment_advice_form_action.js",
 		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
 		"public/js/document_trail.js",
+		# fix the supplier's billing-blocking details from inside the draft
+		"public/js/supplier_quick_edit.js",
 	],
 	"Purchase Invoice":   [
 		"public/js/purchase_tax_template.js",
@@ -142,6 +148,8 @@ doctype_js = {
 		"public/js/document_trail.js",
 		# a Valuation charge names the expense entry that booked it
 		"public/js/landed_cost.js",
+		# fix the supplier's billing-blocking details from inside the draft
+		"public/js/supplier_quick_edit.js",
 	],
 	# cancelling a payment must not demand the advice behind it be cancelled as well;
 	# and a cleared post-dated cheque is banked from the cheque's own entry
@@ -931,6 +939,10 @@ fixtures = [
 			"Supplier-tax_id-allow_in_quick_entry",
 			"Supplier-payment_terms-allow_in_quick_entry",
 			"Customer-payment_terms-allow_in_quick_entry",
+			# Payment Terms are asked of a credit customer only (party_documents); this undoes a
+			# hand-made "required for every customer" on production
+			"Customer-payment_terms-reqd",
+			"Supplier-supplier_group-allow_in_quick_entry",
 			"Customer-custom_vat_registration_number-allow_in_quick_entry",
 			"Customer-custom_commercial_registration_number-allow_in_quick_entry",
 			"Customer-custom_commercial_registration_number-mandatory_depends_on",

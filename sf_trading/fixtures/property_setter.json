@@ -2574,5 +2574,37 @@
   "property_type": "Code",
   "row_name": null,
   "value": "eval:doc.custom_vat_registration_number"
+ },
+ {
+  "default_value": null,
+  "doc_type": "Customer",
+  "docstatus": 0,
+  "doctype": "Property Setter",
+  "doctype_or_field": "DocField",
+  "field_name": "payment_terms",
+  "is_system_generated": 0,
+  "modified": "2026-10-11 14:00:00.000000",
+  "module": null,
+  "name": "Customer-payment_terms-reqd",
+  "property": "reqd",
+  "property_type": "Check",
+  "row_name": null,
+  "value": "0"
+ },
+ {
+  "default_value": null,
+  "doc_type": "Supplier",
+  "docstatus": 0,
+  "doctype": "Property Setter",
+  "doctype_or_field": "DocField",
+  "field_name": "supplier_group",
+  "is_system_generated": 0,
+  "modified": "2026-10-11 14:00:00.000000",
+  "module": null,
+  "name": "Supplier-supplier_group-allow_in_quick_entry",
+  "property": "allow_in_quick_entry",
+  "property_type": "Check",
+  "row_name": null,
+  "value": "1"
  }
 ]

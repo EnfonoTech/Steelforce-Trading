@@ -10,8 +10,10 @@
 //   * Payment Terms is required (sf_trading/party_documents.py); Tax ID is required for a Company.
 // Customer:
 //   * Mobile Number is required -- a customer without a phone cannot be billed.
-//   * a B2B customer (VAT Registration Number entered) also needs Commercial Registration and
-//     Payment Terms.
+//   * a VAT-registered customer also needs Commercial Registration and a document attached.
+//     Payment Terms belong to credit customers (a credit limit, set on the master later).
+// Both: the Supporting Document section's upload becomes the master's first Supporting Documents
+// row; it is required for a VAT-registered customer and a Company supplier.
 // Marks on fields the doctype itself has (Payment Terms, Tax ID, CR, Country) are set on the dialog
 // after it renders: the dialog swaps each such field's definition for the document's own, so a
 // changed copy passed in beforehand is lost. The server enforces Payment Terms, Tax ID, CR and the
@@ -24,6 +26,7 @@ frappe.provide("frappe.ui.form");
 	if (!Base) return;
 
 	const ADDRESS_PICKERS = ["supplier_primary_address", "customer_primary_address", "primary_address"];
+	const SF_DEFAULT_DOCUMENT = { Customer: "VAT Certificate", Supplier: "Commercial Registration" };
 	const B2B = "eval:doc.custom_vat_registration_number";
 
 	class SFPartyQuickEntryForm extends Base {
@@ -60,16 +63,74 @@ frappe.provide("frappe.ui.form");
 			const required = is_supplier
 				? ["mobile_number", "address_line1", "city", "country"]
 				: ["mobile_number"];
-			return super.get_variant_fields().map((df) =>
+			const fields = super.get_variant_fields().map((df) =>
 				required.includes(df.fieldname) ? Object.assign({}, df, { reqd: 1 }) : df
 			);
+			const doctype = this.doctype;
+			return fields.concat([
+				{ fieldtype: "Section Break", label: __("Supporting Document") },
+				{
+					fieldname: "sf_document_attachment",
+					fieldtype: "Attach",
+					label: __("Document Attachment"),
+					mandatory_depends_on: is_supplier
+						? "eval:doc.supplier_type=='Company'"
+						: "eval:doc.custom_vat_registration_number",
+					description: is_supplier
+						? __("Required for a Company supplier.")
+						: __("Required when a VAT Registration Number is entered."),
+				},
+				{ fieldtype: "Column Break" },
+				{
+					fieldname: "sf_document_type",
+					fieldtype: "Link",
+					options: "Supporting Document Type",
+					label: __("Document Name"),
+					default: SF_DEFAULT_DOCUMENT[doctype],
+					depends_on: "eval:doc.sf_document_attachment",
+					get_query: () => ({ filters: { disabled: 0, applies_to: ["in", ["Customer and Supplier", doctype]] } }),
+				},
+				{ fieldname: "sf_document_number", fieldtype: "Data", label: __("Document #"), depends_on: "eval:doc.sf_document_attachment" },
+				{
+					fieldname: "sf_expiry_date",
+					fieldtype: "Date",
+					label: __("Expiry Date"),
+					depends_on: "eval:doc.sf_document_attachment",
+					// the standard types that validate their expiry (party_documents.DOCUMENT_TYPES); the
+					// server holds any other type to its own setting
+					mandatory_depends_on: "eval:doc.sf_document_attachment && ['Commercial Registration', 'Trade License', 'National ID / CPR', 'Passport', 'Contract / Agreement'].includes(doc.sf_document_type)",
+				},
+			]);
 		}
 
 		insert() {
-			if (this.doctype === "Supplier" && this.dialog.doc.mobile_number) {
-				this.dialog.doc.custom_mobile_no = this.dialog.doc.mobile_number;
+			const doc = this.dialog.doc;
+			if (this.doctype === "Supplier" && doc.mobile_number) {
+				doc.custom_mobile_no = doc.mobile_number;
 			}
-			return super.insert();
+			const file = doc.sf_document_attachment;
+			if (!file) return super.insert();
+			// the upload becomes the first Supporting Documents row, carrying its type's rules; the
+			// file itself is tied to the new master on save (party_documents.relink_attachments)
+			const type = doc.sf_document_type || SF_DEFAULT_DOCUMENT[this.doctype];
+			return frappe
+				.xcall("sf_trading.party_documents.get_document_type_defaults", { document_type: type })
+				.then((d) => {
+					d = d || {};
+					doc.custom_supporting_documents = [
+						{
+							document_type: type,
+							document_number: doc.sf_document_number || null,
+							expiry_date: doc.sf_expiry_date || null,
+							attachment: file,
+							validate_expiry: d.validate_expiry || 0,
+							days_ahead: d.days_ahead || 0,
+							grace_days: d.grace_days || 0,
+							financial_implication: d.validate_expiry ? d.financial_implication || 0 : 0,
+						},
+					];
+					return super.insert();
+				});
 		}
 	}
 

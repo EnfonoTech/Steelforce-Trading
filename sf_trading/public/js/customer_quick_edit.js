@@ -100,7 +100,8 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 		missing.company_fields || [],
 		missing.credit_customer || [],
 		missing.any_phone || [],
-		rules.missing || []
+		rules.missing || [],
+		missing.expired || []
 	);
 
 	const fields = [
