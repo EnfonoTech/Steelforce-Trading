@@ -146,9 +146,17 @@ def is_credit_customer(customer: str) -> bool:
 	return bool(frappe.db.exists("Customer Credit Limit", {"parent": customer, "credit_limit": [">", 0]}))
 
 
+def _payment_terms(customer: str):
+	return frappe.db.get_value("Customer", customer, "payment_terms")
+
+
 def missing_credit_customer_requirements(customer: str) -> list[str]:
-	"""GS Issue 13: a credit customer needs 2 contact numbers, an email address, and at least one
-	attachment.
+	"""GS Issue 13: a credit customer needs 2 contact numbers, an email address, Payment Terms and at
+	least one attachment.
+
+	2026-10-11, client: Payment Terms are mandatory for every credit-limit customer, old or new --
+	the same footing as the email address (party_documents asks them of a NEW master from its first
+	save; this makes an existing credit customer carry them before it is billed).
 
 	2026-09-27: the 2-contact-number requirement used to ALSO apply separately to any B2B (VAT-
 	bearing) customer via missing_b2b_phone_requirements -- dropped, client call: a B2B customer
@@ -170,6 +178,8 @@ def missing_credit_customer_requirements(customer: str) -> list[str]:
 		missing.append(_("at least 2 contact numbers (found %d)") % phone_count)
 	if not party_email_addresses("Customer", customer):
 		missing.append(_("an email address"))
+	if not cstr(_payment_terms(customer)).strip():
+		missing.append(_("Payment Terms"))
 	if not frappe.db.exists("File", {"attached_to_doctype": "Customer", "attached_to_name": customer}):
 		missing.append(_("at least one attachment"))
 	return missing

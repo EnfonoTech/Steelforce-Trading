@@ -103,7 +103,7 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 		rules.missing || [],
 		missing.expired || [],
 		missing.document || []
-	);
+	).filter((item, i, all) => all.indexOf(item) === i); // a new credit customer is named by both rules
 
 	const fields = [
 		{
@@ -160,7 +160,7 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 		);
 	}
 
-	if (is_company || rules.applies) {
+	if (is_company || rules.applies || is_credit) {
 		fields.push(
 			{ fieldtype: "Section Break" },
 			{
@@ -169,8 +169,8 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 				options: "Payment Terms Template",
 				label: __("Payment Terms"),
 				default: data.payment_terms,
-				// a new credit customer must carry them (sf_trading/party_documents.py)
-				reqd: rules.applies ? 1 : 0,
+				// every credit customer carries them (sales_order_governance, party_documents)
+				reqd: rules.applies || is_credit ? 1 : 0,
 			}
 		);
 	}

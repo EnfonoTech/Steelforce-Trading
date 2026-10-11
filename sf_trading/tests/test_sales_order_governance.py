@@ -111,6 +111,7 @@ class TestCreditCustomerRequirements(FrappeTestCase):
 	CREDIT_LIMIT_EXISTS = "sf_trading.sales_order_governance.frappe.db.exists"
 	PHONE_NUMBERS = "sf_trading.sales_order_governance.party_phone_numbers"
 	EMAIL_ADDRESSES = "sf_trading.sales_order_governance.party_email_addresses"
+	PAYMENT_TERMS = "sf_trading.sales_order_governance._payment_terms"
 
 	def test_a_non_credit_customer_is_never_checked(self):
 		"""No Customer Credit Limit row > 0 -- this rule does not apply at all."""
@@ -131,21 +132,30 @@ class TestCreditCustomerRequirements(FrappeTestCase):
 				return True
 			return False  # no File row
 
-		with patch(self.CREDIT_LIMIT_EXISTS, side_effect=fake_exists):
+		with patch(self.CREDIT_LIMIT_EXISTS, side_effect=fake_exists), patch(self.PAYMENT_TERMS, return_value=None):
 			with patch(self.PHONE_NUMBERS, return_value=["33445566"]):
 				with patch(self.EMAIL_ADDRESSES, return_value=[]):
 					missing = gov.missing_credit_customer_requirements("CUST-0001")
-		self.assertEqual(len(missing), 3)
+		self.assertEqual(len(missing), 4)
+		self.assertIn("Payment Terms", missing)
 
 	def test_a_credit_customer_missing_only_email_lists_just_that(self):
-		with patch(self.CREDIT_LIMIT_EXISTS, return_value=True):
+		with patch(self.CREDIT_LIMIT_EXISTS, return_value=True), patch(self.PAYMENT_TERMS, return_value="Net 30"):
 			with patch(self.PHONE_NUMBERS, return_value=["33445566", "17001122"]):
 				with patch(self.EMAIL_ADDRESSES, return_value=[]):
 					missing = gov.missing_credit_customer_requirements("CUST-0001")
 		self.assertEqual(missing, ["an email address"])
 
+	def test_a_credit_customer_missing_only_payment_terms_lists_just_that(self):
+		"""2026-10-11, client: Payment Terms are mandatory for a credit-limit customer, old or new."""
+		with patch(self.CREDIT_LIMIT_EXISTS, return_value=True), patch(self.PAYMENT_TERMS, return_value=" "):
+			with patch(self.PHONE_NUMBERS, return_value=["33445566", "17001122"]):
+				with patch(self.EMAIL_ADDRESSES, return_value=["acme@example.com"]):
+					missing = gov.missing_credit_customer_requirements("CUST-0001")
+		self.assertEqual(missing, ["Payment Terms"])
+
 	def test_a_fully_compliant_credit_customer_passes(self):
-		with patch(self.CREDIT_LIMIT_EXISTS, return_value=True):
+		with patch(self.CREDIT_LIMIT_EXISTS, return_value=True), patch(self.PAYMENT_TERMS, return_value="Net 30"):
 			with patch(self.PHONE_NUMBERS, return_value=["33445566", "17001122"]):
 				with patch(self.EMAIL_ADDRESSES, return_value=["acme@example.com"]):
 					missing = gov.missing_credit_customer_requirements("CUST-0001")
