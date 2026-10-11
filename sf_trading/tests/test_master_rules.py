@@ -91,13 +91,14 @@ class TestMasterSave(FrappeTestCase):
 		# the full form has no editable mobile: that, like the document, is asked for after creation
 		pd.validate_master(Party("Supplier", new=True, payment_terms="CASH"))
 
-	def test_after_creation_the_document_and_mobile_are_needed(self):
+	def test_after_creation_the_document_mobile_and_email_are_needed(self):
 		saved = dict(created=str(TODAY), payment_terms="CASH")
 		with self.assertRaises(frappe.ValidationError) as caught:
 			pd.validate_master(Party("Supplier", **saved))
 		self.assertIn("Supporting Document", str(caught.exception))
 		self.assertIn("Mobile", str(caught.exception))
-		pd.validate_master(Party("Supplier", custom_mobile_no="36000000",
+		self.assertIn("Email", str(caught.exception))
+		pd.validate_master(Party("Supplier", custom_mobile_no="36000000", email_id="a@b.co",
 			rows=[{"document_type": "Other", "attachment": "/private/files/cr.pdf"}], **saved))
 
 	def test_a_company_supplier_needs_its_tax_id_on_any_save(self):
