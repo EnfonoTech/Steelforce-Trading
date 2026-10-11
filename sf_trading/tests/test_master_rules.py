@@ -292,7 +292,9 @@ class TestMasterDataCompleteness(FrappeTestCase):
 				"custom_vat_registration_number": vat,
 				"credit_limits": [{"company": company, "credit_limit": limit}] if limit else [],
 				"custom_branch_access": [{"branch": branch}] if limit else []})
-			doc.flags.ignore_mandatory = True  # validate_master stands aside
+			# fixtures only: the VAT and credit rules of other modules are not what is under test here
+			doc.flags.ignore_mandatory = True
+			doc.flags.ignore_validate = True
 			return doc.insert(ignore_permissions=True).name
 
 		on_credit = make("_SF MDC Credit Customer", limit=500)
