@@ -8,7 +8,11 @@ Three views (sf_trading.landed_cost explains the link between the two sides):
   it), Allocated, Over-allocated.
 * Landed Cost Charges -- every Landed Cost Voucher charge and every Valuation charge on a Purchase
   Invoice / Receipt, matched to its expense entry or not: Matched, Unmatched (names none),
-  Pending (still a draft), Account Mismatch, Expense Cancelled.
+  Pending (still a draft), Account Mismatch, Expense Cancelled. Only documents that move stock
+  absorb a cost (a receipt, an invoice with Update Stock); an invoice that does not is read with its
+  receipt (sf_trading.landed_cost.classify): On Receipt (it repeats the receipt's charge -- not
+  counted again), Awaiting Receipt (no receipt yet -- held as pending), Not Into Stock (its receipt
+  never carried the charge). Each row names the document that moved the stock and the ones linked.
 * Account Summary -- per landed-cost account: expenses booked, absorbed into stock, the ledger
   balance, and what is unallocated or unmatched.
 
@@ -32,6 +36,8 @@ TOL = lc.TOLERANCE
 
 UNALLOCATED, PARTLY, PENDING, ALLOCATED, OVER = "Unallocated", "Partly Allocated", "Pending", "Allocated", "Over-allocated"
 MATCHED, UNMATCHED, MISMATCH, CANCELLED = "Matched", "Unmatched", "Account Mismatch", "Expense Cancelled"
+ON_RECEIPT, AWAITING, NOT_INTO_STOCK = "On Receipt", "Awaiting Receipt", "Not Into Stock"
+BAD_CHARGES = (UNMATCHED, MISMATCH, CANCELLED, OVER, NOT_INTO_STOCK)
 
 
 def execute(filters=None):
@@ -174,12 +180,25 @@ def allocations() -> dict:
 		add((r.get(lc.DOCTYPE_FIELD), r.get(lc.ENTRY_FIELD), r.expense_account), r.docstatus, r.base_amount,
 			(r.parenttype, r.parent))
 	if frappe.db.has_column(lc.PURCHASE_CHARGES, lc.ENTRY_FIELD):
-		for r in frappe.get_all(lc.PURCHASE_CHARGES, filters={lc.ENTRY_FIELD: ["is", "set"], "docstatus": ["<", 2],
+		rows = frappe.get_all(lc.PURCHASE_CHARGES, filters={lc.ENTRY_FIELD: ["is", "set"], "docstatus": ["<", 2],
 				"parenttype": ["in", lc.CHARGE_PARENTS], "category": ["in", lc.VALUATION_CATEGORIES], "add_deduct_tax": "Add"},
-				fields=["parent", "parenttype", "docstatus", "base_tax_amount", "account_head", lc.DOCTYPE_FIELD, lc.ENTRY_FIELD]):
-			add((r.get(lc.DOCTYPE_FIELD), r.get(lc.ENTRY_FIELD), r.account_head), r.docstatus, r.base_tax_amount,
-				(r.parenttype, r.parent))
+				fields=["parent", "parenttype", "docstatus", "base_tax_amount", "account_head", lc.DOCTYPE_FIELD, lc.ENTRY_FIELD])
+		# a non-stock invoice repeating its receipt's charge takes nothing more; one still waiting for
+		# its receipt holds the cost as pending (sf_trading.landed_cost.classify)
+		for r, state in zip(rows, lc.classify(rows, key=_charge_key)):
+			if state == lc.ON_RECEIPT:
+				continue
+			add((r.get(lc.DOCTYPE_FIELD), r.get(lc.ENTRY_FIELD), r.account_head),
+				0 if state == lc.AWAITING_RECEIPT else r.docstatus, r.base_tax_amount, (r.parenttype, r.parent))
 	return out
+
+
+def _charge_key(r):
+	return (r.get(lc.DOCTYPE_FIELD), r.get(lc.ENTRY_FIELD), r.get("account_head") or r.get("account"))
+
+
+def _names(values) -> str:
+	return ", ".join(sorted(v for v in values if v))
 
 
 # ─── charge side ─────────────────────────────────────────────────────────────────────────────────
@@ -202,6 +221,8 @@ def charge_lines(filters, accounts) -> list:
 	purchase_links = [lc.DOCTYPE_FIELD, lc.ENTRY_FIELD] if frappe.db.has_column(lc.PURCHASE_CHARGES, lc.ENTRY_FIELD) else []
 	for doctype in lc.CHARGE_PARENTS:
 		fields = ["name", "posting_date", "docstatus", "supplier"]
+		if doctype == lc.INVOICE:
+			fields.append("update_stock")
 		if frappe.db.has_column(doctype, "branch"):
 			fields.append("branch")
 		docs = frappe.get_all(doctype, filters={"company": filters.company, "docstatus": ["<", 2],
@@ -217,18 +238,46 @@ def charge_lines(filters, accounts) -> list:
 				fields=["parent", "parenttype", "idx", "account_head as account", "base_tax_amount as amount", "description"]
 				+ purchase_links)
 
+	# which document moved the stock, and how each receipt and invoice connect
+	purchase = [r for r in rows if r.parenttype in lc.CHARGE_PARENTS]
+	states = dict(zip((id(r) for r in purchase), lc.classify(purchase, key=_charge_key, look_up_receipts=True)))
+	invoices = {r.parent for r in purchase if r.parenttype == lc.INVOICE}
+	receipts_of = lc.linked_receipts(invoices - lc.stock_invoices(invoices))
+	invoices_of = lc.linked_invoices({r.parent for r in purchase if r.parenttype == lc.RECEIPT})
+	lcv_names = list({r.parent for r in rows if r.parenttype == "Landed Cost Voucher"})
+	goods_of = defaultdict(set)
+	if lcv_names:
+		for g in frappe.get_all("Landed Cost Purchase Receipt", filters={"parenttype": "Landed Cost Voucher",
+				"parent": ["in", lcv_names]}, fields=["parent", "receipt_document"]):
+			goods_of[g.parent].add(g.receipt_document)
+
 	allocation = allocations()
 	booked_cache, status_cache = {}, {}
 	out = []
 	for r in rows:
 		parent = parents.get((r.parenttype, r.parent)) or frappe._dict()
+		state = states.get(id(r), lc.STOCK)
 		if filters.get("supplier") and parent.get("supplier") and parent.supplier != filters.supplier:
 			continue
 		if filters.get("branch") and parent.get("branch") and parent.branch != filters.branch:
 			continue
 		expense_dt, expense = r.get(lc.DOCTYPE_FIELD), r.get(lc.ENTRY_FIELD)
-		if cint(parent.get("docstatus")) == 0:
+		if r.parenttype == "Landed Cost Voucher":
+			stock_document, linked = _names(goods_of.get(r.parent, ())), ""
+		elif r.parenttype == lc.RECEIPT:
+			stock_document, linked = r.parent, _names(invoices_of.get(r.parent, ()))
+		elif state == lc.STOCK:
+			stock_document, linked = r.parent, ""
+		else:
+			stock_document = linked = _names(receipts_of.get(r.parent, ()))
+		if state == lc.ON_RECEIPT:
+			status = ON_RECEIPT
+		elif cint(parent.get("docstatus")) == 0:
 			status = PENDING
+		elif state == lc.AWAITING_RECEIPT:
+			status = AWAITING
+		elif state == lc.NOT_INTO_STOCK:
+			status = NOT_INTO_STOCK
 		elif not expense:
 			status = UNMATCHED
 		else:
@@ -252,8 +301,10 @@ def charge_lines(filters, accounts) -> list:
 			charge_doctype=r.parenttype, charge_document=r.parent, row=r.idx, posting_date=parent.get("posting_date"),
 			supplier=parent.get("supplier"), account=r.account, amount=flt(r.amount, 3),
 			description=(r.description or "")[:100], expense_doctype=expense_dt, expense_entry=expense, status=status,
+			stock_document=stock_document, linked_documents=linked,
 		))
-	out.sort(key=lambda r: (r.status == MATCHED, r.posting_date or getdate(nowdate()), r.charge_document, r.row))
+	out.sort(key=lambda r: (r.status in (MATCHED, ON_RECEIPT), r.posting_date or getdate(nowdate()), r.charge_document,
+		r.row))
 	return out
 
 
@@ -265,12 +316,14 @@ def summary_rows(filters, accounts, expenses, charges, currency) -> list:
 	debit, credit = Sum(gl.debit), Sum(gl.credit)
 	movement = (
 		frappe.qb.from_(gl)
-		.select(gl.account, gl.voucher_type, debit.as_("debit"), credit.as_("credit"))
+		.select(gl.account, gl.voucher_type, gl.voucher_no, debit.as_("debit"), credit.as_("credit"))
 		.where((gl.company == filters.company) & (gl.is_cancelled == 0) & gl.account.isin(accounts)
 			& (gl.posting_date >= filters.from_date) & (gl.posting_date <= filters.to_date))
-		.groupby(gl.account, gl.voucher_type)
+		.groupby(gl.account, gl.voucher_type, gl.voucher_no)
 		.run(as_dict=True)
 	)
+	# an invoice that does not update stock never puts a cost into the stock's value
+	stocked = lc.stock_invoices({m.voucher_no for m in movement if m.voucher_type == lc.INVOICE})
 	closing = dict(
 		(r.account, flt(r.balance))
 		for r in frappe.qb.from_(gl)
@@ -286,7 +339,7 @@ def summary_rows(filters, accounts, expenses, charges, currency) -> list:
 		net = flt(m.debit) - flt(m.credit)
 		if m.voucher_type in lc.EXPENSE_DOCTYPES and net > 0:
 			a.booked += net
-		elif m.voucher_type in ("Purchase Receipt", "Purchase Invoice") and net < 0:
+		elif net < 0 and (m.voucher_type == lc.RECEIPT or (m.voucher_type == lc.INVOICE and m.voucher_no in stocked)):
 			a.absorbed += -net
 		else:
 			a.other += net
@@ -294,7 +347,8 @@ def summary_rows(filters, accounts, expenses, charges, currency) -> list:
 	for account in accounts:
 		a = agg.get(account) or frappe._dict(booked=0.0, absorbed=0.0, other=0.0)
 		mine = [e for e in expenses if e.account == account]
-		unmatched = [c for c in charges if c.account == account and c.status in (UNMATCHED, MISMATCH, CANCELLED)]
+		unmatched = [c for c in charges if c.account == account
+			and c.status in (UNMATCHED, MISMATCH, CANCELLED, NOT_INTO_STOCK)]
 		out.append({
 			"account": account,
 			"expenses_booked": flt(a.booked, 3),
@@ -323,7 +377,7 @@ def cards(expenses, charges, currency):
 				"indicator": "Red"},
 		]
 	if charges:
-		bad = [c for c in charges if c.status in (UNMATCHED, MISMATCH, CANCELLED, OVER)]
+		bad = [c for c in charges if c.status in BAD_CHARGES]
 		out += [
 			{"label": _("Charges Unmatched"), "value": len(bad), "datatype": "Int", "indicator": "Red" if bad else "Green"},
 			{"label": _("Unmatched Amount"), "value": flt(sum(c.amount for c in bad), 3), "datatype": "Currency",
@@ -369,6 +423,8 @@ def charge_columns():
 		money("amount", _("Amount")),
 		{"label": _("Expense Type"), "fieldname": "expense_doctype", "fieldtype": "Data", "width": 120},
 		{"label": _("Expense Entry"), "fieldname": "expense_entry", "fieldtype": "Dynamic Link", "options": "expense_doctype", "width": 170},
+		{"label": _("Stock Moved By"), "fieldname": "stock_document", "fieldtype": "Data", "width": 170},
+		{"label": _("Linked Receipt / Invoice"), "fieldname": "linked_documents", "fieldtype": "Data", "width": 190},
 		{"label": _("Supplier"), "fieldname": "supplier", "fieldtype": "Link", "options": "Supplier", "width": 150},
 		{"label": _("Description"), "fieldname": "description", "fieldtype": "Data", "width": 200},
 		{"label": _("Currency"), "fieldname": "currency", "fieldtype": "Link", "options": "Currency", "hidden": 1},

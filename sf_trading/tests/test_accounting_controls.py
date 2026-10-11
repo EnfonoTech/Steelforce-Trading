@@ -155,3 +155,85 @@ class TestLandedCostReconciliation(FrappeTestCase):
 					for r in result["result"]:
 						self.assertAlmostEqual(flt(r["booked"]), flt(r["allocated"]) + flt(r["pending"]) + flt(r["unallocated"]),
 							places=2)
+
+
+class TestLandedCostStockDocuments(FrappeTestCase):
+	"""Only a receipt, or an invoice with Update Stock, absorbs a landed cost; an invoice that does
+	not is read with its receipt (sf_trading.landed_cost.classify)."""
+
+	def _row(self, parenttype, parent, entry="JV-1"):
+		return frappe._dict(parenttype=parenttype, parent=parent, account_head=FREIGHT,
+			**{lc.DOCTYPE_FIELD: "Journal Entry", lc.ENTRY_FIELD: entry})
+
+	def _classify(self, rows, stocked=(), links=None):
+		key = lambda r: (r.get(lc.DOCTYPE_FIELD), r.get(lc.ENTRY_FIELD), r.get("account_head"))
+		with patch.object(lc, "stock_invoices", return_value=set(stocked)), patch.object(
+			lc, "linked_receipts", side_effect=lambda invoices: {i: set((links or {}).get(i, ())) for i in invoices}
+		):
+			return lc.classify(rows, key)
+
+	def test_an_invoice_repeating_its_receipts_charge_is_on_receipt(self):
+		rows = [self._row("Purchase Receipt", "PR-1"), self._row("Purchase Invoice", "PI-1")]
+		self.assertEqual(self._classify(rows, links={"PI-1": ["PR-1"]}), [lc.STOCK, lc.ON_RECEIPT])
+
+	def test_an_invoice_with_no_receipt_yet_is_awaiting(self):
+		self.assertEqual(self._classify([self._row("Purchase Invoice", "PI-2")]), [lc.AWAITING_RECEIPT])
+
+	def test_a_charge_the_receipt_never_carried_is_not_into_stock(self):
+		rows = [self._row("Purchase Receipt", "PR-2", entry="JV-OTHER"), self._row("Purchase Invoice", "PI-3")]
+		self.assertEqual(self._classify(rows, links={"PI-3": ["PR-2"]}), [lc.STOCK, lc.NOT_INTO_STOCK])
+
+	def test_an_invoice_that_updates_stock_absorbs_itself(self):
+		self.assertEqual(self._classify([self._row("Purchase Invoice", "PI-4")], stocked=["PI-4"]), [lc.STOCK])
+
+	def _bill(self, doctype, update_stock=0):
+		doc = frappe._dict(doctype=doctype, name="DOC-1", company="SF", update_stock=update_stock, items=[], taxes=[
+			frappe._dict(idx=1, category="Valuation", add_deduct_tax="Add", account_head=FREIGHT, base_tax_amount=60,
+				**{lc.DOCTYPE_FIELD: "Journal Entry", lc.ENTRY_FIELD: "JV-1"})])
+		doc.taxes[0].set = doc.taxes[0].__setitem__
+		return doc
+
+	def _validate(self, doc, links, taken):
+		real = frappe.db.get_value
+		expense = frappe._dict(docstatus=1, company="SF")
+		with patch.object(lc.frappe.db, "get_value",
+				side_effect=lambda dt, *a, **k: expense if dt in lc.EXPENSE_DOCTYPES else real(dt, *a, **k)), \
+				patch.object(lc, "booked", side_effect=lambda dt, name, account=None: {FREIGHT: 100}), \
+				patch.object(lc, "_receipt_links", return_value=links), \
+				patch.object(lc, "absorbed", return_value=taken) as absorbed:
+			lc.validate_charges(doc)
+		return absorbed
+
+	def test_an_invoice_made_from_its_receipt_is_not_refused(self):
+		# the receipt already took 60 of the 100; the invoice's copy of that row takes nothing more
+		taken = frappe._dict(submitted=60.0, draft=0.0, documents=[("Purchase Receipt", "PR-1")])
+		absorbed = self._validate(self._bill("Purchase Invoice"), (set(), {("Journal Entry", "JV-1", FREIGHT)}), taken)
+		absorbed.assert_not_called()
+
+	def test_a_receipt_skips_the_invoices_that_repeat_it(self):
+		skip = {("Purchase Invoice", "PI-1")}
+		absorbed = self._validate(self._bill("Purchase Receipt"), (skip, set()),
+			frappe._dict(submitted=0.0, draft=0.0, documents=[]))
+		self.assertEqual(absorbed.call_args.kwargs.get("skip_parents"), skip)
+
+	def test_a_charge_beyond_the_expense_is_still_refused(self):
+		taken = frappe._dict(submitted=60.0, draft=0.0, documents=[("Purchase Receipt", "PR-9")])
+		with self.assertRaises(frappe.ValidationError):
+			self._validate(self._bill("Purchase Invoice", update_stock=1), (set(), set()), taken)
+
+	def test_a_non_stock_invoice_is_not_asked_for_the_link(self):
+		doc = self._bill("Purchase Invoice")
+		doc.taxes[0][lc.ENTRY_FIELD] = None
+		with patch.object(lc, "settings", return_value=frappe._dict(require_on_lcv=1, require_on_purchase=1)):
+			lc.require_links(doc)
+			doc.update_stock = 1
+			with self.assertRaises(frappe.ValidationError):
+				lc.require_links(doc)
+
+	def test_the_charges_view_names_the_stock_document(self):
+		company = _busiest_company()
+		result = _run("Landed Cost Reconciliation", {"company": company, "view": "Landed Cost Charges",
+			"from_date": str(add_months(nowdate(), -24)), "to_date": nowdate()})
+		fields = {c["fieldname"] if isinstance(c, dict) else c for c in result["columns"]}
+		self.assertIn("stock_document", fields)
+		self.assertIn("linked_documents", fields)

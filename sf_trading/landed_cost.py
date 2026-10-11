@@ -21,6 +21,15 @@ Whether a charge row MUST name one is SF Trading Settings > Landed Costs. The La
 Reconciliation report lists what is still unallocated, pending or unmatched on either side. An
 expense entry that debits a landed-cost account for something else (outward freight, say) can be
 ticked "Not a Landed Cost" and drops off that report.
+
+Only a document that moves stock absorbs a cost: a Purchase Receipt, or a Purchase Invoice with
+Update Stock (a Landed Cost Voucher works through those). A Purchase Invoice that does not update
+stock is read together with the receipt it bills, or that was made from it (`classify`): ERPNext
+copies the receipt's charge rows onto that invoice, and posts nothing for one the receipt already
+booked, so such a row is the receipt's own charge seen again -- counting it too absorbed the same
+expense twice and refused the invoice. An invoice whose receipt does not exist yet holds its charge
+as pending; one whose receipt never carried the charge is flagged "Not Into Stock" (ERPNext books it
+to Stock Received But Not Billed, not into the stock's value).
 """
 
 import frappe
@@ -38,6 +47,14 @@ CHARGE_PARENTS = ("Purchase Invoice", "Purchase Receipt")
 LCV_CHARGES = "Landed Cost Taxes and Charges"
 PURCHASE_CHARGES = "Purchase Taxes and Charges"
 TOLERANCE = 0.0005
+RECEIPT, INVOICE = "Purchase Receipt", "Purchase Invoice"
+
+#: how a charge row on a Purchase Receipt / Invoice stands once the receipt and the invoices linked
+#: to it are read as one purchase (see classify)
+STOCK = "stock"  # on a receipt, or an invoice that updates stock: it absorbs the cost
+ON_RECEIPT = "on_receipt"  # an invoice repeating the charge its receipt carries: not counted again
+AWAITING_RECEIPT = "awaiting_receipt"  # an invoice whose receipt does not exist yet: held as pending
+NOT_INTO_STOCK = "not_into_stock"  # an invoice whose receipt never carried it: booked, but not into stock
 
 
 def ensure_custom_fields():
@@ -88,6 +105,83 @@ def settings() -> frappe._dict:
 	return values
 
 
+# ─── which documents move stock, and how a receipt and its invoices connect ────────────────────
+
+
+def stock_invoices(names) -> set:
+	"""The Purchase Invoices among `names` that update stock themselves."""
+	names = [n for n in set(names or ()) if n]
+	if not names:
+		return set()
+	return set(frappe.get_all(INVOICE, filters={"name": ["in", names], "update_stock": 1}, pluck="name"))
+
+
+def linked_receipts(invoices) -> dict:
+	"""{invoice: {receipts}}: the receipts an invoice bills (its rows' Purchase Receipt) and the ones
+	made from it (their rows' Purchase Invoice). Cancelled documents are left out."""
+	out = {n: set() for n in set(invoices or ()) if n}
+	if not out:
+		return out
+	names = list(out)
+	for r in frappe.get_all("Purchase Invoice Item", filters={"parenttype": INVOICE, "parent": ["in", names],
+			"purchase_receipt": ["is", "set"], "docstatus": ["<", 2]}, fields=["parent", "purchase_receipt"]):
+		out[r.parent].add(r.purchase_receipt)
+	for r in frappe.get_all("Purchase Receipt Item", filters={"purchase_invoice": ["in", names], "docstatus": ["<", 2]},
+			fields=["parent", "purchase_invoice"]):
+		out[r.purchase_invoice].add(r.parent)
+	return out
+
+
+def linked_invoices(receipts) -> dict:
+	"""{receipt: {invoices}}: the same links as linked_receipts, read from the receipt's side."""
+	out = {n: set() for n in set(receipts or ()) if n}
+	if not out:
+		return out
+	names = list(out)
+	for r in frappe.get_all("Purchase Invoice Item", filters={"parenttype": INVOICE, "purchase_receipt": ["in", names],
+			"docstatus": ["<", 2]}, fields=["parent", "purchase_receipt"]):
+		out[r.purchase_receipt].add(r.parent)
+	for r in frappe.get_all("Purchase Receipt Item", filters={"parent": ["in", names], "purchase_invoice": ["is", "set"],
+			"docstatus": ["<", 2]}, fields=["parent", "purchase_invoice"]):
+		out[r.parent].add(r.purchase_invoice)
+	return out
+
+
+def classify(rows, key, look_up_receipts=False) -> list:
+	"""How each charge row on a Purchase Receipt / Invoice stands (STOCK, ON_RECEIPT,
+	AWAITING_RECEIPT, NOT_INTO_STOCK). `rows` carry parenttype and parent; `key(row)` names the cost
+	a row carries (expense entry and account), so an invoice row is the receipt's own charge when a
+	linked receipt carries a row with the same key. `look_up_receipts` reads the charges of linked
+	receipts that are not among `rows` (a report limited to a period or an account)."""
+	invoices = {r.parent for r in rows if r.parenttype == INVOICE}
+	stocked = stock_invoices(invoices)
+	links = linked_receipts(invoices - stocked)
+	on_receipts = {(r.parent, key(r)) for r in rows if r.parenttype == RECEIPT}
+	if look_up_receipts:
+		missing = set().union(*links.values()) - {r.parent for r in rows if r.parenttype == RECEIPT} if links else set()
+		if missing:
+			fields = ["parent", "account_head"]
+			if frappe.db.has_column(PURCHASE_CHARGES, ENTRY_FIELD):
+				fields += [DOCTYPE_FIELD, ENTRY_FIELD]
+			for r in frappe.get_all(PURCHASE_CHARGES, filters={"parenttype": RECEIPT, "parent": ["in", list(missing)],
+					"docstatus": ["<", 2], "category": ["in", VALUATION_CATEGORIES], "add_deduct_tax": "Add"},
+					fields=fields):
+				on_receipts.add((r.parent, key(r)))
+	out = []
+	for r in rows:
+		if r.parenttype != INVOICE or r.parent in stocked:
+			out.append(STOCK)
+			continue
+		receipts = links.get(r.parent) or set()
+		if any((receipt, key(r)) in on_receipts for receipt in receipts):
+			out.append(ON_RECEIPT)
+		elif not receipts:
+			out.append(AWAITING_RECEIPT)
+		else:
+			out.append(NOT_INTO_STOCK)
+	return out
+
+
 # ─── what an expense entry booked, and what has absorbed it ─────────────────────────────────────
 
 
@@ -102,17 +196,19 @@ def booked(doctype, name, account=None) -> dict:
 	return out
 
 
-def absorbed(doctype, name, account, exclude_parent=None) -> frappe._dict:
+def absorbed(doctype, name, account, exclude_parent=None, skip_parents=()) -> frappe._dict:
 	"""What the landed-cost charges naming this expense entry take from it on one account.
 
 	Every live charge row counts -- submitted and draft apart -- so two drafts cannot both take the
-	same money.
+	same money. An invoice repeating its receipt's charge is not counted again, and one whose
+	receipt is not made yet counts as pending (classify). `skip_parents` are documents the caller
+	knows to repeat its own charge (the invoices of a receipt being saved).
 	"""
 	result = frappe._dict(submitted=0.0, draft=0.0, documents=[])
 	if not frappe.db.has_column(LCV_CHARGES, ENTRY_FIELD):
 		return result
 	rows = [
-		frappe._dict(r, amount=r.base_amount)
+		frappe._dict(r, amount=r.base_amount, state=STOCK)
 		for r in frappe.get_all(
 			LCV_CHARGES,
 			filters={DOCTYPE_FIELD: doctype, ENTRY_FIELD: name, "expense_account": account, "docstatus": ["<", 2],
@@ -121,7 +217,7 @@ def absorbed(doctype, name, account, exclude_parent=None) -> frappe._dict:
 		)
 	]
 	if frappe.db.has_column(PURCHASE_CHARGES, ENTRY_FIELD):
-		rows += [
+		purchase = [
 			frappe._dict(r, amount=r.base_tax_amount)
 			for r in frappe.get_all(
 				PURCHASE_CHARGES,
@@ -131,10 +227,17 @@ def absorbed(doctype, name, account, exclude_parent=None) -> frappe._dict:
 				fields=["parent", "parenttype", "docstatus", "base_tax_amount"],
 			)
 		]
+		# every row here carries this very entry and account, so they all share one key
+		for r, state in zip(purchase, classify(purchase, key=lambda _r: 1)):
+			r.state = state
+		rows += purchase
+	skip = {tuple(p) for p in skip_parents or ()}
 	for r in rows:
 		if exclude_parent and (r.parenttype, r.parent) == tuple(exclude_parent):
 			continue
-		if cint(r.docstatus) == 1:
+		if (r.parenttype, r.parent) in skip or r.state == ON_RECEIPT:
+			continue
+		if cint(r.docstatus) == 1 and r.state != AWAITING_RECEIPT:
 			result.submitted = flt(result.submitted + flt(r.amount), 3)
 		else:
 			result.draft = flt(result.draft + flt(r.amount), 3)
@@ -209,9 +312,43 @@ def _row_label(row):
 	return _("Row #") + str(row.idx)
 
 
+def _is_new(doc) -> bool:
+	getter = getattr(doc, "is_new", None)
+	return bool(getter()) if callable(getter) else not doc.get("name")
+
+
+def _receipt_links(doc) -> tuple:
+	"""(documents repeating this one's charges, costs this one repeats from its receipts).
+
+	A receipt: the non-stock invoices linked to it carry copies of its rows -- they are skipped when
+	counting what is already taken. A non-stock invoice: the costs its linked receipts already carry
+	are those receipts' charges, so its own copies of them take nothing more."""
+	items = doc.get("items") or []
+	saved = not _is_new(doc) and doc.get("name")
+	if doc.doctype == RECEIPT:
+		invoices = {it.get("purchase_invoice") for it in items if it.get("purchase_invoice")}
+		if saved:
+			invoices |= linked_invoices([doc.name]).get(doc.name, set())
+		invoices -= stock_invoices(invoices)
+		return {(INVOICE, n) for n in invoices}, set()
+	if doc.doctype == INVOICE and not cint(doc.get("update_stock")):
+		receipts = {it.get("purchase_receipt") for it in items if it.get("purchase_receipt")}
+		if saved:
+			receipts |= linked_receipts([doc.name]).get(doc.name, set())
+		carried = set()
+		if receipts and frappe.db.has_column(PURCHASE_CHARGES, ENTRY_FIELD):
+			for r in frappe.get_all(PURCHASE_CHARGES, filters={"parenttype": RECEIPT, "parent": ["in", list(receipts)],
+					"docstatus": ["<", 2], "category": ["in", VALUATION_CATEGORIES], "add_deduct_tax": "Add"},
+					fields=[DOCTYPE_FIELD, ENTRY_FIELD, "account_head"]):
+				carried.add((r.get(DOCTYPE_FIELD), r.get(ENTRY_FIELD), r.account_head))
+		return set(), carried
+	return set(), set()
+
+
 def validate_charges(doc, method=None):
 	"""validate: every charge row naming an expense entry is held to it (ledger, amount, transaction)."""
 	goods = _goods_documents(doc)
+	repeats_this, carried = _receipt_links(doc)
 	taken_here = {}
 	for row, account, amount in charge_rows(doc):
 		expense_dt, expense = row.get(DOCTYPE_FIELD), row.get(ENTRY_FIELD)
@@ -247,7 +384,11 @@ def validate_charges(doc, method=None):
 
 		# the amount: never more than the entry booked there, across every charge naming it
 		key = (expense_dt, expense, account)
-		taken = absorbed(expense_dt, expense, account, exclude_parent=(doc.doctype, doc.name))
+		if key in carried:
+			# this invoice repeats its receipt's own charge: the receipt already took it
+			continue
+		taken = absorbed(expense_dt, expense, account, exclude_parent=(doc.doctype, doc.name),
+			skip_parents=repeats_this)
 		available = flt(on_account - taken.submitted - taken.draft - taken_here.get(key, 0.0), 3)
 		if amount - available > TOLERANCE:
 			others = ", ".join(d[1] for d in taken.documents)
@@ -262,6 +403,9 @@ def validate_charges(doc, method=None):
 
 def require_links(doc, method=None):
 	"""before_submit: charge rows name their expense entry, where the settings demand it."""
+	if doc.doctype == INVOICE and not cint(doc.get("update_stock")):
+		# its charges reach stock through its receipt (or a Landed Cost Voucher), held to it there
+		return
 	conf = settings()
 	required = conf.require_on_lcv if doc.doctype == "Landed Cost Voucher" else conf.require_on_purchase
 	if not required:

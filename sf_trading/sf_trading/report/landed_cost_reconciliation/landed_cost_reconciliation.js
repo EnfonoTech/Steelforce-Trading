@@ -39,6 +39,9 @@ frappe.query_reports["Landed Cost Reconciliation"] = {
 				"Unmatched",
 				"Account Mismatch",
 				"Expense Cancelled",
+				"Not Into Stock",
+				"Awaiting Receipt",
+				"On Receipt",
 				"Matched",
 			].join("\n"),
 		},
@@ -80,6 +83,9 @@ frappe.query_reports["Landed Cost Reconciliation"] = {
 			"Over-allocated": "red-500",
 			"Account Mismatch": "red-500",
 			"Expense Cancelled": "red-500",
+			"Not Into Stock": "red-500",
+			"Awaiting Receipt": "grey-600",
+			"On Receipt": "green-600",
 		}[data.status];
 		return colour ? `<span style="color:var(--${colour})"><b>${value}</b></span>` : value;
 	},
