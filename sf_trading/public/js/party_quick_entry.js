@@ -45,6 +45,11 @@ window.sf_vat_document_sync = function (d, cfg, source) {
 		if (d._sf_vat_auto_type === type) d._sf_vat_auto_type = null;
 		else d._sf_vat_type_chosen = true;
 		if (type === VAT_TYPE) fill_number();
+		else if (number && number === d._sf_vat_auto_number) {
+			// another document is not numbered with the VAT number this helper wrote
+			d._sf_vat_auto_number = "";
+			d.set_value(cfg.number, "");
+		}
 		return;
 	}
 	if (!vat || vat === "0") return;
