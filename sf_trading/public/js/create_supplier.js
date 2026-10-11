@@ -40,6 +40,8 @@ function sf_add_create_supplier_btn(frm) {
     $field.before($btn);
 }
 
+var SF_VAT_DOCUMENT_SUPPLIER = { vat: "tax_id", type: "document_type", number: "document_number" };
+
 // the document's expiry is required when its Supporting Document Type validates expiry
 function sf_party_dialog_expiry_rule(d) {
     var kind = d.get_value("document_type");
@@ -127,6 +129,10 @@ function sf_open_create_supplier_dialog(frm) {
                     description: is_saudi
                         ? __("Exactly 15 digits, starting and ending with 3.")
                         : __("Foreign suppliers: their own country's tax number."),
+                    // the number is also the document below (party_quick_entry.js)
+                    onchange() {
+                        window.sf_vat_document_sync(d, SF_VAT_DOCUMENT_SUPPLIER, "vat");
+                    },
                 },
                 // any file, type not checked -- every supplier needs one (supplier_validation.py)
                 {
@@ -152,6 +158,7 @@ function sf_open_create_supplier_dialog(frm) {
                     get_query: () => ({ filters: { disabled: 0, applies_to: ["in", ["Customer and Supplier", "Supplier"]] } }),
                     onchange() {
                         sf_party_dialog_expiry_rule(d);
+                        window.sf_vat_document_sync(d, SF_VAT_DOCUMENT_SUPPLIER, "type");
                     },
                 },
                 {

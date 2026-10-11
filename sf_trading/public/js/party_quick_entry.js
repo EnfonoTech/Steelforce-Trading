@@ -21,6 +21,42 @@
 
 frappe.provide("frappe.ui.form");
 
+// The VAT Registration Number (a supplier's Tax ID) is a supporting document of its own. In every
+// dialog that takes an upload -- this quick entry, Create Customer / Supplier, both Quick Edit
+// dialogs -- Document Name defaults to the VAT Certificate type and Document # to the number typed
+// above, until the user picks something else; the master then holds a Supporting Documents row for
+// the number (sf_trading/party_documents.py ensure_vat_row). `cfg` names the dialog's own fields:
+// {vat, type, number}; `source` says which of them just changed.
+window.sf_vat_document_sync = function (d, cfg, source) {
+	const VAT_TYPE = "VAT Certificate";
+	if (!d || !d.get_value || !d.fields_dict || !d.fields_dict[cfg.type] || !d.fields_dict[cfg.number]) return;
+	const vat = String(d.get_value(cfg.vat) || "").trim();
+	const type = d.get_value(cfg.type) || "";
+	const number = String(d.get_value(cfg.number) || "").trim();
+	const fill_number = () => {
+		// only a blank number, or one this helper wrote for an earlier version of the VAT number
+		if (vat && vat !== "0" && (!number || number === d._sf_vat_auto_number)) {
+			d._sf_vat_auto_number = vat;
+			d.set_value(cfg.number, vat);
+		}
+	};
+	if (source === "type") {
+		// a type picked by hand stays; the one set below does not count as picked
+		if (d._sf_vat_auto_type === type) d._sf_vat_auto_type = null;
+		else d._sf_vat_type_chosen = true;
+		if (type === VAT_TYPE) fill_number();
+		return;
+	}
+	if (!vat || vat === "0") return;
+	if (!d._sf_vat_type_chosen && type !== VAT_TYPE) {
+		d._sf_vat_auto_type = VAT_TYPE;
+		d.set_value(cfg.type, VAT_TYPE);
+		fill_number();
+	} else if (type === VAT_TYPE) {
+		fill_number();
+	}
+};
+
 (function () {
 	const Base = frappe.ui.form.ContactAddressQuickEntryForm;
 	if (!Base) return;
@@ -56,6 +92,12 @@ frappe.provide("frappe.ui.form");
 				mark("custom_commercial_registration_number", "mandatory_depends_on", B2B);
 			}
 			dialog.refresh_dependency();
+			// the number typed here defaults the document below (sf_vat_document_sync)
+			const vat_field = is_supplier ? "tax_id" : "custom_vat_registration_number";
+			const cfg = { vat: vat_field, type: "sf_document_type", number: "sf_document_number" };
+			if (dialog.fields_dict[vat_field]) {
+				dialog.fields_dict[vat_field].df.onchange = () => window.sf_vat_document_sync(dialog, cfg, "vat");
+			}
 		}
 
 		get_variant_fields() {
@@ -88,6 +130,11 @@ frappe.provide("frappe.ui.form");
 					label: __("Document Name"),
 					default: SF_DEFAULT_DOCUMENT[doctype],
 					depends_on: "eval:doc.sf_document_attachment",
+					onchange: () => window.sf_vat_document_sync(this.dialog, {
+						vat: is_supplier ? "tax_id" : "custom_vat_registration_number",
+						type: "sf_document_type",
+						number: "sf_document_number",
+					}, "type"),
 					get_query: () => ({ filters: { disabled: 0, applies_to: ["in", ["Customer and Supplier", doctype]] } }),
 				},
 				{ fieldname: "sf_document_number", fieldtype: "Data", label: __("Document #"), depends_on: "eval:doc.sf_document_attachment" },

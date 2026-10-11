@@ -38,6 +38,8 @@ frappe.ui.form.on("Quotation", {
     },
 });
 
+var SF_VAT_DOCUMENT = { vat: "tax_id", type: "document_type", number: "document_number" };
+
 function sf_add_create_customer_btn(frm, field_name) {
     if (frm.doc.docstatus !== 0) return;
     if (!frm.fields_dict[field_name]) return;
@@ -137,6 +139,10 @@ function sf_open_create_customer_dialog(frm, field_name) {
                     description: is_saudi
                         ? __("Exactly 15 digits, starting and ending with 3.")
                         : __("Required for B2B."),
+                    // the number is also the document below (party_quick_entry.js)
+                    onchange() {
+                        window.sf_vat_document_sync(d, SF_VAT_DOCUMENT, "vat");
+                    },
                 },
                 {
                     fieldname: "commercial_registration_number",
@@ -168,6 +174,7 @@ function sf_open_create_customer_dialog(frm, field_name) {
                     get_query: () => ({ filters: { disabled: 0, applies_to: ["in", ["Customer and Supplier", "Customer"]] } }),
                     onchange() {
                         sf_party_dialog_expiry_rule(d);
+                        window.sf_vat_document_sync(d, SF_VAT_DOCUMENT, "type");
                     },
                 },
                 {

@@ -255,6 +255,48 @@ def validate_rows(doc):
 			frappe.throw(_("{0}: {1} needs the holder's Date of Birth.").format(label, row.document_type))
 
 
+#: the VAT Registration Number (a supplier's Tax ID) is a supporting document of its own: the master
+#: carries a row for it, whichever dialog or form the number was typed in
+VAT_DOCUMENT_TYPE = "VAT Certificate"
+VAT_FIELD = {"Customer": "custom_vat_registration_number", "Supplier": "tax_id"}
+
+
+def vat_number(doc) -> str:
+	value = cstr(doc.get(VAT_FIELD.get(doc.doctype, ""))).strip()
+	return "" if value == "0" else value
+
+
+def ensure_vat_row(doc):
+	"""A new master, or one whose VAT number / Tax ID has just changed, holds a Supporting Documents
+	row of type VAT Certificate carrying that number. The row the create / Quick Edit dialog's upload
+	made already does; otherwise a row with the number (its file still to come) is added, or the
+	number is written into a blank VAT row. An old master is left as it is until its number is touched."""
+	vat = vat_number(doc)
+	if not vat:
+		return
+	if not doc.is_new() and not doc.has_value_changed(VAT_FIELD[doc.doctype]):
+		return
+	kind = frappe.db.get_value(TYPE_DOCTYPE, VAT_DOCUMENT_TYPE,
+		["applies_to", "validate_expiry", "days_ahead", "grace_days", "financial_implication", "disabled"], as_dict=True)
+	if not kind or cint(kind.disabled) or kind.applies_to not in (APPLIES_TO_BOTH, doc.doctype):
+		return
+	rows = [r for r in doc.get(TABLE) or [] if r.get("document_type") == VAT_DOCUMENT_TYPE]
+	if any(cstr(r.get("document_number")).strip() == vat for r in rows):
+		return
+	blank = next((r for r in rows if not cstr(r.get("document_number")).strip()), None)
+	if blank:
+		blank.document_number = vat
+		return
+	doc.append(TABLE, {
+		"document_type": VAT_DOCUMENT_TYPE,
+		"document_number": vat,
+		"validate_expiry": cint(kind.validate_expiry),
+		"days_ahead": cint(kind.days_ahead),
+		"grace_days": cint(kind.grace_days),
+		"financial_implication": cint(kind.financial_implication) if cint(kind.validate_expiry) else 0,
+	})
+
+
 def validate_supplier_tax_id(doc):
 	"""A Company supplier carries a Tax ID (the server side of the Company-only required mark)."""
 	if doc.doctype == "Supplier" and doc.get("supplier_type") == "Company" and not cstr(doc.get("tax_id")).strip():
@@ -267,6 +309,7 @@ def validate_master(doc, _method=None):
 	full rule on governed new ones."""
 	if stands_aside(doc) or only_status_fields_changed(doc):
 		return
+	ensure_vat_row(doc)
 	validate_rows(doc)
 	validate_supplier_tax_id(doc)
 	if not is_governed(doc) or not is_new_master(doc):

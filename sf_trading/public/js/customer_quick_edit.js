@@ -85,6 +85,8 @@ function open_customer_quick_edit_dialog(customer, on_saved) {
 	});
 }
 
+var SF_QE_VAT_DOCUMENT = { vat: "custom_vat_registration_number", type: "document_type", number: "document_number" };
+
 function render_quick_edit_dialog(customer, data, on_saved) {
 	// Two DIFFERENT flags. is_company is field-VISIBILITY only (customer_type=="Company"), kept
 	// independent of the CR/VAT blocking rule so a Company customer with no VAT yet still sees the
@@ -154,6 +156,8 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 				fieldtype: "Data",
 				label: __("VAT Registration Number"),
 				default: data.custom_vat_registration_number,
+				// the number is also the document below (party_quick_entry.js)
+				onchange: () => window.sf_vat_document_sync(dialog, SF_QE_VAT_DOCUMENT, "vat"),
 			},
 			{ fieldtype: "Column Break" },
 			{
@@ -212,8 +216,16 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 				label: __("Document Name"),
 				default: "VAT Certificate",
 				depends_on: "eval:doc.attachment",
+				onchange: () => window.sf_vat_document_sync(dialog, SF_QE_VAT_DOCUMENT, "type"),
 			},
-			{ fieldname: "document_number", fieldtype: "Data", label: __("Document #"), depends_on: "eval:doc.attachment" },
+			{
+				fieldname: "document_number",
+				fieldtype: "Data",
+				label: __("Document #"),
+				// the customer's VAT Registration Number, while the document is the VAT Certificate
+				default: data.custom_vat_registration_number || "",
+				depends_on: "eval:doc.attachment",
+			},
 			{
 				fieldname: "expiry_date",
 				fieldtype: "Date",
@@ -253,5 +265,7 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 		},
 	});
 
+	// the helper replaces the number it wrote itself, so the number the dialog opened with counts
+	dialog._sf_vat_auto_number = (data.custom_vat_registration_number || "").trim();
 	dialog.show();
 }

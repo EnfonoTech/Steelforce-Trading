@@ -51,6 +51,8 @@ function sf_open_supplier_quick_edit(supplier, on_saved) {
 	});
 }
 
+var SF_SQE_VAT_DOCUMENT = { vat: "tax_id", type: "document_type", number: "document_number" };
+
 function sf_render_supplier_quick_edit(supplier, data, on_saved) {
 	const blocking = [].concat(data.blocking || [], data.expired || []);
 	const fields = [
@@ -76,6 +78,8 @@ function sf_render_supplier_quick_edit(supplier, data, on_saved) {
 			label: __("Tax ID"),
 			default: data.tax_id,
 			reqd: data.is_company ? 1 : 0,
+			// the number is also the document below (party_quick_entry.js)
+			onchange: () => window.sf_vat_document_sync(d, SF_SQE_VAT_DOCUMENT, "vat"),
 		},
 		{ fieldtype: "Column Break" },
 		{
@@ -109,11 +113,19 @@ function sf_render_supplier_quick_edit(supplier, data, on_saved) {
 			fieldtype: "Link",
 			options: "Supporting Document Type",
 			label: __("Document Name"),
-			default: "Commercial Registration",
+			// the Tax ID is a document of its own: the VAT Certificate, numbered with it
+			default: data.tax_id ? "VAT Certificate" : "Commercial Registration",
 			depends_on: "eval:doc.attachment",
 			get_query: () => ({ filters: { disabled: 0, applies_to: ["in", ["Customer and Supplier", "Supplier"]] } }),
+			onchange: () => window.sf_vat_document_sync(d, SF_SQE_VAT_DOCUMENT, "type"),
 		},
-		{ fieldname: "document_number", fieldtype: "Data", label: __("Document #"), depends_on: "eval:doc.attachment" },
+		{
+			fieldname: "document_number",
+			fieldtype: "Data",
+			label: __("Document #"),
+			default: data.tax_id || "",
+			depends_on: "eval:doc.attachment",
+		},
 		{
 			fieldname: "expiry_date",
 			fieldtype: "Date",
@@ -152,5 +164,6 @@ function sf_render_supplier_quick_edit(supplier, data, on_saved) {
 			});
 		},
 	});
+	d._sf_vat_auto_number = (data.tax_id || "").trim();
 	d.show();
 }

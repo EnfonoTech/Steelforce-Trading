@@ -336,3 +336,80 @@ class TestDocumentRequired(FrappeTestCase):
 
 	def test_returns_still_stand_aside(self):
 		pd.validate_party_at_transaction(frappe._dict(doctype="Purchase Invoice", supplier="P-1", is_return=1))
+
+
+class VatParty(Party):
+	"""A Party that can grow a Supporting Documents row and say whether its VAT number changed."""
+
+	def __init__(self, doctype, changed=False, **values):
+		super().__init__(doctype, **values)
+		self._changed = changed
+
+	def has_value_changed(self, fieldname):
+		return self._changed
+
+	def append(self, table, row):
+		self[table].append(Row(idx=len(self[table]) + 1, **row))
+
+
+KIND = frappe._dict(applies_to=pd.APPLIES_TO_BOTH, validate_expiry=0, days_ahead=0, grace_days=0,
+	financial_implication=0, disabled=0)
+
+
+class TestVatNumberIsADocument(FrappeTestCase):
+	"""The VAT Registration Number (a supplier's Tax ID) holds a Supporting Documents row of its own."""
+
+	def setUp(self):
+		patch.object(frappe.db, "get_value", return_value=KIND).start()
+		self.addCleanup(patch.stopall)
+
+	def rows(self, party):
+		return [(r.document_type, r.get("document_number")) for r in party[pd.TABLE]]
+
+	def test_a_new_customer_gets_a_vat_row_carrying_the_number(self):
+		party = VatParty("Customer", new=True, custom_vat_registration_number="300000000000003")
+		pd.ensure_vat_row(party)
+		self.assertEqual(self.rows(party), [("VAT Certificate", "300000000000003")])
+
+	def test_a_supplier_tax_id_is_its_vat_number(self):
+		party = VatParty("Supplier", new=True, tax_id="300000000000003")
+		pd.ensure_vat_row(party)
+		self.assertEqual(self.rows(party), [("VAT Certificate", "300000000000003")])
+
+	def test_a_row_the_dialog_made_is_not_doubled(self):
+		party = VatParty("Customer", new=True, custom_vat_registration_number="300000000000003",
+			rows=[{"document_type": "VAT Certificate", "document_number": "300000000000003", "attachment": "/f.pdf"}])
+		pd.ensure_vat_row(party)
+		self.assertEqual(len(party[pd.TABLE]), 1)
+
+	def test_a_blank_vat_row_takes_the_number(self):
+		party = VatParty("Customer", new=True, custom_vat_registration_number="300000000000003",
+			rows=[{"document_type": "VAT Certificate", "attachment": "/f.pdf"}])
+		pd.ensure_vat_row(party)
+		self.assertEqual(self.rows(party), [("VAT Certificate", "300000000000003")])
+
+	def test_another_document_type_still_gets_the_vat_row_as_well(self):
+		party = VatParty("Customer", new=True, custom_vat_registration_number="300000000000003",
+			rows=[{"document_type": "Commercial Registration", "attachment": "/f.pdf"}])
+		pd.ensure_vat_row(party)
+		self.assertEqual(len(party[pd.TABLE]), 2)
+
+	def test_an_old_master_is_left_alone_until_its_number_changes(self):
+		old = VatParty("Customer", custom_vat_registration_number="300000000000003", changed=False)
+		pd.ensure_vat_row(old)
+		self.assertEqual(old[pd.TABLE], [])
+		edited = VatParty("Customer", custom_vat_registration_number="300000000000003", changed=True)
+		pd.ensure_vat_row(edited)
+		self.assertEqual(len(edited[pd.TABLE]), 1)
+
+	def test_no_number_no_row(self):
+		for number in ("", "0", "  "):
+			party = VatParty("Customer", new=True, custom_vat_registration_number=number)
+			pd.ensure_vat_row(party)
+			self.assertEqual(party[pd.TABLE], [])
+
+	def test_a_disabled_vat_type_adds_nothing(self):
+		with patch.object(frappe.db, "get_value", return_value=frappe._dict(KIND, disabled=1)):
+			party = VatParty("Customer", new=True, custom_vat_registration_number="300000000000003")
+			pd.ensure_vat_row(party)
+		self.assertEqual(party[pd.TABLE], [])

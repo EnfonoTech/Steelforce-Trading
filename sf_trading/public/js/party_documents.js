@@ -52,8 +52,39 @@ function sf_party_mark_required(frm, quiet) {
 	});
 }
 
+const SF_VAT_TYPE = "VAT Certificate";
+const SF_VAT_FIELD = { Customer: "custom_vat_registration_number", Supplier: "tax_id" };
+
+function sf_party_vat_number(frm) {
+	const vat = String(frm.doc[SF_VAT_FIELD[frm.doctype]] || "").trim();
+	return vat === "0" ? "" : vat;
+}
+
+// the VAT Registration Number (a supplier's Tax ID) is a supporting document of its own: typing it
+// adds a VAT Certificate row carrying it, its file still to attach (the server adds the same row on
+// save -- party_documents.ensure_vat_row)
+function sf_party_vat_row(frm) {
+	const vat = sf_party_vat_number(frm);
+	if (!vat || !frm.fields_dict.custom_supporting_documents) return;
+	const rows = (frm.doc.custom_supporting_documents || []).filter((r) => r.document_type === SF_VAT_TYPE);
+	if (rows.some((r) => String(r.document_number || "").trim() === vat)) return;
+	const blank = rows.find((r) => !String(r.document_number || "").trim());
+	if (blank) {
+		frappe.model.set_value(blank.doctype, blank.name, "document_number", vat);
+		return;
+	}
+	const row = frm.add_child("custom_supporting_documents");
+	// setting the type fills Validate / Days Ahead / Grace Days from it (handler below)
+	frappe.model.set_value(row.doctype, row.name, "document_type", SF_VAT_TYPE);
+	frappe.model.set_value(row.doctype, row.name, "document_number", vat);
+	frm.refresh_field("custom_supporting_documents");
+}
+
 ["Customer", "Supplier"].forEach((doctype) => {
 	frappe.ui.form.on(doctype, {
+		[SF_VAT_FIELD[doctype]](frm) {
+			sf_party_vat_row(frm);
+		},
 		setup(frm) {
 			frm.set_query("document_type", "custom_supporting_documents", () => ({
 				filters: {
@@ -83,6 +114,10 @@ frappe.ui.form.on("Customer Supporting Document", {
 	document_type(frm, cdt, cdn) {
 		const row = locals[cdt][cdn];
 		if (!row.document_type) return;
+		// the VAT Certificate carries the VAT number it certifies
+		if (row.document_type === SF_VAT_TYPE && !String(row.document_number || "").trim() && sf_party_vat_number(frm)) {
+			frappe.model.set_value(cdt, cdn, "document_number", sf_party_vat_number(frm));
+		}
 		frappe.call({
 			method: "sf_trading.party_documents.get_document_type_defaults",
 			args: { document_type: row.document_type },
