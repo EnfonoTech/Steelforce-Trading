@@ -18,7 +18,7 @@ class TestSupplierQuickEdit(FrappeTestCase):
 		group = frappe.db.get_value("Supplier Group", {"is_group": 0}, "name")
 		if not group:
 			self.skipTest("no Supplier Group")
-		doc = frappe.get_doc({"doctype": "Supplier", "supplier_name": "_SF Quick Edit Supplier",
+		doc = frappe.get_doc({"doctype": "Supplier", "supplier_name": "_SF Quick Edit Supplier " + frappe.generate_hash(length=6),
 			"supplier_type": "Company", "supplier_group": group})
 		doc.flags.ignore_mandatory = True  # created bare, as an import would leave it
 		self.supplier = doc.insert(ignore_permissions=True).name
@@ -39,7 +39,7 @@ class TestSupplierQuickEdit(FrappeTestCase):
 			"is_private": 1}).insert(ignore_permissions=True)
 		with patch.object(pd, "rules_from", return_value=frappe.utils.add_days(frappe.utils.now_datetime(), -1)):
 			result = sqe.save_quick_edit_data(self.supplier, {"mobile": "36000001", "email": "qe@example.com",
-				"tax_id": "SFQE-TAX-1", "payment_terms": terms, "attachment": upload.file_url, "document_type": "Other"})
+				"tax_id": "SFQE-" + frappe.generate_hash(length=8), "payment_terms": terms, "attachment": upload.file_url, "document_type": "Other"})
 			data = sqe.get_quick_edit_data(self.supplier)
 		self.assertEqual(result["warnings"], [])
 		self.assertEqual(data["blocking"], [])
