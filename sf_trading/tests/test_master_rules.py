@@ -32,6 +32,12 @@ class Party(frappe._dict):
 	def is_new(self):
 		return self._new
 
+	def has_value_changed(self, fieldname):
+		return False
+
+	def append(self, table, row):
+		self[table].append(Row(idx=len(self[table]) + 1, **row))
+
 
 def _values(answers):
 	"""get_value answering {(doctype, fieldname-or-None): value}; everything else goes to the database."""
@@ -339,7 +345,7 @@ class TestDocumentRequired(FrappeTestCase):
 
 
 class VatParty(Party):
-	"""A Party that can grow a Supporting Documents row and say whether its VAT number changed."""
+	"""A Party that says whether its VAT number changed since the last save."""
 
 	def __init__(self, doctype, changed=False, **values):
 		super().__init__(doctype, **values)
@@ -347,9 +353,6 @@ class VatParty(Party):
 
 	def has_value_changed(self, fieldname):
 		return self._changed
-
-	def append(self, table, row):
-		self[table].append(Row(idx=len(self[table]) + 1, **row))
 
 
 KIND = frappe._dict(applies_to=pd.APPLIES_TO_BOTH, validate_expiry=0, days_ahead=0, grace_days=0,
