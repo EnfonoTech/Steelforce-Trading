@@ -44,9 +44,10 @@ window.sf_vat_document_sync = function (d, cfg, source) {
 		}
 	};
 	if (source === "type") {
-		// a type picked by hand stays; the one set below does not count as picked
+		// a type picked by hand stays. Not picked: the one set below, and the dialog's own default
+		// (which fires this when the dialog is built)
 		if (d._sf_vat_auto_type === type) d._sf_vat_auto_type = null;
-		else d._sf_vat_type_chosen = true;
+		else if (type !== (d.fields_dict[cfg.type].df.default || "") || d._sf_vat_switched) d._sf_vat_type_chosen = true;
 		if (type === VAT_TYPE) fill_number();
 		else if (number && number === d._sf_vat_auto_number) {
 			// another document is not numbered with the VAT number this helper wrote
@@ -58,6 +59,7 @@ window.sf_vat_document_sync = function (d, cfg, source) {
 	if (!vat || vat === "0") return;
 	if (!d._sf_vat_type_chosen && type !== VAT_TYPE) {
 		d._sf_vat_auto_type = VAT_TYPE;
+		d._sf_vat_switched = true;
 		d.set_value(cfg.type, VAT_TYPE);
 		fill_number();
 	} else if (type === VAT_TYPE) {
