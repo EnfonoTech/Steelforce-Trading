@@ -416,3 +416,32 @@ class TestVatNumberIsADocument(FrappeTestCase):
 			party = VatParty("Customer", new=True, custom_vat_registration_number="300000000000003")
 			pd.ensure_vat_row(party)
 		self.assertEqual(party[pd.TABLE], [])
+
+
+class TestOtherSupplierHoldsNoDocument(FrappeTestCase):
+	"""Client, 2026-10-11: a supplier in the "Other Supplier" group is not asked for documents."""
+
+	def test_the_group_is_matched_loosely(self):
+		self.assertTrue(pd.document_exempt_group("Other Supplier"))
+		self.assertTrue(pd.document_exempt_group("  other supplier "))
+		self.assertFalse(pd.document_exempt_group("Distributor"))
+		self.assertFalse(pd.document_exempt_group(None))
+
+	def test_a_company_supplier_in_the_group_needs_no_document(self):
+		other = Party("Supplier", supplier_type="Company", supplier_group="Other Supplier")
+		self.assertFalse(pd.needs_document(other))
+		self.assertEqual(pd.missing_document(other), [])
+		usual = Party("Supplier", supplier_type="Company", supplier_group="Distributor")
+		self.assertTrue(pd.needs_document(usual))
+
+	def test_a_new_master_is_not_asked_for_the_document_line_but_still_for_payment_terms(self):
+		with patch.object(pd, "has_mobile", return_value=True):
+			other = Party("Supplier", payment_terms="Net 30", supplier_group="Other Supplier")
+			self.assertEqual(pd.missing_details(other, after_insert=True), [])
+			no_terms = Party("Supplier", supplier_group="Other Supplier")
+			self.assertEqual(len(pd.missing_details(no_terms, after_insert=True)), 1)
+			usual = Party("Supplier", payment_terms="Net 30", supplier_group="Distributor")
+			self.assertEqual(len(pd.missing_details(usual, after_insert=True)), 1)
+
+	def test_a_customer_is_never_exempt(self):
+		self.assertFalse(pd.documents_exempt(Party("Customer", supplier_group="Other Supplier")))

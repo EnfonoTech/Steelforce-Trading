@@ -22,6 +22,10 @@ client: "block now"): with none attached -- a Supporting Documents row with its 
 from before the rules any file attached to it -- buying from / paying the supplier and billing the
 customer are refused (`missing_document`). Returns and opening invoices stand aside as everywhere here.
 
+A supplier whose Supplier Group is "Other Supplier" holds no document at all (client, 2026-10-11):
+the document rules above -- the new-master row, the Company-supplier document -- stand aside for it
+(`documents_exempt`). Payment Terms and the rest still apply.
+
 Every supplier of type Company needs a Tax ID on every save, old ones included: production had
 that as a hand-made Property Setter (reqd), which the app's fixture replaces with a mark that only
 applies to Company suppliers, so the server side of it lives here.
@@ -161,17 +165,31 @@ def missing_details(doc, after_insert: bool) -> list:
 	if not doc.get("payment_terms"):
 		missing.append(_("Payment Terms"))
 	if after_insert:
-		if not attached_rows(doc):
+		if not attached_rows(doc) and not documents_exempt(doc):
 			missing.append(_("a Supporting Document with its file attached"))
 		if doc.doctype == "Supplier" and not has_mobile(doc):
 			missing.append(_("Mobile Number"))
 	return missing
 
 
+#: Supplier Groups whose suppliers are not asked for a supporting document (mirrored in
+#: public/js/party_quick_entry.js, which has no server round trip to read it from)
+DOCUMENT_EXEMPT_SUPPLIER_GROUPS = ("Other Supplier",)
+
+
+def document_exempt_group(group) -> bool:
+	return cstr(group).strip().lower() in {g.lower() for g in DOCUMENT_EXEMPT_SUPPLIER_GROUPS}
+
+
+def documents_exempt(doc) -> bool:
+	"""A supplier in an exempt Supplier Group needs no supporting document."""
+	return doc.doctype == "Supplier" and document_exempt_group(doc.get("supplier_group"))
+
+
 def needs_document(doc) -> bool:
 	"""A Company supplier, or a customer with a VAT Registration Number, must hold a document."""
 	if doc.doctype == "Supplier":
-		return doc.get("supplier_type") == "Company"
+		return doc.get("supplier_type") == "Company" and not documents_exempt(doc)
 	if doc.doctype == "Customer":
 		vat = cstr(doc.get("custom_vat_registration_number")).strip()
 		return bool(vat) and vat != "0"
@@ -347,6 +365,7 @@ def set_onload(doc, _method=None):
 		"applies": applies,
 		"needs_document": bool(document),
 		"rules_from": str(rules_from() or ""),
+		"exempt_groups": list(DOCUMENT_EXEMPT_SUPPLIER_GROUPS),
 		"missing": missing + ([] if any("Supporting Document" in m for m in missing) else document),
 		"expired": [r.document_type for r in expired_financial_rows(doc.doctype, doc.name)] if not doc.is_new() else [],
 	})
@@ -371,9 +390,11 @@ def get_master_rules(doctype: str, name: str = None, customer_vat: str = None, i
 	if name:
 		frappe.has_permission(doctype, "read", doc=name, throw=True)
 		doc = frappe.get_doc(doctype, name)
-		return {"applies": is_governed(doc) and is_new_master(doc), "rules_from": str(start or "")}
+		return {"applies": is_governed(doc) and is_new_master(doc), "rules_from": str(start or ""),
+			"exempt_groups": list(DOCUMENT_EXEMPT_SUPPLIER_GROUPS)}
 	governed = doctype == "Supplier" or bool(cint(is_credit))
-	return {"applies": bool(start) and governed, "rules_from": str(start or "")}
+	return {"applies": bool(start) and governed, "rules_from": str(start or ""),
+		"exempt_groups": list(DOCUMENT_EXEMPT_SUPPLIER_GROUPS)}
 
 
 def dialog_document_row(party_type, document_type=None, document_number=None, expiry_date=None, attachment=None):

@@ -71,8 +71,8 @@ def blocking(doc) -> frappe._dict:
 		expired=[_expired_text(r) for r in pd.expired_financial_rows(PARTY, doc.name)],
 		has_document_row=rows,
 		enforced=enforced,
-		needs_document=bool((applies and not rows) or pd.missing_document(doc)
-			or (enforced and not sv.has_attachment(doc.name))),
+		needs_document=bool(not pd.documents_exempt(doc) and ((applies and not rows) or pd.missing_document(doc)
+			or (enforced and not sv.has_attachment(doc.name)))),
 	)
 
 

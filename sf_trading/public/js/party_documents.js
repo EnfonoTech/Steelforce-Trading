@@ -34,11 +34,14 @@ function sf_party_mark_required(frm, quiet) {
 		// governed new master
 		const credit = frm.doctype === "Customer" && (frm.doc.credit_limits || []).some((row) => flt(row.credit_limit) > 0);
 		frm.toggle_reqd("payment_terms", required || credit ? 1 : 0);
-		if (quiet) return;
 		if (frm.fields_dict.custom_supporting_documents) {
-			// a Company supplier / a VAT-registered customer needs one whatever its age
-			frm.set_df_property("custom_supporting_documents", "reqd", required || rules.needs_document ? 1 : 0);
+			// a Company supplier / a VAT-registered customer needs one whatever its age -- unless its
+			// Supplier Group is one that holds none (party_documents.DOCUMENT_EXEMPT_SUPPLIER_GROUPS)
+			const exempt = frm.doctype === "Supplier"
+				&& (rules.exempt_groups || []).some((g) => g.toLowerCase() === String(frm.doc.supplier_group || "").trim().toLowerCase());
+			frm.set_df_property("custom_supporting_documents", "reqd", !exempt && (required || rules.needs_document) ? 1 : 0);
 		}
+		if (quiet) return; // a re-mark after an edit does not repeat the notes
 		const notes = [];
 		if ((rules.missing || []).length) {
 			notes.push(__("Still needed: {0}.", [rules.missing.join(", ")]));
@@ -84,6 +87,10 @@ function sf_party_vat_row(frm) {
 	frappe.ui.form.on(doctype, {
 		[SF_VAT_FIELD[doctype]](frm) {
 			sf_party_vat_row(frm);
+		},
+		// the exemption follows the group picked on the form
+		supplier_group(frm) {
+			if (frm.doctype === "Supplier") sf_party_mark_required(frm, true);
 		},
 		setup(frm) {
 			frm.set_query("document_type", "custom_supporting_documents", () => ({

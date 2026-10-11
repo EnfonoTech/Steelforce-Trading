@@ -27,6 +27,9 @@ frappe.provide("frappe.ui.form");
 // above, until the user picks something else; the master then holds a Supporting Documents row for
 // the number (sf_trading/party_documents.py ensure_vat_row). `cfg` names the dialog's own fields:
 // {vat, type, number}; `source` says which of them just changed.
+// Supplier Groups whose suppliers hold no document: mirror of party_documents.DOCUMENT_EXEMPT_SUPPLIER_GROUPS
+window.SF_DOCUMENT_EXEMPT_SUPPLIER_GROUPS = ["other supplier"];
+
 window.sf_vat_document_sync = function (d, cfg, source) {
 	const VAT_TYPE = "VAT Certificate";
 	if (!d || !d.get_value || !d.fields_dict || !d.fields_dict[cfg.type] || !d.fields_dict[cfg.number]) return;
@@ -121,10 +124,10 @@ window.sf_vat_document_sync = function (d, cfg, source) {
 					fieldtype: "Attach",
 					label: __("Document Attachment"),
 					mandatory_depends_on: is_supplier
-						? "eval:doc.supplier_type=='Company'"
+						? "eval:doc.supplier_type=='Company' && !(window.SF_DOCUMENT_EXEMPT_SUPPLIER_GROUPS || []).includes(String(doc.supplier_group || '').trim().toLowerCase())"
 						: "eval:doc.custom_vat_registration_number",
 					description: is_supplier
-						? __("Required for a Company supplier.")
+						? __("Required for a Company supplier, except in the Other Supplier group.")
 						: __("Required when a VAT Registration Number is entered."),
 				},
 				{ fieldtype: "Column Break" },

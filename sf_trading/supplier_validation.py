@@ -31,6 +31,7 @@ from frappe.utils import cint, cstr
 
 from sf_trading.party_completeness import only_status_fields_changed
 from sf_trading.party_contact_cache import party_email_addresses, party_phone_numbers
+from sf_trading.party_documents import document_exempt_group
 
 SETTINGS = "SF Trading Settings"
 ENFORCE_FIELD = "enforce_supplier_completeness"
@@ -84,6 +85,9 @@ def validate_attachment(doc):
 	# a file can only be attached once the supplier exists, so the first save cannot carry one
 	if doc.is_new() or doc.flags.get("in_insert"):
 		return
+	# a supplier in an exempt Supplier Group (party_documents) holds no document
+	if document_exempt_group(doc.get("supplier_group")):
+		return
 
 	if not has_attachment(doc.name):
 		frappe.throw(
@@ -133,9 +137,9 @@ def missing_supplier_details(supplier: str) -> list[str]:
 	"""What the supplier still lacks before a document can be raised against it. Phone and email
 	are read from the master and from its linked Contacts/Addresses, as for Customer -- the
 	master's own fetch_from columns can sit blank while the real value lives on a Contact."""
-	supplier_type, tax_id, mobile_no, email_id = frappe.db.get_value(
-		"Supplier", supplier, ["supplier_type", "tax_id", "mobile_no", "email_id"]
-	) or (None, None, None, None)
+	supplier_type, tax_id, mobile_no, email_id, group = frappe.db.get_value(
+		"Supplier", supplier, ["supplier_type", "tax_id", "mobile_no", "email_id", "supplier_group"]
+	) or (None, None, None, None, None)
 
 	missing = []
 	if needs_tax_id(supplier_type) and not cstr(tax_id).strip():
@@ -144,7 +148,7 @@ def missing_supplier_details(supplier: str) -> list[str]:
 		missing.append(_("Phone Number"))
 	if not cstr(email_id).strip() and not party_email_addresses("Supplier", supplier):
 		missing.append(_("Email"))
-	if not has_attachment(supplier):
+	if not has_attachment(supplier) and not document_exempt_group(group):
 		missing.append(_("Document Attachment"))
 	return missing
 

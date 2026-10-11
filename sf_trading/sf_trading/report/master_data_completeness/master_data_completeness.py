@@ -99,7 +99,7 @@ def suppliers(filters) -> list:
 		conditions["tax_id"] = ["is", "set"]
 	_common_filters(filters, conditions)
 	masters = frappe.get_list("Supplier", filters=conditions, fields=["name", "supplier_name as party_name",
-		"supplier_type", "tax_id", "payment_terms", "mobile_no", "custom_mobile_no", "email_id",
+		"supplier_type", "supplier_group", "tax_id", "payment_terms", "mobile_no", "custom_mobile_no", "email_id",
 		"supplier_primary_address as primary_address", "creation", "disabled"], limit_page_length=0)
 	return build("Supplier", masters, "Purchase Invoice", "supplier")
 
@@ -188,11 +188,13 @@ def build(party_type, masters, invoice_doctype, party_field) -> list:
 		has_address = bool(m.primary_address or m.name in linked_addresses)
 		new_master = bool(start and get_datetime(m.creation) >= start)
 		missing = []
-		if not d.rows:
+		# a supplier in an exempt Supplier Group holds no document (party_documents)
+		exempt = party_type == "Supplier" and pd.document_exempt_group(m.get("supplier_group"))
+		if not d.rows and not exempt:
 			missing.append("Supporting Document")
 		# a new master is held to the gate's own test (a grid row with its file); an older one is
 		# credited for any file attached to it
-		if not d.attached and (new_master or m.name not in attached_files):
+		if not d.attached and (new_master or m.name not in attached_files) and not exempt:
 			missing.append("Document Attachment")
 		if not m.payment_terms:
 			missing.append("Payment Terms")
