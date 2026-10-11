@@ -287,6 +287,8 @@ class TestMasterDataCompleteness(FrappeTestCase):
 
 		def make(name, vat=None, limit=0):
 			doc = frappe.get_doc({"doctype": "Customer", "customer_name": name, "customer_type": "Company",
+				"customer_group": frappe.db.get_value("Customer Group", {"is_group": 0}, "name"),
+				"territory": frappe.db.get_value("Territory", {"is_group": 0}, "name"),
 				"custom_vat_registration_number": vat,
 				"credit_limits": [{"company": company, "credit_limit": limit}] if limit else [],
 				"custom_branch_access": [{"branch": branch}] if limit else []})
