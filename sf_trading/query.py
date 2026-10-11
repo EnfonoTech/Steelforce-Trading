@@ -31,6 +31,7 @@ def fetch_in(
 	as_list: bool = False,
 	permissions: bool = False,
 	batch: int = IN_BATCH,
+	order_by: str = None,
 ) -> list:
 	"""Rows of `doctype` whose `in_field` is one of `values`, read a batch at a time.
 
@@ -42,6 +43,8 @@ def fetch_in(
 		as_list: return rows as lists rather than dicts (for name/value pairs)
 		permissions: read through frappe.get_list (permissions enforced) instead of get_all
 		batch: values per query
+		order_by: applied to every batch. Rows of one matched value never straddle two batches, so
+			an ordering inside each value (a child table's idx) survives the batching
 
 	An empty `values` returns an empty list rather than reading the whole table -- the opposite
 	mistake, and a far more expensive one.
@@ -57,6 +60,8 @@ def fetch_in(
 		where = dict(filters or {})
 		where[in_field] = ("in", chunk)
 		kwargs = {"filters": where, "limit_page_length": 0}
+		if order_by:
+			kwargs["order_by"] = order_by
 		if pluck:
 			kwargs["pluck"] = pluck
 		else:

@@ -11,6 +11,8 @@ for a journal — so a voucher legitimately appears on several rows and the test
 back to the voucher rather than assuming one each.
 """
 
+from unittest.mock import patch
+
 import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_months, flt, nowdate
@@ -20,11 +22,15 @@ from sf_trading.sf_trading.report.loyalty_rewards_report.loyalty_rewards_report 
     SOURCE_PAYMENT,
     TEMPLATE,
     UNLINKED_LABEL,
+    _account_rows,
+    _invoices,
+    _payment_allocations,
     _split_reward,
     _template_accounts,
     execute,
     summarise,
 )
+from sf_trading.query import IN_BATCH
 
 
 class TestLoyaltyRewardsReport(FrappeTestCase):
@@ -370,3 +376,73 @@ class TestLoyaltyRewardsReport(FrappeTestCase):
                 "reward_pct",
             ],
         )
+
+
+class TestLongListsAreReadInBatches(FrappeTestCase):
+    """A quarter holds ~4,800 reward payments and ~100 reward journals. Frappe 15.114 refuses any
+    generated statement of more than 10,000 sqlparse tokens (about 5,000 names in one IN list), so the
+    report read every name of its window in one statement and died with "Maximum number of tokens
+    exceeded". These tests assert the SHAPE of the reads, which holds on a 15.112 bench too."""
+
+    def _spy(self):
+        calls = []
+
+        def get_all(doctype, *args, **kwargs):
+            calls.append((doctype, kwargs.get("filters") or {}, kwargs.get("order_by")))
+            return []
+
+        return calls, get_all
+
+    def _longest_in(self, calls, field):
+        return max(len(filters[field][1]) for _doctype, filters, _order in calls)
+
+    def test_payment_allocations_are_read_in_batches_and_keep_their_order(self):
+        names = [f"PE-{i:05d}" for i in range(5200)]
+        calls, get_all = self._spy()
+        with patch.object(frappe, "get_all", get_all):
+            self.assertEqual(_payment_allocations(names), {})
+        self.assertGreaterEqual(len(calls), len(names) // IN_BATCH)
+        self.assertLessEqual(self._longest_in(calls, "parent"), IN_BATCH)
+        for _doctype, filters, order in calls:
+            self.assertEqual(filters["reference_doctype"], "Sales Invoice")
+            # idx order inside a payment is what _split_reward reads
+            self.assertEqual(order, "parent asc, idx asc")
+
+    def test_every_payment_is_read_once(self):
+        names = [f"PE-{i:05d}" for i in range(1203)]
+        seen = []
+
+        def get_all(doctype, *args, **kwargs):
+            seen.extend(kwargs["filters"]["parent"][1])
+            return []
+
+        with patch.object(frappe, "get_all", get_all):
+            _payment_allocations(names)
+        self.assertEqual(sorted(seen), sorted(names))
+
+    def test_invoice_headers_are_read_in_batches(self):
+        names = {f"SINV-{i:05d}" for i in range(5600)}
+        calls, get_all = self._spy()
+        with patch.object(frappe, "get_all", get_all):
+            self.assertEqual(_invoices(names), {})
+        self.assertGreaterEqual(len(calls), len(names) // IN_BATCH)
+        self.assertLessEqual(self._longest_in(calls, "name"), IN_BATCH)
+
+    def test_journal_account_rows_are_read_in_batches(self):
+        names = [f"ACC-JV-{i:05d}" for i in range(2600)]
+        calls, get_all = self._spy()
+        with patch.object(frappe, "get_all", get_all):
+            self.assertEqual(_account_rows(names), {})
+        self.assertGreaterEqual(len(calls), len(names) // IN_BATCH)
+        self.assertLessEqual(self._longest_in(calls, "parent"), IN_BATCH)
+
+    def test_the_rows_of_every_batch_are_gathered_per_payment(self):
+        rows = [
+            frappe._dict(parent="PE-1", reference_name="SINV-1", allocated_amount=5),
+            frappe._dict(parent="PE-1", reference_name="SINV-2", allocated_amount=7),
+            frappe._dict(parent="PE-2", reference_name="SINV-3", allocated_amount=9),
+        ]
+        with patch.object(frappe, "get_all", return_value=rows):
+            found = _payment_allocations(["PE-1", "PE-2"])
+        self.assertEqual([r.reference_name for r in found["PE-1"]], ["SINV-1", "SINV-2"])
+        self.assertEqual([r.reference_name for r in found["PE-2"]], ["SINV-3"])

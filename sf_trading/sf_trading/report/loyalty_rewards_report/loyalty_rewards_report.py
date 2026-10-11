@@ -40,6 +40,8 @@ from frappe import _
 from frappe.query_builder import Order
 from frappe.utils import flt, getdate
 
+from sf_trading.query import fetch_in
+
 TEMPLATE = "Loyalty Reward Entry"
 UNLINKED_LABEL = "(Not Linked)"
 
@@ -200,11 +202,14 @@ def _account_rows(journal_names):
     fields = ["parent", "name", "idx", "account", "debit", "debit_in_account_currency", "credit", "cost_center"]
     fields += _present_fields("Journal Entry Account", [ROW_LINK_FIELD])
 
-    for row in frappe.get_all(
+    # one statement per 500 journals: a quarter holds thousands, and frappe 15.114 refuses a
+    # statement of more than 10,000 sqlparse tokens (see sf_trading/query.py)
+    for row in fetch_in(
         "Journal Entry Account",
-        filters={"parent": ["in", journal_names]},
+        journal_names,
         fields=fields,
-        order_by="idx asc",
+        in_field="parent",
+        order_by="parent asc, idx asc",
     ):
         bucket = detail.setdefault(
             row.parent,
@@ -364,10 +369,14 @@ def _payment_allocations(payment_names):
     if not payment_names:
         return allocations
 
-    for row in frappe.get_all(
+    # a quarter carries ~4,800 reward payments: read them 500 at a time, not in one IN list
+    # (frappe 15.114: "Maximum number of tokens exceeded (10000)")
+    for row in fetch_in(
         "Payment Entry Reference",
-        filters={"parent": ["in", payment_names], "reference_doctype": "Sales Invoice"},
+        payment_names,
         fields=["parent", "reference_name", "allocated_amount"],
+        in_field="parent",
+        filters={"reference_doctype": "Sales Invoice"},
         order_by="parent asc, idx asc",
     ):
         allocations.setdefault(row.parent, []).append(row)
@@ -474,9 +483,9 @@ def _invoices(invoice_names):
     if not invoice_names:
         return {}
 
-    rows = frappe.get_all(
+    rows = fetch_in(
         "Sales Invoice",
-        filters={"name": ["in", list(invoice_names)]},
+        invoice_names,
         fields=[
             "name",
             "customer",
