@@ -773,6 +773,9 @@ override_doctype_dashboards = {
 	"Purchase Invoice": [_ADVICE_DASHBOARD],
 	"Journal Entry": [_ADVICE_DASHBOARD],
 	"Dunning": [_ADVICE_DASHBOARD],
+	# the payment raised from an advice, and the advice a payment was raised from, both ways
+	"Payment Entry": ["sf_trading.api.payment_advice_dashboard.get_payment_entry_dashboard_data"],
+	"Payment Advice": ["sf_trading.api.payment_advice_dashboard.get_payment_advice_dashboard_data"],
 }
 
 # exempt linked doctypes from being automatically cancelled
