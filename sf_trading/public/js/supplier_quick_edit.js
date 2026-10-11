@@ -55,19 +55,23 @@ var SF_SQE_VAT_DOCUMENT = { vat: "tax_id", type: "document_type", number: "docum
 
 function sf_render_supplier_quick_edit(supplier, data, on_saved) {
 	const blocking = [].concat(data.blocking || [], data.expired || []);
+	const required = data.required_missing || [];
 	const fields = [
 		{
 			fieldtype: "HTML",
-			options: blocking.length
-				? '<div class="alert alert-warning">' +
-					__("Currently blocking purchases and payments: {0}", [blocking.join(", ")]) +
-					"</div>"
-				: '<div class="alert alert-success">' + __("Nothing currently blocking purchases or payments.") + "</div>",
+			options:
+				(blocking.length
+					? '<div class="alert alert-warning">' +
+						__("Currently blocking purchases and payments: {0}", [blocking.join(", ")]) +
+						"</div>"
+					: '<div class="alert alert-success">' + __("Nothing currently blocking purchases or payments.") + "</div>") +
+				(required.length
+					? '<div class="alert alert-info">' + __("Also mandatory, still empty: {0}", [required.join(", ")]) + "</div>"
+					: ""),
 		},
-		// a new supplier needs a mobile (party_documents); with Enforce Supplier Completeness on, every
-		// supplier needs a phone and an email (supplier_validation)
-		{ fieldname: "mobile", fieldtype: "Data", label: __("Mobile Number"), default: data.mobile, reqd: data.rules_apply || data.enforced ? 1 : 0 },
-		{ fieldname: "email", fieldtype: "Data", options: "Email", label: __("Email"), default: data.email, reqd: data.enforced ? 1 : 0 },
+		// every supplier carries a mobile number and an email (the Create Supplier dialog asks for both)
+		{ fieldname: "mobile", fieldtype: "Data", label: __("Mobile Number"), default: data.mobile, reqd: 1 },
+		{ fieldname: "email", fieldtype: "Data", options: "Email", label: __("Email"), default: data.email, reqd: 1 },
 		{ fieldtype: "Column Break" },
 		{ fieldname: "address_line1", fieldtype: "Data", label: __("Address Line 1"), default: data.address_line1 },
 		{ fieldname: "address_city", fieldtype: "Data", label: __("City"), default: data.address_city },

@@ -13,7 +13,7 @@ What a governed new master needs:
 
 * Payment Terms, from its very first save -- the quick entry and the create dialogs ask for it.
 * Once it exists: at least one Supporting Documents row with its file attached, and for a supplier
-  a mobile number (on the master or a linked Contact). The quick entry cannot carry a file and the
+  a mobile number and an email (on the master or a linked Contact). The quick entry cannot carry a file and the
   full form has no editable mobile, so the first save is let through and every save after it -- and
   every invoice, order or supplier payment against it (`validate_party_at_transaction`) -- needs them.
 
@@ -158,6 +158,16 @@ def has_mobile(doc) -> bool:
 	return bool(party_phone_numbers(doc.doctype, doc.name))
 
 
+def has_email(doc) -> bool:
+	if cstr(doc.get("email_id")).strip():
+		return True
+	if doc.is_new():
+		return False
+	from sf_trading.party_contact_cache import party_email_addresses
+
+	return bool(party_email_addresses(doc.doctype, doc.name))
+
+
 def missing_details(doc, after_insert: bool) -> list:
 	"""What a governed new master still lacks. `after_insert` adds what only an existing master can
 	carry (an attached supporting document, a supplier's mobile)."""
@@ -169,6 +179,8 @@ def missing_details(doc, after_insert: bool) -> list:
 			missing.append(_("a Supporting Document with its file attached"))
 		if doc.doctype == "Supplier" and not has_mobile(doc):
 			missing.append(_("Mobile Number"))
+		if doc.doctype == "Supplier" and not has_email(doc):
+			missing.append(_("Email"))
 	return missing
 
 

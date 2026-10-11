@@ -85,15 +85,25 @@ def get_quick_edit_data(supplier: str) -> dict:
 	emails = party_email_addresses(PARTY, supplier)
 	address = _primary(supplier, "Address")
 	state = blocking(doc)
+	mobile = cstr(doc.get("custom_mobile_no")).strip() or cstr(doc.get("mobile_no")).strip() or (phones[0] if phones else "")
+	email = cstr(doc.get("email_id")).strip() or (emails[0] if emails else "")
+	# Mobile and Email are mandatory on every supplier; for an older one the purchase gates do not
+	# yet refuse without them, so they are listed apart from "blocking"
+	named = " ".join(state.missing).lower()
+	required = []
+	if not mobile and "mobile" not in named and "phone" not in named:
+		required.append(_("Mobile Number"))
+	if not email and "email" not in named:
+		required.append(_("Email"))
 	return {
 		"supplier_name": doc.supplier_name,
 		"supplier_type": doc.supplier_type,
 		"is_company": doc.supplier_type == "Company",
 		"tax_id": doc.get("tax_id"),
 		"payment_terms": doc.get("payment_terms"),
-		"mobile": cstr(doc.get("custom_mobile_no")).strip() or cstr(doc.get("mobile_no")).strip()
-			or (phones[0] if phones else ""),
-		"email": cstr(doc.get("email_id")).strip() or (emails[0] if emails else ""),
+		"mobile": mobile,
+		"email": email,
+		"required_missing": required,
 		"address_line1": frappe.db.get_value("Address", address, "address_line1") if address else "",
 		"address_city": frappe.db.get_value("Address", address, "city") if address else "",
 		"rules_apply": state.applies,

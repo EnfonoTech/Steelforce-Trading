@@ -435,7 +435,7 @@ class TestOtherSupplierHoldsNoDocument(FrappeTestCase):
 		self.assertTrue(pd.needs_document(usual))
 
 	def test_a_new_master_is_not_asked_for_the_document_line_but_still_for_payment_terms(self):
-		with patch.object(pd, "has_mobile", return_value=True):
+		with patch.object(pd, "has_mobile", return_value=True), patch.object(pd, "has_email", return_value=True):
 			other = Party("Supplier", payment_terms="Net 30", supplier_group="Other Supplier")
 			self.assertEqual(pd.missing_details(other, after_insert=True), [])
 			no_terms = Party("Supplier", supplier_group="Other Supplier")
@@ -445,3 +445,19 @@ class TestOtherSupplierHoldsNoDocument(FrappeTestCase):
 
 	def test_a_customer_is_never_exempt(self):
 		self.assertFalse(pd.documents_exempt(Party("Customer", supplier_group="Other Supplier")))
+
+
+class TestNewSupplierNeedsAnEmail(FrappeTestCase):
+	"""A new supplier carries an email as well as a mobile (the Create Supplier dialog asks for both)."""
+
+	def test_missing_email_is_listed_after_the_insert(self):
+		with patch.object(pd, "has_mobile", return_value=True), patch.object(pd, "has_email", return_value=False):
+			supplier = Party("Supplier", payment_terms="Net 30", rows=[{"attachment": "/f.pdf"}])
+			self.assertEqual(pd.missing_details(supplier, after_insert=True), ["Email"])
+			# the very first save cannot carry a Contact, so it is let through
+			self.assertEqual(pd.missing_details(supplier, after_insert=False), [])
+
+	def test_a_customer_is_not_asked_for_it(self):
+		with patch.object(pd, "has_mobile", return_value=True), patch.object(pd, "has_email", return_value=False):
+			customer = Party("Customer", payment_terms="Net 30", rows=[{"attachment": "/f.pdf"}])
+			self.assertEqual(pd.missing_details(customer, after_insert=True), [])

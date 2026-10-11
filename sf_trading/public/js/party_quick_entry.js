@@ -111,7 +111,7 @@ window.sf_vat_document_sync = function (d, cfg, source) {
 		get_variant_fields() {
 			const is_supplier = this.doctype === "Supplier";
 			const required = is_supplier
-				? ["mobile_number", "address_line1", "city", "country"]
+				? ["mobile_number", "email_id", "address_line1", "city", "country"]
 				: ["mobile_number"];
 			const fields = super.get_variant_fields().map((df) =>
 				required.includes(df.fieldname) ? Object.assign({}, df, { reqd: 1 }) : df
