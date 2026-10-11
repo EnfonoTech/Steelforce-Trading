@@ -65,7 +65,7 @@ def blocking(doc) -> frappe._dict:
 	rows = bool(pd.attached_rows(doc))
 	return frappe._dict(
 		applies=applies,
-		items=unique,
+		missing=unique,
 		expired=[_expired_text(r) for r in pd.expired_financial_rows(PARTY, doc.name)],
 		has_document_row=rows,
 		needs_document=bool((applies and not rows) or (enforced and not sv.has_attachment(doc.name))),
@@ -95,7 +95,7 @@ def get_quick_edit_data(supplier: str) -> dict:
 		"rules_apply": state.applies,
 		"has_document_row": state.has_document_row,
 		"needs_document": state.needs_document,
-		"blocking": state.items,
+		"blocking": state.missing,
 		"expired": state.expired,
 	}
 
