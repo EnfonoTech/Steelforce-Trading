@@ -74,7 +74,7 @@ class TestRow(FrappeTestCase):
 	def test_the_paid_and_returned_order_the_client_described(self):
 		# billed 100%, paid, a credit note recorded, delivered qty brought down by the return
 		facts = self.facts(invoices={"SO-1": {"SI-1": invoice(100, 0)}},
-			si_returns={"SO-1": {"SI-R1": frappe._dict(grand_total=-30)}})
+			si_returns={"SO-1": {"SI-R1": frappe._dict(grand_total=-30, reason="Over Supply")}})
 		row = sot.build_row(order(per_billed=100, per_delivered=72), facts, TODAY)
 		self.assertEqual(row.tracking_state, sot.OVERDUE_RETURNED)
 		self.assertEqual(row.days_overdue, 10)
@@ -180,14 +180,35 @@ class TestClose(FrappeTestCase):
 
 class TestCloseCheck(FrappeTestCase):
 	def check(self, status="To Deliver and Bill", state=sot.OVERDUE_RETURNED, billed_in_full=True, paid=sot.PAID,
-			outstanding=0, returned=True, pending=0, per_delivered=72, per_billed=100):
+			outstanding=0, returned=True, pending=0, per_delivered=72, per_billed=100, reasons=("Over Supply",),
+			credited=True):
 		return sot.close_check(status, state, billed_in_full, paid, outstanding, returned, pending, per_delivered,
-			per_billed)
+			per_billed, reasons=reasons, credited=credited)
 
 	def test_billed_paid_and_returned_with_the_goods_back_is_ready(self):
 		verdict, reason = self.check()
 		self.assertEqual(verdict, sot.READY_TO_CLOSE)
 		self.assertIn("back in stock", reason)
+
+	def test_a_return_reason_that_may_mean_a_replacement_needs_a_look(self):
+		for reason in ("Damaged", "Defective", "Wrong Item", "Wrong Quantity", "Quality Issue", "Other"):
+			verdict, text = self.check(reasons=(reason,))
+			self.assertEqual(verdict, sot.REVIEW_BEFORE_CLOSING, reason)
+			self.assertIn("replacement", text)
+
+	def test_a_return_with_no_reason_recorded_needs_a_look(self):
+		verdict, text = self.check(reasons=())
+		self.assertEqual(verdict, sot.REVIEW_BEFORE_CLOSING)
+		self.assertIn("not recorded", text)
+
+	def test_reasons_that_owe_the_customer_nothing_are_ready(self):
+		for reason in sot.NO_REPLACEMENT_REASONS:
+			self.assertEqual(self.check(reasons=(reason,))[0], sot.READY_TO_CLOSE, reason)
+
+	def test_goods_back_by_delivery_note_but_no_credit_note_means_review(self):
+		verdict, text = self.check(credited=False)
+		self.assertEqual(verdict, sot.REVIEW_BEFORE_CLOSING)
+		self.assertIn("no credit note", text)
 
 	def test_goods_still_to_come_back_means_review(self):
 		verdict, reason = self.check(pending=4)
@@ -218,9 +239,11 @@ class TestCloseCheck(FrappeTestCase):
 
 	def test_the_row_carries_the_check_and_it_can_be_filtered_on(self):
 		facts = frappe._dict(open_qty={}, invoices={"SO-1": {"SI-1": invoice(100, 0)}}, delivery_notes={},
-			si_returns={"SO-1": {"SI-R1": frappe._dict(grand_total=-30)}}, dn_returns={}, pending_return_qty={})
+			si_returns={"SO-1": {"SI-R1": frappe._dict(grand_total=-30, reason="Over Supply")}}, dn_returns={},
+			pending_return_qty={})
 		row = sot.build_row(order(per_billed=100, per_delivered=72), facts, TODAY)
 		self.assertEqual(row.close_check, sot.READY_TO_CLOSE)
+		self.assertEqual(row.return_reasons, "Over Supply")
 		self.assertTrue(sot.wanted(row, frappe._dict(close_check=sot.READY_TO_CLOSE)))
 		self.assertFalse(sot.wanted(row, frappe._dict(close_check=sot.KEEP_OPEN)))
 

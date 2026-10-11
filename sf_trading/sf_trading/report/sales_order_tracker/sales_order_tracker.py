@@ -32,10 +32,13 @@ with a reason that is written to the order's comments.
 
 Close Check says, from the data on the row, whether closing the order by hand is right:
 
-    Ready To Close          billed in full, paid in full, goods returned and back in stock: nothing is
-                            left to deliver, collect or put back
-    Review Before Closing   paid but short of delivery with no return, or returned with an unpaid
-                            invoice / goods still to come back / not billed in full: a person decides
+    Ready To Close          billed in full, paid in full, goods returned and back in stock, the customer
+                            credited, and a return reason that means nothing is owed again (Order
+                            Cancellation, Over Supply, Duplicate Invoice)
+    Review Before Closing   paid but short of delivery with no return; returned with an unpaid invoice,
+                            goods still to come back, no credit note, or not billed in full; or returned
+                            for a reason that may mean a replacement is owed (Damaged, Defective, Wrong
+                            Item, Wrong Quantity, Quality Issue, Other, none recorded): a person decides
     Keep Open               goods or money still owed
     Closed                  ERPNext already closed or completed it
 
@@ -68,6 +71,10 @@ CLOSED = "Closed"
 NEEDS_ATTENTION = "Needs Attention"
 ORDER_WISE = "Order Wise"
 ITEM_WISE = "Item Wise"
+
+# Return reasons (Sales Return Reason) after which nothing is owed to the customer again; any other
+# reason, or none, may mean a replacement is still to be delivered
+NO_REPLACEMENT_REASONS = ("Order Cancellation", "Over Supply", "Duplicate Invoice")
 
 # Close Check
 READY_TO_CLOSE = "Ready To Close"
@@ -189,6 +196,9 @@ def get_facts(names, company) -> frappe._dict:
 	if not names:
 		return facts
 
+	# the Return Reason Template a credit note carries (a custom field; absent on a bare site)
+	reason_column = "s.custom_return_reason_template" if frappe.get_meta("Sales Invoice").has_field(
+		"custom_return_reason_template") else "NULL"
 	invoice_orders = defaultdict(set)   # invoice -> orders it bills
 	delivery_orders = defaultdict(set)  # delivery note -> orders it delivers
 
@@ -198,7 +208,8 @@ def get_facts(names, company) -> frappe._dict:
 			facts.open_qty[r.parent] = max(0.0, flt(r.qty) - flt(r.delivered))
 
 		for r in frappe.db.sql(
-			"""SELECT DISTINCT i.sales_order AS so, s.name, s.grand_total, s.outstanding_amount, s.is_return, s.update_stock
+			"""SELECT DISTINCT i.sales_order AS so, s.name, s.grand_total, s.outstanding_amount, s.is_return, s.update_stock,
+				""" + reason_column + """ AS reason
 			FROM `tabSales Invoice Item` i INNER JOIN `tabSales Invoice` s ON s.name = i.parent
 			WHERE s.docstatus = 1 AND i.sales_order IN %(names)s""", {"names": tuple(chunk)}, as_dict=True):
 			if cint(r.is_return):
@@ -223,8 +234,9 @@ def get_facts(names, company) -> frappe._dict:
 		("Delivery Note", delivery_orders, facts.dn_returns),
 	):
 		for chunk in _chunks(orders_of):
+			extra = ["custom_return_reason_template as reason"] if doctype == "Sales Invoice" and reason_column != "NULL" else []
 			for r in frappe.get_all(doctype, filters={"docstatus": 1, "is_return": 1, "return_against": ["in", chunk]},
-					fields=["name", "return_against", "grand_total"]):
+					fields=["name", "return_against", "grand_total"] + extra):
 				for so in orders_of.get(r.return_against, ()):
 					bucket[so][r.name] = r
 
@@ -278,7 +290,7 @@ def classify(status, days_overdue, paid_state, returned, converted, billed_in_fu
 	return CONVERTED if converted else NOT_DUE
 
 
-def suggested_action(state, outstanding, pending_return_qty) -> str:
+def suggested_action(state, outstanding, pending_return_qty, check=None, check_reason="") -> str:
 	if state == OVERDUE:
 		return _("Deliver the goods or follow up with the customer")
 	if state == OVERDUE_SETTLED:
@@ -290,7 +302,8 @@ def suggested_action(state, outstanding, pending_return_qty) -> str:
 		if pending_return_qty > TOLERANCE:
 			parts.append(_("raise the Delivery Note return that puts the goods back in stock"))
 		if not parts:
-			parts.append(_("Close: goods returned and nothing left to collect"))
+			parts.append(_("Close: goods returned and nothing left to collect") if check == READY_TO_CLOSE
+				else _("Review before closing: %s") % check_reason)
 		return "; ".join(parts)
 	if state == CONVERTED:
 		return _("Bill or deliver the rest")
@@ -298,7 +311,7 @@ def suggested_action(state, outstanding, pending_return_qty) -> str:
 
 
 def close_check(status, state, billed_in_full, paid_state, outstanding, returned, pending_return_qty,
-		per_delivered, per_billed) -> tuple:
+		per_delivered, per_billed, reasons=(), credited=True) -> tuple:
 	"""(check, reason): is closing this order by hand right, from what the row shows."""
 	if status in (CLOSED, COMPLETED):
 		return ALREADY_CLOSED, ""
@@ -306,7 +319,15 @@ def close_check(status, state, billed_in_full, paid_state, outstanding, returned
 		return KEEP_OPEN, _("On hold")
 	pending = flt(pending_return_qty, 3)
 	if returned and billed_in_full and paid_state == PAID and pending <= TOLERANCE:
-		return READY_TO_CLOSE, _("Billed in full, paid in full, and the returned goods are back in stock")
+		if not credited:
+			return REVIEW_BEFORE_CLOSING, _("The goods came back on a Delivery Note return but no credit note was raised for the customer")
+		if not reasons:
+			return REVIEW_BEFORE_CLOSING, _("Return reason not recorded: confirm no replacement is owed")
+		replacement = [r for r in reasons if r not in NO_REPLACEMENT_REASONS]
+		if replacement:
+			return REVIEW_BEFORE_CLOSING, (
+				_("Returned as %s: a replacement may still be owed") % ", ".join(sorted(replacement)))
+		return READY_TO_CLOSE, _("Billed in full, paid in full, the returned goods are back in stock and the customer is credited")
 	if state == OVERDUE_SETTLED:
 		return REVIEW_BEFORE_CLOSING, (
 			_("Paid in full but only %s%% delivered and nothing returned: confirm the customer needs no more")
@@ -365,8 +386,9 @@ def build_row(order, facts, today) -> frappe._dict:
 	pending_qty = flt(facts.pending_return_qty.get(name), 3)
 
 	state = classify(order.status, days_overdue, paid_state, returned, converted, billed_in_full)
+	reasons = sorted({cstr(r.get("reason")).strip() for r in si_returns.values() if cstr(r.get("reason")).strip()})
 	check, check_reason = close_check(order.status, state, billed_in_full, paid_state, outstanding, returned,
-		pending_qty, order.per_delivered, order.per_billed)
+		pending_qty, order.per_delivered, order.per_billed, reasons=reasons, credited=bool(si_returns) or not dn_returns)
 	return frappe._dict(
 		sales_order=name,
 		transaction_date=order.transaction_date,
@@ -401,7 +423,8 @@ def build_row(order, facts, today) -> frappe._dict:
 		can_close=1 if order.status in CLOSABLE_STATUSES else 0,
 		close_check=check,
 		close_reason=check_reason,
-		suggested_action=suggested_action(state, outstanding, pending_qty),
+		return_reasons=", ".join(reasons),
+		suggested_action=suggested_action(state, outstanding, pending_qty, check, check_reason),
 	)
 
 
@@ -548,6 +571,7 @@ def get_columns() -> list:
 		col("returns", "Returns", "Data", 200),
 		col("returned_amount", "Returned (Credit)", "Currency", 115),
 		col("return_stock", "Return Stock", "Data", 130),
+		col("return_reasons", "Return Reason", "Data", 130),
 		col("pending_return_qty", "Qty Awaiting DN Return", "Float", 120),
 		col("close_check", "Close?", "Data", 150),
 		col("close_reason", "Why", "Data", 360),
