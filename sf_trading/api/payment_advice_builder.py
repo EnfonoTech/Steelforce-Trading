@@ -34,6 +34,7 @@ from sf_trading.sf_trading.doctype.payment_advice.payment_advice import (
     RECEIVE_PARTY_TYPES,
     get_party_account,
     get_reference_amounts,
+    is_credit_row,
     order_payment_block,
     shape_reference_rows,
 )
@@ -456,6 +457,42 @@ def _create_one(selection, options):
 
 # ── Purchase Invoice list bulk action ────────────────────────────────────────────
 
+def _open_credit_note_rows(party_type, party, company, excluded):
+    """The party's open debit / credit notes as advice rows, oldest first, leaving out those
+    already picked and those a live advice already holds."""
+    account = get_party_account(party_type, party, company)
+    rows = [
+        r
+        for r in _outstanding_rows(party_type, party, frappe._dict(company=company), account, 0)
+        if is_credit_row(r) and r["reference_record"] not in excluded
+    ]
+    held = _already_advised([r["reference_record"] for r in rows])
+    return [r for r in rows if r["reference_record"] not in held]
+
+
+def _net_open_credit_notes(grouped, party_type, company):
+    """Selected invoices are paid net of their party's open debit / credit notes.
+
+    An advice raised from a few picked invoices used to carry only those: the supplier was paid in
+    full while its returns stayed open. Each party's open notes are added here, oldest first, as
+    long as what is left to pay stays above zero -- a note is applied whole, never in part. Those
+    that do not fit are reported, not dropped silently."""
+    included, left_out = [], []
+    for party, refs in grouped.items():
+        room = flt(sum(flt(r["net_payable_amount"]) for r in refs), 3)
+        picked = {r["reference_record"] for r in refs}
+        for note in _open_credit_note_rows(party_type, party, company, picked):
+            cost = -flt(note["net_payable_amount"])
+            entry = {"party": party, "note": note["reference_record"], "amount": flt(note["net_payable_amount"], 3)}
+            if cost < room - 0.0005:
+                refs.append(note)
+                room = flt(room - cost, 3)
+                included.append(entry)
+            else:
+                left_out.append(entry)
+    return included, left_out
+
+
 @frappe.whitelist()
 def create_advices_from_documents(documents, options=None):
     """Group hand-picked documents by their party and raise one advice each.
@@ -544,11 +581,17 @@ def create_advices_from_documents(documents, options=None):
             )
         frappe.throw(_("No advice could be raised — %s") % "; ".join(reasons or [_("no payable documents")]))
 
-    options.update({"company": companies.pop() if companies else options.get("company"),
-                    "party_type": party_type})
+    company = companies.pop() if companies else options.get("company")
+    notes_in, notes_out = [], []
+    if doctype in CREDIT_NOTE_DOCTYPES:
+        notes_in, notes_out = _net_open_credit_notes(grouped, party_type, company)
+
+    options.update({"company": company, "party_type": party_type})
     result = _create_many(
         [{"party": party, "references": refs} for party, refs in grouped.items()], options
     )
+    result["credit_notes_netted"] = notes_in
+    result["credit_notes_left_out"] = notes_out
     result["skipped_already_advised"] = skipped_advised
     result["skipped_nothing_due"] = skipped_nothing_due
     result["skipped_billed"] = skipped_billed

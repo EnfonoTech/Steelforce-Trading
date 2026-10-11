@@ -106,6 +106,36 @@ def is_credit_row(row):
     )
 
 
+# where a party's own open debit / credit notes live
+CREDIT_NOTE_BY_PARTY = {
+    "Supplier": ("Purchase Invoice", "supplier"),
+    "Customer": ("Sales Invoice", "customer"),
+}
+
+
+def open_credit_notes(party_type, party, company=None):
+    """The party's open debit / credit notes: submitted return invoices carrying a negative
+    outstanding of their own, oldest first."""
+    spec = CREDIT_NOTE_BY_PARTY.get(party_type)
+    if not (spec and party):
+        return []
+    doctype, field = spec
+    filters = {
+        field: party,
+        "docstatus": 1,
+        "is_return": 1,
+        "outstanding_amount": ["<", -TOLERANCE],
+    }
+    if company:
+        filters["company"] = company
+    return frappe.get_all(
+        doctype,
+        filters=filters,
+        fields=["name", "outstanding_amount", "posting_date"],
+        order_by="posting_date asc, name asc",
+    )
+
+
 def registered_reference_doctypes(party_type):
     """Reference doctypes another app has registered for this party type.
 
@@ -177,6 +207,52 @@ class PaymentAdvice(Document):
         self.set_words()
         self.set_approval_route()
         self.set_status()
+        self.warn_unnetted_credit_notes()
+
+    def warn_unnetted_credit_notes(self):
+        """A draft that leaves out a party's open debit / credit notes pays the invoices in full
+        and leaves the notes open: say so, with the notes, while it can still be put right.
+
+        A note another live advice already holds is that advice's to net, so it is not named."""
+        if cint(self.docstatus) != 0 or frappe.flags.in_import or frappe.flags.in_patch:
+            return
+        notes = open_credit_notes(self.party_type, self.party, self.company)
+        if not notes:
+            return
+        here = {r.reference_record for r in self.payment_advice_reference}
+        names = [n.name for n in notes if n.name not in here]
+        if not names:
+            return
+        elsewhere = {
+            r.reference_record
+            for r in frappe.get_all(
+                "Payment Advice Reference",
+                filters={
+                    "reference_record": ["in", names],
+                    "parenttype": "Payment Advice",
+                    "docstatus": ["!=", 2],
+                    "allocated_amount": ["!=", 0],
+                    "parent": ["!=", self.name or ""],
+                },
+                fields=["reference_record"],
+            )
+        }
+        left = [n for n in notes if n.name in names and n.name not in elsewhere]
+        if not left:
+            return
+        frappe.msgprint(
+            _("%(party)s has %(count)s open debit / credit note(s) worth %(total)s that this advice does "
+              "not set off: %(notes)s. Use Get Outstanding Documents to add them, otherwise the invoices "
+              "are paid in full and the notes stay open.")
+            % {
+                "party": frappe.bold(self.party_name or self.party),
+                "count": len(left),
+                "total": frappe.bold(frappe.format_value(flt(sum(n.outstanding_amount for n in left), 3), {"fieldtype": "Currency"})),
+                "notes": ", ".join(frappe.bold(n.name) for n in left),
+            },
+            title=_("Open Debit / Credit Notes Not Netted"),
+            indicator="orange",
+        )
 
     def set_approval_route(self):
         """Stamp which approval route this advice takes, for the workflow to read.

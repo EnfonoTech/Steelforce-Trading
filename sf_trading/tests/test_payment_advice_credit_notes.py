@@ -145,3 +145,99 @@ class TestJournalAndAdvances(FrappeTestCase):
 		self.assertIsInstance(rows, list)
 		self.assertTrue(all(flt(r.amount) > 0 for r in rows))
 		self.assertEqual(pa.unapplied_advances(None, "Supplier", supplier), [])
+
+
+class TestInvoicesPickedFromTheListNetTheNotes(FrappeTestCase):
+	"""Advices raised from a few picked invoices are paid net of the party's open debit notes."""
+
+	def _note(self, name, amount):
+		return {"reference_doctype": PI, "reference_record": name, "net_payable_amount": amount, "amount": amount}
+
+	def _invoice(self, name, amount):
+		return {"reference_doctype": PI, "reference_record": name, "net_payable_amount": amount, "amount": amount}
+
+	def test_notes_that_fit_are_added_oldest_first_and_the_rest_reported(self):
+		from sf_trading.api import payment_advice_builder as builder
+
+		grouped = {"SUP-1": [self._invoice("PI-1", 100), self._invoice("PI-2", 50)]}
+		notes = [self._note("DN-OLD", -60), self._note("DN-MID", -80), self._note("DN-NEW", -5)]
+		with patch.object(builder, "_open_credit_note_rows", return_value=notes):
+			included, left_out = builder._net_open_credit_notes(grouped, "Supplier", "Co")
+		# 150 to pay: DN-OLD (60) fits, DN-MID (80) would leave 10 -> fits, DN-NEW (5) would leave 5 -> fits
+		self.assertEqual([i["note"] for i in included], ["DN-OLD", "DN-MID", "DN-NEW"])
+		self.assertEqual(left_out, [])
+		self.assertEqual(flt(sum(r["net_payable_amount"] for r in grouped["SUP-1"]), 3), 5)
+
+	def test_a_note_that_would_take_the_payment_to_zero_is_left_out(self):
+		from sf_trading.api import payment_advice_builder as builder
+
+		grouped = {"SUP-1": [self._invoice("PI-1", 30)]}
+		notes = [self._note("DN-A", -20), self._note("DN-B", -137.28)]
+		with patch.object(builder, "_open_credit_note_rows", return_value=notes):
+			included, left_out = builder._net_open_credit_notes(grouped, "Supplier", "Co")
+		self.assertEqual([i["note"] for i in included], ["DN-A"])
+		self.assertEqual([i["note"] for i in left_out], ["DN-B"])
+		self.assertGreater(flt(sum(r["net_payable_amount"] for r in grouped["SUP-1"]), 3), 0)
+
+	def test_a_party_without_notes_is_untouched(self):
+		from sf_trading.api import payment_advice_builder as builder
+
+		grouped = {"SUP-1": [self._invoice("PI-1", 30)]}
+		with patch.object(builder, "_open_credit_note_rows", return_value=[]):
+			self.assertEqual(builder._net_open_credit_notes(grouped, "Supplier", "Co"), ([], []))
+		self.assertEqual(len(grouped["SUP-1"]), 1)
+
+	def test_the_notes_come_from_the_engine_minus_picked_and_already_advised(self):
+		from sf_trading.api import payment_advice_builder as builder
+
+		rows = [self._note("DN-1", -10), self._note("DN-2", -20), self._note("DN-3", -30), self._invoice("PI-9", 40)]
+		with patch.object(builder, "get_party_account", return_value="Creditors"), \
+				patch.object(builder, "_outstanding_rows", return_value=rows), \
+				patch.object(builder, "_already_advised", return_value={"DN-2"}):
+			found = builder._open_credit_note_rows("Supplier", "SUP-1", "Co", {"DN-3"})
+		self.assertEqual([r["reference_record"] for r in found], ["DN-1"])
+
+
+class TestWarnWhenNotesAreLeftOpen(FrappeTestCase):
+	def _advice(self, rows=()):
+		advice = frappe.new_doc("Payment Advice")
+		advice.update({"party_type": "Supplier", "party": "SUP-1", "company": "Co", "docstatus": 0})
+		for name, payable in rows:
+			advice.append("payment_advice_reference", {"reference_doctype": PI, "reference_record": name,
+				"net_payable_amount": payable})
+		return advice
+
+	def test_open_notes_not_on_the_advice_are_named(self):
+		advice = self._advice([("PI-1", 100)])
+		notes = [frappe._dict(name="DN-1", outstanding_amount=-8.8), frappe._dict(name="DN-2", outstanding_amount=-5.28)]
+		with patch.object(pa, "open_credit_notes", return_value=notes), \
+				patch.object(frappe, "get_all", return_value=[]), \
+				patch.object(frappe, "msgprint") as shown:
+			advice.warn_unnetted_credit_notes()
+		shown.assert_called_once()
+		text = shown.call_args.args[0]
+		self.assertIn("DN-1", text)
+		self.assertIn("DN-2", text)
+
+	def test_a_note_already_on_the_advice_is_not_named(self):
+		advice = self._advice([("PI-1", 100), ("DN-1", -8.8)])
+		notes = [frappe._dict(name="DN-1", outstanding_amount=-8.8)]
+		with patch.object(pa, "open_credit_notes", return_value=notes), patch.object(frappe, "msgprint") as shown:
+			advice.warn_unnetted_credit_notes()
+		shown.assert_not_called()
+
+	def test_a_note_held_by_another_live_advice_is_not_named(self):
+		advice = self._advice([("PI-1", 100)])
+		notes = [frappe._dict(name="DN-1", outstanding_amount=-8.8)]
+		with patch.object(pa, "open_credit_notes", return_value=notes), \
+				patch.object(frappe, "get_all", return_value=[frappe._dict(reference_record="DN-1")]), \
+				patch.object(frappe, "msgprint") as shown:
+			advice.warn_unnetted_credit_notes()
+		shown.assert_not_called()
+
+	def test_a_submitted_advice_is_not_nagged(self):
+		advice = self._advice([("PI-1", 100)])
+		advice.docstatus = 1
+		with patch.object(pa, "open_credit_notes") as lookup:
+			advice.warn_unnetted_credit_notes()
+		lookup.assert_not_called()

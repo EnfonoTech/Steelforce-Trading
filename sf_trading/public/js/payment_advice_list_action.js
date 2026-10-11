@@ -102,6 +102,17 @@ window.sf_show_advice_result = function (result) {
 				.map(frappe.utils.escape_html)
 				.join(", ")}</p>`
 		: "";
+	const money = (row) => format_currency(row.amount);
+	const netted = (result.credit_notes_netted || []).length
+		? `<p>${__("Open debit / credit notes set off")}: ${result.credit_notes_netted
+				.map((row) => `${frappe.utils.escape_html(row.note)} (${money(row)})`)
+				.join(", ")}</p>`
+		: "";
+	const left_out = (result.credit_notes_left_out || []).length
+		? `<p>${__("Open debit / credit notes left out, they exceed what these invoices pay (set them off with Payment Reconciliation or pick more invoices)")}: ${result.credit_notes_left_out
+				.map((row) => `${frappe.utils.escape_html(row.note)} (${money(row)})`)
+				.join(", ")}</p>`
+		: "";
 	const failed = list(
 		result.failed,
 		(row) =>
@@ -113,7 +124,7 @@ window.sf_show_advice_result = function (result) {
 	frappe.msgprint({
 		title: __("Payment Advices"),
 		indicator: failed ? "orange" : "green",
-		message: `${created}${advised}${nothing_due}${
+		message: `${created}${netted}${left_out}${advised}${nothing_due}${
 			failed ? `<p>${__("Failed")}:</p>${failed}` : ""
 		}`,
 	});
