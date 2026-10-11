@@ -332,6 +332,8 @@ override_doctype_class = {
 	"Sales Order": "sf_trading.overrides.sales_order_class.CustomSalesOrder",
 	"Delivery Note": "sf_trading.overrides.delivery_note_class.CustomDeliveryNote",
 	"Purchase Invoice": "sf_trading.overrides.purchase_invoice_class.CustomPurchaseInvoice",
+	# a return needs no Purchase Order, as a debit note already doesn't (purchase_receipt_class.py)
+	"Purchase Receipt": "sf_trading.overrides.purchase_receipt_class.CustomPurchaseReceipt",
 }
 
 # Document Events
