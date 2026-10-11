@@ -72,11 +72,11 @@ frappe.ui.form.on("Payment Advice", {
 				filters.per_billed = ["<", 100];
 			}
 
-			// an invoice with nothing outstanding, a debit note, or an invoice on hold cannot be
-			// paid, so it should not be offered
+			// an invoice with nothing outstanding, or one on hold, cannot be paid, so it should not be
+			// offered. An open debit / credit note (a return invoice with a negative outstanding of
+			// its own) is offered: it rides on the advice and nets the payment
 			if (["Sales Invoice", "Purchase Invoice"].includes(row.reference_doctype)) {
-				filters.outstanding_amount = [">", 0];
-				filters.is_return = 0;
+				filters.outstanding_amount = ["!=", 0];
 				if (row.reference_doctype === "Purchase Invoice") filters.on_hold = 0;
 			}
 
