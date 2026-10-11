@@ -29,6 +29,23 @@ Tracking State
 
 The two "Overdue -" states are the ones to look at before closing; `close_orders` does the closing,
 with a reason that is written to the order's comments.
+
+Close Check says, from the data on the row, whether closing the order by hand is right:
+
+    Ready To Close          billed in full, paid in full, goods returned and back in stock: nothing is
+                            left to deliver, collect or put back
+    Review Before Closing   paid but short of delivery with no return, or returned with an unpaid
+                            invoice / goods still to come back / not billed in full: a person decides
+    Keep Open               goods or money still owed
+    Closed                  ERPNext already closed or completed it
+
+The reason is written beside it, and "Tick Ready To Close" on the report ticks every ready order.
+
+Views: Order Wise (one row per order) and Item Wise (one row per order line: ordered, delivered,
+returned, still to deliver and billed per item). Filters: company, tracking state, ERPNext status,
+customer, customer group, territory, branch, cost center, sales person, item, item group, payment,
+converted to (invoice / delivery note / both / neither), has a return, return stock status, order
+and delivery date windows, a single order.
 """
 
 from collections import defaultdict
@@ -49,6 +66,19 @@ ON_HOLD = "On Hold"
 COMPLETED = "Completed"
 CLOSED = "Closed"
 NEEDS_ATTENTION = "Needs Attention"
+ORDER_WISE = "Order Wise"
+ITEM_WISE = "Item Wise"
+
+# Close Check
+READY_TO_CLOSE = "Ready To Close"
+REVIEW_BEFORE_CLOSING = "Review Before Closing"
+KEEP_OPEN = "Keep Open"
+ALREADY_CLOSED = "Closed"
+
+# what became of the goods on the returns of an order
+NO_RETURN = ""
+STOCK_RESTORED = "Stock Restored"
+AWAITING_DN_RETURN = "Awaiting DN Return"
 ATTENTION_STATES = (OVERDUE, OVERDUE_SETTLED, OVERDUE_RETURNED)
 
 PAID = "Paid"
@@ -77,7 +107,10 @@ def execute(filters=None):
 
 	rows.sort(key=lambda r: (not r.needs_attention, -r.days_overdue, r.sales_order))
 	currency = frappe.get_cached_value("Company", filters.company, "default_currency")
-	return get_columns(), rows, None, None, get_summary(rows, currency)
+	summary = get_summary(rows, currency)
+	if filters.get("view") == ITEM_WISE:
+		return get_item_columns(), item_rows(rows, filters), None, None, summary
+	return get_columns(), rows, None, None, summary
 
 
 # ─── data ────────────────────────────────────────────────────────────────────────────────────────
@@ -94,13 +127,37 @@ def get_orders(filters) -> list:
 		conditions["branch"] = filters.branch
 	conditions.update(_date_window("transaction_date", filters.get("from_date"), filters.get("to_date")))
 	conditions.update(_date_window("delivery_date", filters.get("delivery_from"), filters.get("delivery_to")))
+	for fieldname, key in (("customer_group", "customer_group"), ("territory", "territory"),
+			("cost_center", "cost_center"), ("custom_sales_person", "sales_person"), ("status", "status")):
+		if filters.get(key) and meta.has_field(fieldname):
+			conditions[fieldname] = filters.get(key)
+	by_item = orders_with_item(filters)
+	if by_item is not None:
+		if filters.get("sales_order"):
+			by_item &= {filters.sales_order}
+		conditions["name"] = ["in", sorted(by_item) or ["-"]]
 
 	fields = ["name", "transaction_date", "delivery_date", "customer", "customer_name", "status", "grand_total",
 		"per_delivered", "per_billed", "advance_paid", "skip_delivery_note"]
-	if meta.has_field("branch"):
-		fields.append("branch")
+	for optional in ("branch", "customer_group", "territory", "cost_center", "custom_sales_person"):
+		if meta.has_field(optional):
+			fields.append(optional)
 	return frappe.get_list("Sales Order", filters=conditions, fields=fields, order_by="transaction_date desc, name desc",
 		limit_page_length=0)
+
+
+def orders_with_item(filters):
+	"""Names of the orders that carry the item / item group asked for, or None when neither was."""
+	conditions = {"docstatus": 1}
+	if filters.get("item_code"):
+		conditions["item_code"] = filters.item_code
+	if filters.get("item_group"):
+		lft, rgt = frappe.db.get_value("Item Group", filters.item_group, ["lft", "rgt"]) or (0, 0)
+		groups = frappe.get_all("Item Group", filters={"lft": [">=", lft], "rgt": ["<=", rgt]}, pluck="name")
+		conditions["item_group"] = ["in", groups or [filters.item_group]]
+	if len(conditions) == 1:
+		return None
+	return set(frappe.get_all("Sales Order Item", filters=conditions, pluck="parent", distinct=True))
 
 
 def _date_window(fieldname, start, end) -> dict:
@@ -240,6 +297,52 @@ def suggested_action(state, outstanding, pending_return_qty) -> str:
 	return ""
 
 
+def close_check(status, state, billed_in_full, paid_state, outstanding, returned, pending_return_qty,
+		per_delivered, per_billed) -> tuple:
+	"""(check, reason): is closing this order by hand right, from what the row shows."""
+	if status in (CLOSED, COMPLETED):
+		return ALREADY_CLOSED, ""
+	if status == ON_HOLD:
+		return KEEP_OPEN, _("On hold")
+	pending = flt(pending_return_qty, 3)
+	if returned and billed_in_full and paid_state == PAID and pending <= TOLERANCE:
+		return READY_TO_CLOSE, _("Billed in full, paid in full, and the returned goods are back in stock")
+	if state == OVERDUE_SETTLED:
+		return REVIEW_BEFORE_CLOSING, (
+			_("Paid in full but only %s%% delivered and nothing returned: confirm the customer needs no more")
+			% flt(per_delivered, 0))
+	parts = []
+	if outstanding > TOLERANCE:
+		parts.append(_("an invoice is unpaid (%s)") % flt(outstanding, 2))
+	if pending > TOLERANCE:
+		parts.append(_("returned goods still have to come back by Delivery Note return (qty %s)") % pending)
+	if not billed_in_full:
+		parts.append(_("billed %s%%") % flt(per_billed, 0))
+	if returned:
+		return REVIEW_BEFORE_CLOSING, "; ".join(parts) or _("Returned: check before closing")
+	if flt(per_delivered, 2) < 100:
+		parts.insert(0, _("delivered %s%%") % flt(per_delivered, 0))
+	return KEEP_OPEN, "; ".join(parts)
+
+
+def return_stock_status(si_returns: dict, dn_returns: dict, pending_return_qty) -> str:
+	"""What became of the goods on an order's returns: back in stock, or still to come back through a
+	Delivery Note return (the credit was given but the warehouse still shows them delivered)."""
+	if not (si_returns or dn_returns):
+		return NO_RETURN
+	return AWAITING_DN_RETURN if flt(pending_return_qty) > TOLERANCE else STOCK_RESTORED
+
+
+def converted_to(invoices, delivery_notes) -> str:
+	if invoices and delivery_notes:
+		return "Both"
+	if invoices:
+		return "Invoice"
+	if delivery_notes:
+		return "Delivery Note"
+	return "Neither"
+
+
 def build_row(order, facts, today) -> frappe._dict:
 	name = order.name
 	invoices = facts.invoices.get(name, {})
@@ -262,6 +365,8 @@ def build_row(order, facts, today) -> frappe._dict:
 	pending_qty = flt(facts.pending_return_qty.get(name), 3)
 
 	state = classify(order.status, days_overdue, paid_state, returned, converted, billed_in_full)
+	check, check_reason = close_check(order.status, state, billed_in_full, paid_state, outstanding, returned,
+		pending_qty, order.per_delivered, order.per_billed)
 	return frappe._dict(
 		sales_order=name,
 		transaction_date=order.transaction_date,
@@ -270,7 +375,12 @@ def build_row(order, facts, today) -> frappe._dict:
 		customer=order.customer,
 		customer_name=order.customer_name,
 		branch=order.get("branch"),
+		customer_group=order.get("customer_group"),
+		territory=order.get("territory"),
+		sales_person=order.get("custom_sales_person"),
+		cost_center=order.get("cost_center"),
 		status=order.status,
+		converted_to=converted_to(invoices, delivery_notes),
 		tracking_state=state,
 		needs_attention=state in ATTENTION_STATES,
 		grand_total=flt(order.grand_total),
@@ -285,9 +395,12 @@ def build_row(order, facts, today) -> frappe._dict:
 		delivery_notes=", ".join(sorted(delivery_notes)),
 		returns=", ".join(sorted(list(si_returns) + list(dn_returns))),
 		has_return=1 if returned else 0,
+		return_stock=return_stock_status(si_returns, dn_returns, pending_qty),
 		returned_amount=flt(sum(abs(flt(r.grand_total)) for r in si_returns.values()), 3),
 		pending_return_qty=pending_qty,
 		can_close=1 if order.status in CLOSABLE_STATUSES else 0,
+		close_check=check,
+		close_reason=check_reason,
 		suggested_action=suggested_action(state, outstanding, pending_qty),
 	)
 
@@ -301,6 +414,12 @@ def wanted(row, filters) -> bool:
 	if filters.get("payment_state") and row.payment_state != filters.payment_state:
 		return False
 	if cint(filters.get("has_return")) and not row.has_return:
+		return False
+	if filters.get("converted_to") and row.converted_to != filters.converted_to:
+		return False
+	if filters.get("close_check") and row.close_check != filters.close_check:
+		return False
+	if filters.get("return_stock") and row.return_stock != filters.return_stock:
 		return False
 	if not cint(filters.get("include_closed")) and not state and row.tracking_state in (CLOSED, COMPLETED):
 		return False
@@ -321,8 +440,82 @@ def get_summary(rows, currency) -> list:
 		{"label": _("Overdue - Returned"), "value": count(OVERDUE_RETURNED), "datatype": "Int", "indicator": "orange"},
 		{"label": _("Converted, Open"), "value": count(CONVERTED), "datatype": "Int", "indicator": "blue"},
 		{"label": _("Not Due"), "value": count(NOT_DUE), "datatype": "Int", "indicator": "green"},
+		{"label": _("Ready To Close"), "datatype": "Int", "indicator": "green",
+			"value": len([r for r in rows if r.close_check == READY_TO_CLOSE])},
 		{"label": _("Unpaid On Open Orders"), "datatype": "Currency", "currency": currency, "indicator": "red",
 			"value": flt(sum(r.outstanding_amount for r in rows if r.tracking_state not in (CLOSED, COMPLETED)), 3)},
+	]
+
+
+def item_rows(rows, filters) -> list:
+	"""One row per order line of the orders shown, carrying the order's state."""
+	by_order = {r.sales_order: r for r in rows}
+	if not by_order:
+		return []
+	conditions = {"parent": ["in", list(by_order)]}
+	if filters.get("item_code"):
+		conditions["item_code"] = filters.item_code
+	if filters.get("item_group"):
+		lft, rgt = frappe.db.get_value("Item Group", filters.item_group, ["lft", "rgt"]) or (0, 0)
+		conditions["item_group"] = ["in", frappe.get_all("Item Group", filters={"lft": [">=", lft], "rgt": ["<=", rgt]},
+			pluck="name") or [filters.item_group]]
+	lines = frappe.get_all("Sales Order Item", filters=conditions,
+		fields=["parent", "idx", "item_code", "item_name", "item_group", "uom", "qty", "delivered_qty", "returned_qty",
+			"rate", "amount", "billed_amt", "warehouse"])
+	out = []
+	for line in lines:
+		order = by_order.get(line.parent)
+		if not order:
+			continue
+		out.append(frappe._dict(
+			order,
+			item_code=line.item_code,
+			item_name=line.item_name,
+			item_group=line.item_group,
+			uom=line.uom,
+			warehouse=line.warehouse,
+			qty=flt(line.qty),
+			delivered_qty=flt(line.delivered_qty),
+			returned_qty=flt(line.returned_qty),
+			pending_qty=max(0.0, flt(line.qty) - flt(line.delivered_qty)),
+			rate=flt(line.rate),
+			line_amount=flt(line.amount),
+			billed_amt=flt(line.billed_amt),
+			idx=line.idx,
+		))
+	out.sort(key=lambda r: (not r.needs_attention, -r.days_overdue, r.sales_order, r.idx))
+	return out
+
+
+def get_item_columns() -> list:
+	def col(fieldname, label, fieldtype, width=110, options=None):
+		return {"fieldname": fieldname, "label": _(label), "fieldtype": fieldtype, "width": width, "options": options}
+
+	return [
+		col("sales_order", "Sales Order", "Link", 150, "Sales Order"),
+		col("transaction_date", "Order Date", "Date", 95),
+		col("customer_name", "Customer Name", "Data", 170),
+		col("delivery_date", "Delivery Date", "Date", 95),
+		col("days_overdue", "Days Overdue", "Int", 90),
+		col("tracking_state", "Tracking State", "Data", 150),
+		col("item_code", "Item", "Link", 130, "Item"),
+		col("item_name", "Item Name", "Data", 200),
+		col("item_group", "Item Group", "Link", 120, "Item Group"),
+		col("uom", "UOM", "Link", 70, "UOM"),
+		col("qty", "Ordered Qty", "Float", 100),
+		col("delivered_qty", "Delivered Qty", "Float", 100),
+		col("returned_qty", "Returned Qty", "Float", 100),
+		col("pending_qty", "Still To Deliver", "Float", 105),
+		col("rate", "Rate", "Currency", 95),
+		col("line_amount", "Line Amount", "Currency", 110),
+		col("billed_amt", "Billed", "Currency", 105),
+		col("warehouse", "Warehouse", "Link", 130, "Warehouse"),
+		col("payment_state", "Payment", "Data", 100),
+		col("return_stock", "Return Stock", "Data", 130),
+		col("close_check", "Close?", "Data", 150),
+		col("close_reason", "Why", "Data", 320),
+		col("suggested_action", "Suggested Action", "Data", 300),
+		{"fieldname": "can_close", "label": _("Can Close"), "fieldtype": "Check", "width": 70, "hidden": 1},
 	]
 
 
@@ -336,10 +529,12 @@ def get_columns() -> list:
 		col("customer", "Customer", "Link", 130, "Customer"),
 		col("customer_name", "Customer Name", "Data", 180),
 		col("branch", "Branch", "Link", 100, "Branch"),
+		col("sales_person", "Sales Person", "Link", 120, "Sales Person"),
 		col("delivery_date", "Delivery Date", "Date", 95),
 		col("days_overdue", "Days Overdue", "Int", 90),
 		col("status", "ERPNext Status", "Data", 130),
 		col("tracking_state", "Tracking State", "Data", 150),
+		col("converted_to", "Converted To", "Data", 105),
 		col("grand_total", "Order Total", "Currency", 110),
 		col("per_delivered", "% Delivered", "Percent", 90),
 		col("per_billed", "% Billed", "Percent", 90),
@@ -352,7 +547,10 @@ def get_columns() -> list:
 		col("delivery_notes", "Delivery Notes", "Data", 200),
 		col("returns", "Returns", "Data", 200),
 		col("returned_amount", "Returned (Credit)", "Currency", 115),
+		col("return_stock", "Return Stock", "Data", 130),
 		col("pending_return_qty", "Qty Awaiting DN Return", "Float", 120),
+		col("close_check", "Close?", "Data", 150),
+		col("close_reason", "Why", "Data", 360),
 		col("suggested_action", "Suggested Action", "Data", 340),
 		{"fieldname": "can_close", "label": _("Can Close"), "fieldtype": "Check", "width": 70, "hidden": 1},
 	]
