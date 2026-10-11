@@ -105,6 +105,8 @@ def get_quick_edit_data(customer: str) -> dict:
 			"any_phone": [] if phones else [_("at least one contact number")],
 			# any customer, new or old: an expired document marked Financial Implication blocks billing
 			"expired": _expired_documents(customer),
+			# any customer with a VAT number holds a document (party_documents.missing_document)
+			"document": _missing_document(doc),
 		},
 	}
 
@@ -178,6 +180,12 @@ def save_quick_edit_data(customer: str, values) -> dict:
 			frappe.clear_messages()
 
 	return result
+
+
+def _missing_document(doc) -> list:
+	from sf_trading.party_documents import missing_document
+
+	return missing_document(doc)
 
 
 def _expired_documents(customer: str) -> list:

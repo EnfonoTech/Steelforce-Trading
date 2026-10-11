@@ -302,3 +302,37 @@ class TestMasterDataCompleteness(FrappeTestCase):
 		listed = {r.party for r in execute({"party_type": "Customer", "show_complete": 1, "include_disabled": 1})[1]}
 		self.assertIn(on_credit, listed)
 		self.assertNotIn(vat_only, listed)
+
+
+class TestDocumentRequired(FrappeTestCase):
+	"""A Company supplier and a VAT-registered customer hold a document, old or new."""
+
+	def test_who_needs_one(self):
+		self.assertTrue(pd.needs_document(Party("Supplier", supplier_type="Company")))
+		self.assertFalse(pd.needs_document(Party("Supplier", supplier_type="Individual")))
+		self.assertTrue(pd.needs_document(Party("Customer", custom_vat_registration_number="300000000000003")))
+		self.assertFalse(pd.needs_document(Party("Customer")))
+
+	def test_a_grid_row_or_any_old_file_counts(self):
+		company = Party("Supplier", supplier_type="Company")
+		with patch.object(frappe.db, "exists", return_value=False):
+			self.assertTrue(pd.missing_document(company))
+		with patch.object(frappe.db, "exists", return_value=True):
+			self.assertEqual(pd.missing_document(company), [])
+		with_row = Party("Supplier", supplier_type="Company", rows=[{"document_type": "Other", "attachment": "/f.pdf"}])
+		self.assertEqual(pd.missing_document(with_row), [])
+
+	def test_an_old_company_supplier_without_one_is_refused(self):
+		old = Party("Supplier", created="2025-01-01", supplier_type="Company")
+		order = frappe._dict(doctype="Purchase Order", supplier="P-1")
+		with patch.object(pd, "rules_from", return_value=START), patch.object(frappe, "get_doc", return_value=old), \
+				patch.object(pd, "expired_financial_rows", return_value=[]), \
+				patch.object(pd, "has_document", return_value=False), \
+				patch.object(frappe.db, "exists", side_effect=lambda dt, *a, **k: dt == "Supplier"):
+			with self.assertRaises(frappe.ValidationError):
+				pd.validate_party_at_transaction(order)
+			with patch.object(pd, "has_document", return_value=True):
+				pd.validate_party_at_transaction(order)
+
+	def test_returns_still_stand_aside(self):
+		pd.validate_party_at_transaction(frappe._dict(doctype="Purchase Invoice", supplier="P-1", is_return=1))

@@ -101,7 +101,8 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 		missing.credit_customer || [],
 		missing.any_phone || [],
 		rules.missing || [],
-		missing.expired || []
+		missing.expired || [],
+		missing.document || []
 	);
 
 	const fields = [
@@ -176,7 +177,8 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 
 	// A new credit customer's document must sit in its Supporting Documents grid, with its file; the
 	// upload below becomes that row.
-	const needs_row = rules.applies && !rules.has_document_row;
+	// a new credit customer needs a grid row; a VAT-registered one, old or new, any document
+	const needs_row = (rules.applies && !rules.has_document_row) || (missing.document || []).length > 0;
 
 	// Shown whenever nothing is attached yet -- covers BOTH missing_credit_customer_requirements'
 	// own attachment rule (GS Issue 13) and customer_override.validate's separate "a VAT number

@@ -32,7 +32,8 @@ function sf_party_mark_required(frm) {
 		const required = rules.applies ? 1 : 0;
 		frm.toggle_reqd("payment_terms", required);
 		if (frm.fields_dict.custom_supporting_documents) {
-			frm.set_df_property("custom_supporting_documents", "reqd", required);
+			// a Company supplier / a VAT-registered customer needs one whatever its age
+			frm.set_df_property("custom_supporting_documents", "reqd", required || rules.needs_document ? 1 : 0);
 		}
 		const notes = [];
 		if ((rules.missing || []).length) {

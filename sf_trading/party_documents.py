@@ -17,6 +17,11 @@ What a governed new master needs:
   full form has no editable mobile, so the first save is let through and every save after it -- and
   every invoice, order or supplier payment against it (`validate_party_at_transaction`) -- needs them.
 
+Every Company supplier and every VAT-registered customer, old or new, must hold a document (2026-10-11,
+client: "block now"): with none attached -- a Supporting Documents row with its file, or for a master
+from before the rules any file attached to it -- buying from / paying the supplier and billing the
+customer are refused (`missing_document`). Returns and opening invoices stand aside as everywhere here.
+
 Every supplier of type Company needs a Tax ID on every save, old ones included: production had
 that as a hand-made Property Setter (reqd), which the app's fixture replaces with a mark that only
 applies to Company suppliers, so the server side of it lives here.
@@ -163,6 +168,35 @@ def missing_details(doc, after_insert: bool) -> list:
 	return missing
 
 
+def needs_document(doc) -> bool:
+	"""A Company supplier, or a customer with a VAT Registration Number, must hold a document."""
+	if doc.doctype == "Supplier":
+		return doc.get("supplier_type") == "Company"
+	if doc.doctype == "Customer":
+		vat = cstr(doc.get("custom_vat_registration_number")).strip()
+		return bool(vat) and vat != "0"
+	return False
+
+
+def has_document(doc) -> bool:
+	"""A Supporting Documents row with its file, or -- a master from before that grid -- any file
+	attached to the master itself."""
+	if attached_rows(doc):
+		return True
+	if not doc.get("name") or (callable(getattr(doc, "is_new", None)) and doc.is_new()):
+		return False
+	return bool(frappe.db.exists("File", {"attached_to_doctype": doc.doctype, "attached_to_name": doc.name}))
+
+
+def missing_document(doc) -> list:
+	"""What the always-on document rule still wants of this master (old or new)."""
+	if not needs_document(doc) or has_document(doc):
+		return []
+	if doc.doctype == "Supplier":
+		return [_("a supporting document (Company supplier)")]
+	return [_("a supporting document (VAT registered)")]
+
+
 def stands_aside(doc) -> bool:
 	"""A data import, patch, install, or ERPNext's own ignore-mandatory creator: masters arrive in
 	bulk and are completed afterwards (the Master Data Completeness report finds them)."""
@@ -264,10 +298,13 @@ def relink_attachments(doc, _method=None):
 def set_onload(doc, _method=None):
 	"""Customer / Supplier onload: tell the form which rules apply and what is still missing."""
 	applies = is_governed(doc) and is_new_master(doc)
+	missing = missing_details(doc, after_insert=True) if applies and not doc.is_new() else []
+	document = missing_document(doc) if not doc.is_new() else []
 	doc.set_onload("sf_master_rules", {
 		"applies": applies,
+		"needs_document": bool(document),
 		"rules_from": str(rules_from() or ""),
-		"missing": missing_details(doc, after_insert=True) if applies and not doc.is_new() else [],
+		"missing": missing + ([] if any("Supporting Document" in m for m in missing) else document),
 		"expired": [r.document_type for r in expired_financial_rows(doc.doctype, doc.name)] if not doc.is_new() else [],
 	})
 
@@ -368,6 +405,9 @@ def validate_party_at_transaction(doc, _method=None):
 	master = frappe.get_doc(party_type, party)
 	if is_governed(master) and is_new_master(master) and not _cash_sale_allowed(doc, party_type):
 		problems += missing_details(master, after_insert=True)
+	if not any("Supporting Document" in p for p in problems):
+		# old masters too: a Company supplier / a VAT-registered customer holds a document
+		problems += missing_document(master)
 	for row in expired_financial_rows(party_type, party):
 		problems.append(_("{0} {1} expired on {2}").format(row.document_type, row.document_number or "",
 			frappe.format_value(row.expiry_date, "Date")).replace("  ", " "))

@@ -16,6 +16,7 @@ from sf_trading import party_completeness as pc
 _MASTER_RULES = (
 	patch("sf_trading.party_documents.rules_from", return_value=None),
 	patch("sf_trading.party_documents.validate_supplier_tax_id", return_value=None),
+	patch("sf_trading.party_documents.missing_document", return_value=[]),
 )
 
 

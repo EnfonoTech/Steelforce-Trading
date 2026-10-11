@@ -53,6 +53,8 @@ def blocking(doc) -> frappe._dict:
 	items = []
 	if applies:
 		items += pd.missing_details(doc, after_insert=True)
+	if not any("Supporting Document" in i for i in items):
+		items += pd.missing_document(doc)
 	if doc.get("supplier_type") == "Company" and not cstr(doc.get("tax_id")).strip():
 		items.append(_("Tax ID"))
 	if enforced:
@@ -68,7 +70,8 @@ def blocking(doc) -> frappe._dict:
 		missing=unique,
 		expired=[_expired_text(r) for r in pd.expired_financial_rows(PARTY, doc.name)],
 		has_document_row=rows,
-		needs_document=bool((applies and not rows) or (enforced and not sv.has_attachment(doc.name))),
+		needs_document=bool((applies and not rows) or pd.missing_document(doc)
+			or (enforced and not sv.has_attachment(doc.name))),
 	)
 
 
