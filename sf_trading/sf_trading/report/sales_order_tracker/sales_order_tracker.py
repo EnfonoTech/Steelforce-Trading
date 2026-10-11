@@ -310,18 +310,18 @@ def close_check(status, state, billed_in_full, paid_state, outstanding, returned
 	if state == OVERDUE_SETTLED:
 		return REVIEW_BEFORE_CLOSING, (
 			_("Paid in full but only %s%% delivered and nothing returned: confirm the customer needs no more")
-			% flt(per_delivered, 0))
+			% round(flt(per_delivered)))
 	parts = []
 	if outstanding > TOLERANCE:
 		parts.append(_("an invoice is unpaid (%s)") % flt(outstanding, 2))
 	if pending > TOLERANCE:
 		parts.append(_("returned goods still have to come back by Delivery Note return (qty %s)") % pending)
 	if not billed_in_full:
-		parts.append(_("billed %s%%") % flt(per_billed, 0))
+		parts.append(_("billed %s%%") % round(flt(per_billed)))
 	if returned:
 		return REVIEW_BEFORE_CLOSING, "; ".join(parts) or _("Returned: check before closing")
 	if flt(per_delivered, 2) < 100:
-		parts.insert(0, _("delivered %s%%") % flt(per_delivered, 0))
+		parts.insert(0, _("delivered %s%%") % round(flt(per_delivered)))
 	return KEEP_OPEN, "; ".join(parts)
 
 
