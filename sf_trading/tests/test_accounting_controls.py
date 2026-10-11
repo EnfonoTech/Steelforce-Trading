@@ -183,6 +183,74 @@ class TestLandedCostStockDocuments(FrappeTestCase):
 		rows = [self._row("Purchase Receipt", "PR-2", entry="JV-OTHER"), self._row("Purchase Invoice", "PI-3")]
 		self.assertEqual(self._classify(rows, links={"PI-3": ["PR-2"]}), [lc.STOCK, lc.NOT_INTO_STOCK])
 
+	def test_an_invoice_billing_two_receipts_is_on_receipt_only_if_both_carry_it(self):
+		# ERPNext decides per invoice row: the receipt without the charge gets it booked by the invoice
+		rows = [self._row("Purchase Receipt", "PR-1"), self._row("Purchase Invoice", "PI-5")]
+		self.assertEqual(self._classify(rows, links={"PI-5": ["PR-1", "PR-2"]}), [lc.STOCK, lc.NOT_INTO_STOCK])
+		rows.append(self._row("Purchase Receipt", "PR-2"))
+		self.assertEqual(self._classify(rows, links={"PI-5": ["PR-1", "PR-2"]}), [lc.STOCK, lc.ON_RECEIPT, lc.STOCK])
+
+	def _links(self, tables):
+		"""linked_receipts against a fake get_all answering by doctype."""
+
+		def get_all(doctype, filters=None, fields=None, pluck=None, **kwargs):
+			rows = [frappe._dict(r) for r in tables.get(doctype, [])]
+			filters = filters or {}
+			for field, cond in filters.items():
+				if isinstance(cond, list) and cond[0] == "in":
+					rows = [r for r in rows if r.get(field) in cond[1]]
+				elif isinstance(cond, list) and cond[0] == "is":
+					rows = [r for r in rows if r.get(field)]
+				elif isinstance(cond, list) and cond[0] == "<":
+					rows = [r for r in rows if (r.get(field) or 0) < cond[1]]
+				elif not isinstance(cond, list):
+					rows = [r for r in rows if r.get(field) == cond]
+			return [r.get(pluck) for r in rows] if pluck else rows
+
+		return patch.object(lc.frappe, "get_all", side_effect=get_all)
+
+	def test_a_receipt_and_invoice_made_from_one_order_are_tied(self):
+		tables = {
+			"Purchase Invoice Item": [{"parent": "PI-6", "parenttype": "Purchase Invoice", "po_detail": "POI-1", "docstatus": 1}],
+			"Purchase Receipt Item": [{"parent": "PR-6", "purchase_order_item": "POI-1", "docstatus": 1}],
+			"Purchase Receipt": [{"name": "PR-6", "is_return": 0}],
+			"Purchase Invoice": [{"name": "PI-6", "is_return": 0}],
+		}
+		with self._links(tables):
+			self.assertEqual(lc.linked_receipts(["PI-6"]), {"PI-6": {"PR-6"}})
+			self.assertEqual(lc.linked_invoices(["PR-6"]), {"PR-6": {"PI-6"}})
+
+	def test_a_debit_note_reads_the_receipts_of_the_invoice_it_returns(self):
+		tables = {
+			"Purchase Invoice Item": [],
+			"Purchase Receipt Item": [{"parent": "PR-7", "purchase_invoice": "PI-7", "docstatus": 1}],
+			"Purchase Receipt": [{"name": "PR-7", "is_return": 0}],
+			"Purchase Invoice": [{"name": "PI-7R", "is_return": 1, "return_against": "PI-7"},
+				{"name": "PI-7", "is_return": 0}],
+		}
+		with self._links(tables):
+			self.assertEqual(lc.linked_receipts(["PI-7R"]), {"PI-7R": {"PR-7"}})
+
+	def test_a_submitted_not_into_stock_row_takes_only_what_its_ledger_credited(self):
+		rows = [frappe._dict(parent="PI-8", parenttype="Purchase Invoice", docstatus=1, base_tax_amount=50)]
+		with patch.object(lc.frappe.db, "has_column", return_value=True), \
+				patch.object(lc.frappe, "get_all", side_effect=lambda dt, **k: rows if dt == lc.PURCHASE_CHARGES else []), \
+				patch.object(lc, "classify", return_value=[lc.NOT_INTO_STOCK]), \
+				patch.object(lc, "credited", return_value={("PI-8", FREIGHT): 20.0}):
+			taken = lc.absorbed("Journal Entry", "JV-1", FREIGHT)
+		self.assertEqual((taken.submitted, taken.draft), (20.0, 0.0))
+
+	def test_the_picker_keeps_a_receipts_charge_for_the_invoice_repeating_it(self):
+		ties = frappe._dict(repeats=set(), carried={("Journal Entry", "JV-1", FREIGHT)}, receipts={"PR-1"})
+		with patch.object(lc.frappe, "has_permission", return_value=True), \
+				patch.object(lc, "booked", return_value={FREIGHT: 100}), \
+				patch.object(lc, "_receipt_links", return_value=ties), \
+				patch.object(lc, "absorbed", return_value=frappe._dict(submitted=0.0, draft=0.0, documents=[])) as absorbed:
+			lines = lc.get_expense_entry_lines("Journal Entry", "JV-1", "Purchase Invoice", None, 0,
+				[{"purchase_receipt": "PR-1"}])
+		self.assertEqual(lines[0]["available"], 100)
+		self.assertIn(("Purchase Receipt", "PR-1"), absorbed.call_args.kwargs["skip_parents"])
+
 	def test_an_invoice_that_updates_stock_absorbs_itself(self):
 		self.assertEqual(self._classify([self._row("Purchase Invoice", "PI-4")], stocked=["PI-4"]), [lc.STOCK])
 
@@ -207,19 +275,21 @@ class TestLandedCostStockDocuments(FrappeTestCase):
 	def test_an_invoice_made_from_its_receipt_is_not_refused(self):
 		# the receipt already took 60 of the 100; the invoice's copy of that row takes nothing more
 		taken = frappe._dict(submitted=60.0, draft=0.0, documents=[("Purchase Receipt", "PR-1")])
-		absorbed = self._validate(self._bill("Purchase Invoice"), (set(), {("Journal Entry", "JV-1", FREIGHT)}), taken)
+		absorbed = self._validate(self._bill("Purchase Invoice"), frappe._dict(repeats=set(),
+			carried={("Journal Entry", "JV-1", FREIGHT)}, receipts={"PR-1"}), taken)
 		absorbed.assert_not_called()
 
 	def test_a_receipt_skips_the_invoices_that_repeat_it(self):
 		skip = {("Purchase Invoice", "PI-1")}
-		absorbed = self._validate(self._bill("Purchase Receipt"), (skip, set()),
+		absorbed = self._validate(self._bill("Purchase Receipt"), frappe._dict(repeats=skip, carried=set(), receipts=set()),
 			frappe._dict(submitted=0.0, draft=0.0, documents=[]))
 		self.assertEqual(absorbed.call_args.kwargs.get("skip_parents"), skip)
 
 	def test_a_charge_beyond_the_expense_is_still_refused(self):
 		taken = frappe._dict(submitted=60.0, draft=0.0, documents=[("Purchase Receipt", "PR-9")])
 		with self.assertRaises(frappe.ValidationError):
-			self._validate(self._bill("Purchase Invoice", update_stock=1), (set(), set()), taken)
+			self._validate(self._bill("Purchase Invoice", update_stock=1), frappe._dict(repeats=set(), carried=set(),
+				receipts=set()), taken)
 
 	def test_a_non_stock_invoice_is_not_asked_for_the_link(self):
 		doc = self._bill("Purchase Invoice")

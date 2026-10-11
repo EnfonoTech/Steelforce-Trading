@@ -217,7 +217,7 @@
    "fieldname": "master_rules_section",
    "fieldtype": "Section Break",
    "label": "Customer and Supplier Masters",
-   "description": "Suppliers, and B2B customers (VAT Registration Number on file), created at or after the moment below must carry Payment Terms and at least one supporting document with its file attached; suppliers also a mobile number. Older masters are not blocked: the Master Data Completeness report lists what they still lack."
+   "description": "Suppliers, and credit customers (a Customer Credit Limit above zero), created at or after the moment below must carry Payment Terms and at least one supporting document with its file attached; suppliers also a mobile number. A Cash-mode sale to a credit customer with \"Allow Cash Sales Without Credit Documents\" ticked is let through; expired financial documents still block. Older masters are not blocked: the Master Data Completeness report lists what they still lack."
   },
   {
    "fieldname": "master_rules_from",
@@ -229,7 +229,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-11 12:00:00.000000",
+ "modified": "2026-10-11 13:30:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",

@@ -64,12 +64,13 @@ function sf_party_mark_required(frm) {
 });
 
 // a customer becomes a credit customer -- and governed -- the moment a credit limit is entered
+// (Customer Group carries the same child table: only a Customer form asks)
 frappe.ui.form.on("Customer Credit Limit", {
 	credit_limit(frm) {
-		if (frm.is_new()) sf_party_mark_required(frm);
+		if (frm.doctype === "Customer" && frm.is_new()) sf_party_mark_required(frm);
 	},
 	credit_limits_remove(frm) {
-		if (frm.is_new()) sf_party_mark_required(frm);
+		if (frm.doctype === "Customer" && frm.is_new()) sf_party_mark_required(frm);
 	},
 });
 

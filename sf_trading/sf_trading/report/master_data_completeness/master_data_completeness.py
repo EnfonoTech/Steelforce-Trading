@@ -79,16 +79,17 @@ def credit_customers() -> list:
 
 
 def customers(filters) -> list:
-	names = credit_customers()
-	if not names:
+	credit = set(credit_customers())
+	if not credit:
 		return []
-	conditions = {"name": ["in", names]}
+	# filtered here, not as an IN list: one name per credit customer would outgrow the query
+	conditions = {}
 	_common_filters(filters, conditions)
 	masters = frappe.get_list("Customer", filters=conditions, fields=["name", "customer_name as party_name",
 		"custom_vat_registration_number as tax_id", "custom_commercial_registration_number as cr", "payment_terms",
 		"mobile_no", "custom_mobile_no", "email_id", "customer_primary_address as primary_address", "creation",
 		"disabled"], limit_page_length=0)
-	return build("Customer", masters, "Sales Invoice", "customer")
+	return build("Customer", [m for m in masters if m.name in credit], "Sales Invoice", "customer")
 
 
 def suppliers(filters) -> list:

@@ -185,11 +185,23 @@ def allocations() -> dict:
 				fields=["parent", "parenttype", "docstatus", "base_tax_amount", "account_head", lc.DOCTYPE_FIELD, lc.ENTRY_FIELD])
 		# a non-stock invoice repeating its receipt's charge takes nothing more; one still waiting for
 		# its receipt holds the cost as pending (sf_trading.landed_cost.classify)
-		for r, state in zip(rows, lc.classify(rows, key=_charge_key)):
+		states = lc.classify(rows, key=_charge_key)
+		# a submitted non-stock invoice took only what its own ledger credited (landed_cost.credited)
+		late = [(r, s) for r, s in zip(rows, states) if s == lc.NOT_INTO_STOCK and cint(r.docstatus) == 1]
+		posted = lc.credited({r.parent for r, _s in late}, {r.account_head for r, _s in late})
+		used = {}
+		for r, state in zip(rows, states):
 			if state == lc.ON_RECEIPT:
 				continue
+			amount = flt(r.base_tax_amount)
+			if state == lc.NOT_INTO_STOCK and cint(r.docstatus) == 1:
+				spot = (r.parent, r.account_head)
+				amount = max(min(amount, flt(posted.get(spot, 0.0) - used.get(spot, 0.0), 3)), 0.0)
+				used[spot] = flt(used.get(spot, 0.0) + amount, 3)
+				if not amount:
+					continue
 			add((r.get(lc.DOCTYPE_FIELD), r.get(lc.ENTRY_FIELD), r.account_head),
-				0 if state == lc.AWAITING_RECEIPT else r.docstatus, r.base_tax_amount, (r.parenttype, r.parent))
+				0 if state == lc.AWAITING_RECEIPT else r.docstatus, amount, (r.parenttype, r.parent))
 	return out
 
 

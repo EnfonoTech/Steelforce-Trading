@@ -95,10 +95,12 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 	const is_company = !!data.is_company;
 	const is_credit = !!data.is_credit;
 	const missing = data.missing || {};
+	const rules = data.master_rules || {};
 	const all_missing = [].concat(
 		missing.company_fields || [],
 		missing.credit_customer || [],
-		missing.any_phone || []
+		missing.any_phone || [],
+		rules.missing || []
 	);
 
 	const fields = [
@@ -152,7 +154,12 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 				fieldtype: "Data",
 				label: __("Commercial Registration Number"),
 				default: data.custom_commercial_registration_number,
-			},
+			}
+		);
+	}
+
+	if (is_company || rules.applies) {
+		fields.push(
 			{ fieldtype: "Section Break" },
 			{
 				fieldname: "payment_terms",
@@ -161,14 +168,13 @@ function render_quick_edit_dialog(customer, data, on_saved) {
 				label: __("Payment Terms"),
 				default: data.payment_terms,
 				// a new credit customer must carry them (sf_trading/party_documents.py)
-				reqd: (data.master_rules || {}).applies ? 1 : 0,
+				reqd: rules.applies ? 1 : 0,
 			}
 		);
 	}
 
 	// A new credit customer's document must sit in its Supporting Documents grid, with its file; the
 	// upload below becomes that row.
-	const rules = data.master_rules || {};
 	const needs_row = rules.applies && !rules.has_document_row;
 
 	// Shown whenever nothing is attached yet -- covers BOTH missing_credit_customer_requirements'

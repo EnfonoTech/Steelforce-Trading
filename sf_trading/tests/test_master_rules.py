@@ -278,8 +278,23 @@ class TestMasterDataCompleteness(FrappeTestCase):
 		self.assertTrue(all("Payment Terms" in r.missing_list for r in rows))
 
 	def test_customers_listed_are_credit_customers(self):
-		from sf_trading.sf_trading.report.master_data_completeness.master_data_completeness import credit_customers, execute
+		from sf_trading.sf_trading.report.master_data_completeness.master_data_completeness import execute
 
-		credit = set(credit_customers())
-		rows = execute({"party_type": "Customer", "show_complete": 1, "include_disabled": 1})[1]
-		self.assertTrue(all(r.party in credit for r in rows))
+		company = frappe.db.get_value("Company", {}, "name")
+		branch = frappe.db.get_value("Branch", {}, "name")
+		if not company or not branch:
+			self.skipTest("no company or branch")
+
+		def make(name, vat=None, limit=0):
+			doc = frappe.get_doc({"doctype": "Customer", "customer_name": name, "customer_type": "Company",
+				"custom_vat_registration_number": vat,
+				"credit_limits": [{"company": company, "credit_limit": limit}] if limit else [],
+				"custom_branch_access": [{"branch": branch}] if limit else []})
+			doc.flags.ignore_mandatory = True  # validate_master stands aside
+			return doc.insert(ignore_permissions=True).name
+
+		on_credit = make("_SF MDC Credit Customer", limit=500)
+		vat_only = make("_SF MDC VAT Customer", vat="300000000000003")
+		listed = {r.party for r in execute({"party_type": "Customer", "show_complete": 1, "include_disabled": 1})[1]}
+		self.assertIn(on_credit, listed)
+		self.assertNotIn(vat_only, listed)

@@ -26,6 +26,15 @@ function sf_lc_fill(frm, cdt, cdn, account_field, amount_field) {
 			expense_entry: row.custom_expense_entry,
 			parenttype: frm.doctype,
 			parent: frm.is_new() ? null : frm.doc.name,
+			// the form's own receipt / invoice ties: a charge copied from the receipt stays its own
+			update_stock: frm.doc.update_stock ? 1 : 0,
+			return_against: frm.doc.is_return ? frm.doc.return_against || null : null,
+			items: (frm.doc.items || []).map((i) => ({
+				purchase_receipt: i.purchase_receipt || null,
+				purchase_invoice: i.purchase_invoice || null,
+				po_detail: i.po_detail || null,
+				purchase_order_item: i.purchase_order_item || null,
+			})),
 		},
 		callback(r) {
 			const lines = (r && r.message) || [];
