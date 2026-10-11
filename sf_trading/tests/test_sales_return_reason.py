@@ -74,8 +74,8 @@ class TestSalesReturnReason(FrappeTestCase):
 
 
 # ── the template itself is required on a return, on the requester's own saves ─────────────────
-def stub_return(template=None, docstatus=0, state=None, was=None, pm_action=None, **extra):
-	before = frappe._dict(workflow_state=was) if was is not None else None
+def stub_return(template=None, docstatus=0, state=None, was=None, pm_action=None, was_template=None, **extra):
+	before = frappe._dict(workflow_state=was, custom_return_reason_template=was_template) if was is not None else None
 	return frappe._dict(
 		doctype="Sales Invoice",
 		is_return=1,
@@ -119,6 +119,11 @@ class TestReturnReasonRequired(FrappeTestCase):
 
 	def test_another_save_while_waiting_for_approval_is_left_alone(self):
 		require_reason_template(stub_return(state="Pending", was="Pending"))
+
+	def test_clearing_the_template_on_a_pending_return_is_refused(self):
+		# otherwise the cleared return is approved blank: the approver's action stands aside too
+		doc = stub_return(state="Pending", was="Pending", was_template="Damaged")
+		self.assertRaises(frappe.ValidationError, require_reason_template, doc)
 
 	def test_ignore_mandatory_stands_aside(self):
 		doc = stub_return()

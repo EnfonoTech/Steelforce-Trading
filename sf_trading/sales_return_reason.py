@@ -42,7 +42,11 @@ def require_reason_template(doc, method=None):
 	"""validate on Sales Invoice: a return must pick its Return Reason Template."""
 	if not cint(doc.get("is_return")) or (doc.get(TEMPLATE_FIELD) or "").strip():
 		return
-	if _made_by_the_system(doc) or _approvers_turn(doc):
+	if _made_by_the_system(doc):
+		return
+	if _approvers_turn(doc) and not _template_removed(doc):
+		# a save that itself clears an already-picked reason is someone editing the return, who
+		# can pick it again -- standing aside there would let a Pending return be approved blank
 		return
 
 	message = _("Pick a") + " " + frappe.bold(_("Return Reason Template")) + " " + _(
@@ -82,6 +86,17 @@ def _issued_by_a_return_delivery_note(doc) -> bool:
 	)
 
 
+def _before(doc):
+	getter = getattr(doc, "get_doc_before_save", None)
+	return getter() if callable(getter) else None
+
+
+def _template_removed(doc) -> bool:
+	"""This save clears a template the saved version of the return already had."""
+	before = _before(doc)
+	return bool(before and (before.get(TEMPLATE_FIELD) or "").strip())
+
+
 def _approvers_turn(doc) -> bool:
 	"""True when this save is not the requester's: an approver's PM action other than the one that
 	sends the return in, or any other save of a return that is already waiting for approval."""
@@ -89,8 +104,7 @@ def _approvers_turn(doc) -> bool:
 
 	state = (doc.get("workflow_state") or "").strip().lower()
 	in_chain = cint(doc.get("docstatus")) == 0 and state in LIVE_APPROVAL_STATES
-	getter = getattr(doc, "get_doc_before_save", None)
-	before = getter() if callable(getter) else None
+	before = _before(doc)
 	was = (before.get("workflow_state") or "").strip().lower() if before else None
 	entering = in_chain and was != state
 
