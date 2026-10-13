@@ -10,12 +10,17 @@ as before. The reason lands in the order's own Cancellation Remark, the field th
 sales_order_governance.py already demands.
 
 **Stock Reconciliation approval.** A stock reconciliation (purpose "Stock Reconciliation", not an
-opening-stock load) goes to the Inventory Head before it posts, and needs an attachment -- the count
-sheet behind it -- before it can be sent, approved, or submitted any other way. Direct submit is
-refused while the workflow is active (`guard_submit`), so the approval cannot be stepped around.
+opening-stock load) goes to the Inventory Head and then to the Operations Head (2026-10-13, client:
+a second approval, Shafeek) before it posts, and needs an attachment -- the count sheet behind it --
+before it can be sent, approved, or submitted any other way. Direct submit is refused while the
+workflow is active (`guard_submit`), so the approval cannot be stepped around. The Operations Head's
+approval is the one that posts it, and the engine posts as the approving user, so the role carries the
+read / write / submit on Stock Reconciliation it needs (`grant_second_approver_access`).
 
 The workflows themselves are site records, the way every other approval on this site is kept;
-`ensure_workflows` creates them (idempotently) on a site that asks for them.
+`ensure_workflows` creates them (idempotently) on a site that asks for them, and
+`ensure_operations_approval` adds the second approval to one that already exists. Who holds the
+Operations Head role is a site decision: nothing here assigns it.
 """
 
 import frappe
@@ -41,10 +46,16 @@ SR_WORKFLOW = "Stock Reconciliation Approval"
 SR_PURPOSE = "Stock Reconciliation"
 SR_APPROVER_ROLE = "Inventory Head"
 SR_PREPARER_ROLES = ("Stock User", "Stock Manager")
+#: the second approval, after the Inventory Head's
+SR_SECOND_STATE = "Pending Operations Head"
+SR_SECOND_ROLE = "Operations Head"
+#: what the role needs on a Stock Reconciliation for the engine to post it as that user (it saves and
+#: then submits as the approver); no create, no cancel, no amend
+SR_SECOND_PERMISSIONS = ("read", "write", "submit")
 
 # indicator colour for a Workflow State this module has to create
 STATE_STYLES = {SUBMITTED: "Primary", REQUESTED: "Warning", CANCELLED: "Danger", "Pending": "Warning",
-	"Approved": "Success", "Rejected": "Danger"}
+	SR_SECOND_STATE: "Warning", "Approved": "Success", "Rejected": "Danger"}
 
 
 def _active(doctype) -> bool:
@@ -191,8 +202,12 @@ def stock_reconciliation_workflow() -> dict:
 		transitions.append(_transition("Draft", "Send for Approval", "Pending", role, require_attachment=1))
 		transitions.append(_transition("Rejected", "Send for Approval", "Pending", role, require_attachment=1))
 	transitions += [
-		_transition("Pending", "Approve", "Approved", SR_APPROVER_ROLE, allow_self_approval=0, require_attachment=1),
+		# the Inventory Head hands over to the Operations Head; only that second approval posts it
+		_transition("Pending", "Approve", SR_SECOND_STATE, SR_APPROVER_ROLE, allow_self_approval=0, require_attachment=1),
 		_transition("Pending", "Reject", "Rejected", SR_APPROVER_ROLE, allow_self_approval=0, require_comment=1,
+			is_return_for_correction=1),
+		_transition(SR_SECOND_STATE, "Approve", "Approved", SR_SECOND_ROLE, allow_self_approval=0, require_attachment=1),
+		_transition(SR_SECOND_STATE, "Reject", "Rejected", SR_SECOND_ROLE, allow_self_approval=0, require_comment=1,
 			is_return_for_correction=1),
 	]
 	return {
@@ -204,11 +219,80 @@ def stock_reconciliation_workflow() -> dict:
 		"states": [
 			_state("Draft", 0, "Stock User"),
 			_state("Pending", 0, SR_APPROVER_ROLE),
+			_state(SR_SECOND_STATE, 0, SR_SECOND_ROLE),
 			_state("Approved", 1, SR_APPROVER_ROLE),
 			_state("Rejected", 0, "Stock User"),
 		],
 		"transitions": transitions,
 	}
+
+
+def _ensure_masters(definition):
+	"""The roles, states and actions a workflow names, for a site that has not used them yet."""
+	for role in {t["allowed"] for t in definition["transitions"]} | {s["allow_edit"] for s in definition["states"]}:
+		if not frappe.db.exists("Role", role):
+			frappe.get_doc({"doctype": "Role", "role_name": role, "desk_access": 1}).insert(ignore_permissions=True)
+	# states and actions are links to the shared masters, which a site only has for the
+	# names someone has already used
+	for state in {s["state"] for s in definition["states"]}:
+		if not frappe.db.exists("Workflow State", state):
+			frappe.get_doc({"doctype": "Workflow State", "workflow_state_name": state,
+				"style": STATE_STYLES.get(state, "")}).insert(ignore_permissions=True)
+	for action in {t["action"] for t in definition["transitions"]}:
+		if not frappe.db.exists("Workflow Action Master", action):
+			frappe.get_doc({"doctype": "Workflow Action Master", "workflow_action_name": action}).insert(
+				ignore_permissions=True
+			)
+
+
+def grant_second_approver_access():
+	"""The Operations Head role exists and may read, write and submit a Stock Reconciliation: the engine
+	saves and submits as the approving user, so without it the approval fails at the very last step.
+	Idempotent; the same way permission_manager gives the roles of its own workflows what they need."""
+	from frappe.permissions import add_permission, update_permission_property
+
+	if not frappe.db.exists("Role", SR_SECOND_ROLE):
+		frappe.get_doc({"doctype": "Role", "role_name": SR_SECOND_ROLE, "desk_access": 1}).insert(ignore_permissions=True)
+	add_permission(STOCK_RECONCILIATION, SR_SECOND_ROLE, 0)
+	for ptype in SR_SECOND_PERMISSIONS:
+		update_permission_property(STOCK_RECONCILIATION, SR_SECOND_ROLE, 0, ptype, 1, validate=False)
+
+
+def ensure_operations_approval() -> bool:
+	"""Add the Operations Head's second approval to a Stock Reconciliation Approval workflow that
+	already exists (`ensure_workflows` never touches one, so a site that has it needs this once --
+	patches/v0_1/stock_reconciliation_operations_approval.py).
+
+	The Inventory Head's Approve now hands over to the new state instead of posting; the Operations
+	Head's Approve posts and its Reject returns the count to whoever prepared it, like the first one's.
+	Idempotent, and a workflow somebody has since reshaped (no second state to add, or no plain
+	Inventory-Head-approves-and-posts transition to hand over from) is left exactly as it is.
+	Returns whether it changed anything."""
+	if not frappe.db.exists("PM Workflow", SR_WORKFLOW):
+		return False
+	workflow = frappe.get_doc("PM Workflow", SR_WORKFLOW)
+	if any(row.state == SR_SECOND_STATE for row in workflow.states):
+		return False
+	handover = [t for t in workflow.transitions
+		if t.state == "Pending" and t.action == "Approve" and t.next_state == "Approved"]
+	if not handover:
+		frappe.logger("sf_trading").warning("%s has no Pending -> Approved approval to hand over from; left alone", SR_WORKFLOW)
+		return False
+
+	second = stock_reconciliation_workflow()
+	added_states = [row for row in second["states"] if row["state"] == SR_SECOND_STATE]
+	added_transitions = [row for row in second["transitions"] if row["state"] == SR_SECOND_STATE]
+	_ensure_masters({"states": added_states, "transitions": added_transitions})
+	grant_second_approver_access()
+	for transition in handover:
+		transition.next_state = SR_SECOND_STATE
+	for row in added_states:
+		workflow.append("states", row)
+	for row in added_transitions:
+		workflow.append("transitions", row)
+	workflow.save(ignore_permissions=True)
+	frappe.clear_cache(doctype=STOCK_RECONCILIATION)
+	return True
 
 
 def ensure_workflows():
@@ -218,20 +302,9 @@ def ensure_workflows():
 	for definition in (sales_order_workflow(), stock_reconciliation_workflow()):
 		if frappe.db.exists("PM Workflow", definition["workflow_name"]):
 			continue
-		for role in {t["allowed"] for t in definition["transitions"]} | {s["allow_edit"] for s in definition["states"]}:
-			if not frappe.db.exists("Role", role):
-				frappe.get_doc({"doctype": "Role", "role_name": role, "desk_access": 1}).insert(ignore_permissions=True)
-		# states and actions are links to the shared masters, which a site only has for the
-		# names someone has already used
-		for state in {s["state"] for s in definition["states"]}:
-			if not frappe.db.exists("Workflow State", state):
-				frappe.get_doc({"doctype": "Workflow State", "workflow_state_name": state,
-					"style": STATE_STYLES.get(state, "")}).insert(ignore_permissions=True)
-		for action in {t["action"] for t in definition["transitions"]}:
-			if not frappe.db.exists("Workflow Action Master", action):
-				frappe.get_doc({"doctype": "Workflow Action Master", "workflow_action_name": action}).insert(
-					ignore_permissions=True
-				)
+		_ensure_masters(definition)
+		if definition["workflow_name"] == SR_WORKFLOW:
+			grant_second_approver_access()
 		frappe.get_doc(definition).insert(ignore_permissions=True)
 		created.append(definition["workflow_name"])
 	return created
