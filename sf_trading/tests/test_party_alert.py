@@ -12,6 +12,7 @@ from frappe.tests.utils import FrappeTestCase
 
 from sf_trading import hooks
 from sf_trading import party_alert as pa
+from sf_trading.sales_order_governance import CASH_OVERRIDE_FIELD
 
 
 def _registered(doctype) -> list:
@@ -83,12 +84,15 @@ class TestAsking(FrappeTestCase):
 		self.assertFalse(doc.get("rows"))
 		self.assertFalse(doc.get("__unsaved"))
 
-	def _alert(self, doctype, values, fakes):
+	def _alert(self, doctype, values, fakes, override=0):
+		def get_value(doctype, name, fieldname=None, *args, **kwargs):
+			return override if fieldname == CASH_OVERRIDE_FIELD else "Acme"
+
 		with (
 			patch.object(pa, "_voucher", side_effect=lambda doctype, values: frappe._dict(values)),
 			patch.object(pa.frappe, "get_attr", side_effect=lambda path: fakes[path]),
 			patch.object(pa.frappe.db, "exists", return_value=True),
-			patch.object(pa.frappe.db, "get_value", return_value="Acme"),
+			patch.object(pa.frappe.db, "get_value", side_effect=get_value),
 			patch.object(pa.frappe, "has_permission", return_value=True),
 			patch.dict(pa.GATES, {doctype: tuple(fakes)}),
 		):
@@ -106,7 +110,8 @@ class TestAsking(FrappeTestCase):
 		self.assertEqual(result["party"], "S-1")
 		self.assertEqual(result["party_type"], "Supplier")
 		self.assertEqual(result["problems"], ["one", "two"])
-		self.assertTrue(result["can_fix"])
+		self.assertEqual(result["hints"], [])
+		self.assertNotIn("can_fix", result)  # a popup, nothing to edit from it
 
 	def test_a_customer_voucher_is_asked_about_its_customer(self):
 		result = self._alert("Sales Invoice", {"customer": "C-1"}, {"a.gate": lambda doc: None})
@@ -124,3 +129,49 @@ class TestAsking(FrappeTestCase):
 
 	def test_a_voucher_no_gate_covers_is_not_asked(self):
 		self.assertEqual(pa.get_party_alert("Journal Entry", {}), {"party": None, "problems": []})
+
+	# ─── a credit customer and the Payment Mode ───────────────────────────────────────────────────
+
+	def _credit_gate(self, doc):
+		"""The credit-customer gate as sales_order_governance runs it for a customer whose documents are
+		missing: refused unless the sale is Cash and the customer may buy for Cash without them."""
+		if doc.get("custom_payment_mode") == "Cash" and doc.get("_may_buy_for_cash"):
+			return
+		frappe.throw("Credit customer C-1 is missing: Payment Terms")
+
+	def _ask_credit(self, mode, override):
+		values = {"customer": "C-1", "_may_buy_for_cash": override}
+		if mode is not None:
+			values["custom_payment_mode"] = mode
+		return self._alert("Sales Invoice", values, {pa.CREDIT_GATE: self._credit_gate}, override=override)
+
+	def test_a_cash_sale_to_a_credit_customer_allowed_cash_sales_raises_nothing(self):
+		result = self._ask_credit("Cash", override=1)
+		self.assertEqual((result["problems"], result["hints"]), ([], []))
+
+	def test_the_server_answers_for_the_document_as_given_a_blank_mode_is_not_cash(self):
+		# the form decides what to ask when no mode is picked yet (party_gate_alert.js); here it is literal
+		result = self._ask_credit(None, override=1)
+		self.assertEqual(result["problems"], ["Credit customer C-1 is missing: Payment Terms"])
+		self.assertEqual(result["hints"], ["This customer may buy for Cash until these are completed."])
+
+	def test_credit_or_cheque_for_that_customer_is_refused_and_says_cash_is_open(self):
+		for mode in ("Credit", "Cheque"):
+			result = self._ask_credit(mode, override=1)
+			self.assertEqual(result["problems"], ["Credit customer C-1 is missing: Payment Terms"], mode)
+			self.assertEqual(result["hints"], ["This customer may buy for Cash until these are completed."], mode)
+
+	def test_a_credit_customer_not_allowed_cash_sales_is_refused_in_every_mode_with_no_hint(self):
+		for mode in (None, "Cash", "Credit", "Cheque"):
+			result = self._ask_credit(mode, override=0)
+			self.assertEqual(result["problems"], ["Credit customer C-1 is missing: Payment Terms"], repr(mode))
+			self.assertEqual(result["hints"], [], repr(mode))
+
+	def test_a_supplier_voucher_is_never_given_a_mode(self):
+		seen = {}
+
+		def gate(doc):
+			seen["mode"] = doc.get("custom_payment_mode")
+
+		self._alert("Purchase Invoice", {"supplier": "S-1"}, {"a.gate": gate})
+		self.assertIsNone(seen["mode"])

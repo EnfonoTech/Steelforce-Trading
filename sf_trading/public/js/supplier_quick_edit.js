@@ -25,9 +25,6 @@ frappe.ui.form.on("Supplier", {
 	},
 });
 
-// party_gate_alert.js opens this same dialog from the "supplier incomplete" alert
-window.sf_open_supplier_quick_edit = sf_open_supplier_quick_edit;
-
 function sf_add_supplier_quick_edit_button(frm) {
 	const field = frm.fields_dict.supplier;
 	if (!field) return;
