@@ -72,6 +72,8 @@ doctype_js = {
 		"public/js/sales_return_window.js",
 		# fix the customer's own phone/CR/VAT from inside the draft invoice, without navigating away
 		"public/js/customer_quick_edit.js",
+		# red alert (and banner) when the customer / supplier picked here would be refused -- see party_alert.py
+		"public/js/party_gate_alert.js",
 		# copies the picked Sales Return Reason into Remarks; makes Remarks mandatory while the
 		# reason is "Other" -- a different, narrower concern than sales_return_window.js's
 		# window/approval gate (the picker itself is marked mandatory by its Custom Field)
@@ -110,6 +112,8 @@ doctype_js = {
 		# fix the customer's own phone/CR/VAT from inside the draft order, without navigating away
 		# -- same dialog the Sales Invoice Customer field and Customer master both already use
 		"public/js/customer_quick_edit.js",
+		# red alert (and banner) when the customer / supplier picked here would be refused -- see party_alert.py
+		"public/js/party_gate_alert.js",
 		# Sales Team's Sales Person picker only offers salespersons valid for this Company
 		"public/js/salesperson_by_company.js",
 		# the whole Sales Order -> Delivery Note -> Sales Invoice chain, not just this one's own hop
@@ -121,7 +125,12 @@ doctype_js = {
 		"public/js/salesperson_by_company.js",
 		"public/js/document_trail.js",
 	],
-	"Supplier Quotation": "public/js/purchase_tax_template.js",
+	"Supplier Quotation": [
+		"public/js/purchase_tax_template.js",
+		# the dialog the alert offers, and the alert itself
+		"public/js/supplier_quick_edit.js",
+		"public/js/party_gate_alert.js",
+	],
 	"Purchase Receipt":   [
 		"public/js/purchase_tax_template.js",
 		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
@@ -130,6 +139,8 @@ doctype_js = {
 		"public/js/landed_cost.js",
 		# fix the supplier's billing-blocking details from inside the draft
 		"public/js/supplier_quick_edit.js",
+		# red alert (and banner) when the customer / supplier picked here would be refused -- see party_alert.py
+		"public/js/party_gate_alert.js",
 	],
 	"Landed Cost Voucher": "public/js/landed_cost.js",
 	# Payment Advice sits in the Create menu beside Payment Request, under the same conditions
@@ -140,6 +151,8 @@ doctype_js = {
 		"public/js/document_trail.js",
 		# fix the supplier's billing-blocking details from inside the draft
 		"public/js/supplier_quick_edit.js",
+		# red alert (and banner) when the customer / supplier picked here would be refused -- see party_alert.py
+		"public/js/party_gate_alert.js",
 	],
 	"Purchase Invoice":   [
 		"public/js/purchase_tax_template.js",
@@ -150,12 +163,17 @@ doctype_js = {
 		"public/js/landed_cost.js",
 		# fix the supplier's billing-blocking details from inside the draft
 		"public/js/supplier_quick_edit.js",
+		# red alert (and banner) when the customer / supplier picked here would be refused -- see party_alert.py
+		"public/js/party_gate_alert.js",
 	],
 	# cancelling a payment must not demand the advice behind it be cancelled as well;
 	# and a cleared post-dated cheque is banked from the cheque's own entry
 	"Payment Entry":      [
 		"public/js/payment_entry_cancel.js",
 		"public/js/payment_entry_pdc.js",
+		# the dialog the alert offers for a supplier being paid, and the alert itself
+		"public/js/supplier_quick_edit.js",
+		"public/js/party_gate_alert.js",
 	],
 	# open item census + submit gate companion view
 	"Period Closing Voucher": "public/js/period_closing_voucher.js",

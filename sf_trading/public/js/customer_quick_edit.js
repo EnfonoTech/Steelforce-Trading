@@ -37,6 +37,9 @@ frappe.ui.form.on("Customer", {
 	refresh: add_customer_master_quick_edit_button,
 });
 
+// party_gate_alert.js opens this same dialog from the "customer incomplete" alert
+window.sf_open_customer_quick_edit = open_customer_quick_edit_dialog;
+
 function add_transaction_quick_edit_button(frm) {
 	frm.fields_dict.customer.$wrapper.find(".sf-customer-quick-edit").remove();
 
