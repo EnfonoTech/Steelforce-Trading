@@ -8,8 +8,8 @@ run, for an old supplier as much as a new one:
 
 * party_documents (Purchase Order / Receipt / Invoice / Supplier Quotation / supplier payment): a
   supplier created on or after New-Master Rules From needs Payment Terms, a Supporting Documents row
-  with its file and a mobile number; ANY supplier holding an expired document marked Financial
-  Implication is refused;
+  with its file and a mobile number; ANY supplier without Payment Terms (2026-10-13) or holding an
+  expired document marked Financial Implication is refused;
 * party_documents.validate_supplier_tax_id: a Company supplier cannot even be saved without a Tax ID;
 * supplier_validation (only while SF Trading Settings > Enforce Supplier Completeness is on): Tax ID,
   phone, email and an attached document, for every supplier.
@@ -53,6 +53,8 @@ def blocking(doc) -> frappe._dict:
 	items = []
 	if applies:
 		items += pd.missing_details(doc, after_insert=True)
+	# old suppliers too (a new one's are already named above; the duplicate is dropped below)
+	items += pd.missing_payment_terms(doc)
 	if not any("Supporting Document" in i for i in items):
 		items += pd.missing_document(doc)
 	if doc.get("supplier_type") == "Company" and not cstr(doc.get("tax_id")).strip():
@@ -107,6 +109,8 @@ def get_quick_edit_data(supplier: str) -> dict:
 		"address_line1": frappe.db.get_value("Address", address, "address_line1") if address else "",
 		"address_city": frappe.db.get_value("Address", address, "city") if address else "",
 		"rules_apply": state.applies,
+		# the dialog marks Payment Terms with the asterisk exactly when a rule asks for it
+		"payment_terms_required": pd.payment_terms_required(PARTY),
 		"has_document_row": state.has_document_row,
 		"enforced": state.enforced,
 		"needs_document": state.needs_document,

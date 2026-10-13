@@ -330,7 +330,7 @@ class TestDocumentRequired(FrappeTestCase):
 		self.assertEqual(pd.missing_document(with_row), [])
 
 	def test_an_old_company_supplier_without_one_is_refused(self):
-		old = Party("Supplier", created="2025-01-01", supplier_type="Company")
+		old = Party("Supplier", created="2025-01-01", supplier_type="Company", payment_terms="Net 30")
 		order = frappe._dict(doctype="Purchase Order", supplier="P-1")
 		with patch.object(pd, "rules_from", return_value=START), patch.object(frappe, "get_doc", return_value=old), \
 				patch.object(pd, "expired_financial_rows", return_value=[]), \
@@ -462,3 +462,102 @@ class TestNewSupplierNeedsAnEmail(FrappeTestCase):
 		with patch.object(pd, "has_mobile", return_value=True), patch.object(pd, "has_email", return_value=False):
 			customer = Party("Customer", payment_terms="Net 30", rows=[{"attachment": "/f.pdf"}])
 			self.assertEqual(pd.missing_details(customer, after_insert=True), [])
+
+
+class TestSupplierPaymentTermsRequired(FrappeTestCase):
+	"""Every supplier, old or new, carries Payment Terms: buying from or paying one without is refused."""
+
+	def _gate(self, supplier, doctype="Purchase Order", **fields):
+		doc = frappe._dict(doctype=doctype, supplier="P-1", **fields)
+		with patch.object(pd, "rules_from", return_value=START), patch.object(frappe, "get_doc", return_value=supplier), \
+				patch.object(pd, "expired_financial_rows", return_value=[]), \
+				patch.object(frappe.db, "exists", side_effect=lambda dt, *a, **k: dt == "Supplier"):
+			pd.validate_party_at_transaction(doc)
+
+	def _old(self, **values):
+		return Party("Supplier", created="2025-01-01", supplier_type="Individual", **values)
+
+	def test_the_rule_is_for_suppliers_while_the_master_rules_are_on(self):
+		with patch.object(pd, "rules_from", return_value=START):
+			self.assertTrue(pd.payment_terms_required("Supplier"))
+			self.assertFalse(pd.payment_terms_required("Customer"))
+		with patch.object(pd, "rules_from", return_value=None):
+			self.assertFalse(pd.payment_terms_required("Supplier"))
+
+	def test_what_counts_as_none(self):
+		with patch.object(pd, "rules_from", return_value=START):
+			for blank in (None, "", "   "):
+				self.assertEqual(pd.missing_payment_terms(Party("Supplier", payment_terms=blank)), ["Payment Terms"], repr(blank))
+			self.assertEqual(pd.missing_payment_terms(Party("Supplier", payment_terms="Net 30")), [])
+			self.assertEqual(pd.missing_payment_terms(Party("Customer")), [])
+		with patch.object(pd, "rules_from", return_value=None):
+			self.assertEqual(pd.missing_payment_terms(Party("Supplier")), [])
+
+	def test_an_old_supplier_without_terms_is_refused_on_every_buying_document_and_payment(self):
+		for doctype, extra in (("Purchase Order", {}), ("Purchase Receipt", {}), ("Purchase Invoice", {}),
+				("Supplier Quotation", {}), ("Payment Entry", {"party_type": "Supplier", "payment_type": "Pay", "party": "P-1"})):
+			with self.assertRaises(frappe.ValidationError, msg=doctype) as caught:
+				self._gate(self._old(), doctype, **extra)
+			self.assertIn("Payment Terms", str(caught.exception), doctype)
+
+	def test_with_terms_it_goes_through(self):
+		self._gate(self._old(payment_terms="Net 30"))
+		self._gate(self._old(payment_terms="Net 30"), "Payment Entry", party_type="Supplier", payment_type="Pay", party="P-1")
+
+	def test_the_message_names_what_else_is_missing_with_the_terms_first(self):
+		company = Party("Supplier", created="2025-01-01", supplier_type="Company")
+		with patch.object(pd, "has_document", return_value=False):
+			with self.assertRaises(frappe.ValidationError) as caught:
+				self._gate(company)
+		text = str(caught.exception)
+		self.assertIn("Payment Terms, a supporting document (Company supplier)", text)
+
+	def test_a_new_supplier_is_not_told_twice(self):
+		new = Party("Supplier", created=str(TODAY), supplier_type="Individual")
+		with patch.object(pd, "has_mobile", return_value=True), patch.object(pd, "has_email", return_value=True):
+			with self.assertRaises(frappe.ValidationError) as caught:
+				self._gate(new)
+		self.assertEqual(str(caught.exception).count("Payment Terms"), 1)
+
+	def test_a_return_and_an_opening_invoice_stand_aside(self):
+		with patch.object(pd, "rules_from", return_value=START):
+			pd.validate_party_at_transaction(frappe._dict(doctype="Purchase Invoice", supplier="P-1", is_return=1))
+			pd.validate_party_at_transaction(frappe._dict(doctype="Purchase Invoice", supplier="P-1", is_opening="Yes"))
+
+	def test_money_received_from_a_supplier_is_never_refused(self):
+		self._gate(self._old(), "Payment Entry", party_type="Supplier", payment_type="Receive", party="P-1")
+
+	def test_switched_off_with_the_master_rules(self):
+		doc = frappe._dict(doctype="Purchase Order", supplier="P-1")
+		with patch.object(pd, "rules_from", return_value=None), patch.object(frappe, "get_doc", return_value=self._old()), \
+				patch.object(pd, "expired_financial_rows", return_value=[]), \
+				patch.object(frappe.db, "exists", side_effect=lambda dt, *a, **k: dt == "Supplier"):
+			pd.validate_party_at_transaction(doc)
+
+	def test_a_customer_is_not_asked_for_terms_by_this_rule(self):
+		customer = Party("Customer", created="2025-01-01")
+		doc = frappe._dict(doctype="Sales Invoice", customer="P-1")
+		with patch.object(pd, "rules_from", return_value=START), patch.object(frappe, "get_doc", return_value=customer), \
+				patch.object(pd, "expired_financial_rows", return_value=[]), \
+				patch.object(frappe.db, "exists", side_effect=lambda dt, *a, **k: dt == "Customer"):
+			pd.validate_party_at_transaction(doc)
+
+	def test_the_supplier_form_is_told_and_names_the_terms_first(self):
+		told = {}
+
+		class Form(Party):
+			def set_onload(self, key, value):
+				told[key] = value
+
+		old = Form("Supplier", created="2025-01-01", supplier_type="Company")
+		with patch.object(pd, "rules_from", return_value=START), patch.object(pd, "expired_financial_rows", return_value=[]), \
+				patch.object(pd, "has_document", return_value=False):
+			pd.set_onload(old)
+		rules = told["sf_master_rules"]
+		self.assertTrue(rules["payment_terms_required"])
+		self.assertEqual(rules["missing"], ["Payment Terms", "a supporting document (Company supplier)"])
+
+	def test_the_form_rules_a_dialog_can_ask_for(self):
+		with patch.object(pd, "rules_from", return_value=START):
+			self.assertTrue(pd.get_master_rules("Supplier")["payment_terms_required"])
+			self.assertFalse(pd.get_master_rules("Customer")["payment_terms_required"])

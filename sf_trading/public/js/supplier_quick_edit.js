@@ -92,8 +92,9 @@ function sf_render_supplier_quick_edit(supplier, data, on_saved) {
 			options: "Payment Terms Template",
 			label: __("Payment Terms"),
 			default: data.payment_terms,
-			// a new supplier must carry them (sf_trading/party_documents.py)
-			reqd: data.rules_apply ? 1 : 0,
+			// every supplier must carry them, old or new: purchases and payments are refused without
+			// (sf_trading/party_documents.py)
+			reqd: data.payment_terms_required || data.rules_apply ? 1 : 0,
 		},
 	];
 

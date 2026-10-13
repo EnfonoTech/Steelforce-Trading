@@ -26,6 +26,12 @@ A supplier whose Supplier Group is "Other Supplier" holds no document at all (cl
 the document rules above -- the new-master row, the Company-supplier document -- stand aside for it
 (`documents_exempt`). Payment Terms and the rest still apply.
 
+Every supplier, old or new, carries Payment Terms (2026-10-13, client: block purchases and payments for
+a supplier without them, as for the document): buying from or paying one with none is refused
+(`missing_payment_terms`). The master itself is still saved without them -- an old supplier's other
+edits are not held up, and only a new one needs them from its first save. The rule is on while New-Master
+Rules From is set, so blanking that date switches it off with the other master rules, without a deploy.
+
 Every supplier of type Company needs a Tax ID on every save, old ones included: production had
 that as a hand-made Property Setter (reqd), which the app's fixture replaces with a mark that only
 applies to Company suppliers, so the server side of it lives here.
@@ -227,6 +233,18 @@ def missing_document(doc) -> list:
 	return [_("a supporting document (VAT registered)")]
 
 
+def payment_terms_required(doctype) -> bool:
+	"""Every supplier carries Payment Terms, old or new -- while the master rules are on."""
+	return doctype == "Supplier" and rules_from() is not None
+
+
+def missing_payment_terms(doc) -> list:
+	"""What the always-on Payment Terms rule still wants of this supplier (old or new)."""
+	if not payment_terms_required(doc.doctype) or cstr(doc.get("payment_terms")).strip():
+		return []
+	return [_("Payment Terms")]
+
+
 def stands_aside(doc) -> bool:
 	"""A data import, patch, install, or ERPNext's own ignore-mandatory creator: masters arrive in
 	bulk and are completed afterwards (the Master Data Completeness report finds them)."""
@@ -373,12 +391,15 @@ def set_onload(doc, _method=None):
 	applies = is_governed(doc) and is_new_master(doc)
 	missing = missing_details(doc, after_insert=True) if applies and not doc.is_new() else []
 	document = missing_document(doc) if not doc.is_new() else []
+	# an old supplier's Payment Terms (a new one's are already in `missing`)
+	terms = missing_payment_terms(doc) if not doc.is_new() and _("Payment Terms") not in missing else []
 	doc.set_onload("sf_master_rules", {
 		"applies": applies,
 		"needs_document": bool(document),
+		"payment_terms_required": payment_terms_required(doc.doctype),
 		"rules_from": str(rules_from() or ""),
 		"exempt_groups": list(DOCUMENT_EXEMPT_SUPPLIER_GROUPS),
-		"missing": missing + ([] if any("Supporting Document" in m for m in missing) else document),
+		"missing": missing + terms + ([] if any("Supporting Document" in m for m in missing) else document),
 		"expired": [r.document_type for r in expired_financial_rows(doc.doctype, doc.name)] if not doc.is_new() else [],
 	})
 
@@ -403,9 +424,11 @@ def get_master_rules(doctype: str, name: str = None, customer_vat: str = None, i
 		frappe.has_permission(doctype, "read", doc=name, throw=True)
 		doc = frappe.get_doc(doctype, name)
 		return {"applies": is_governed(doc) and is_new_master(doc), "rules_from": str(start or ""),
+			"payment_terms_required": payment_terms_required(doctype),
 			"exempt_groups": list(DOCUMENT_EXEMPT_SUPPLIER_GROUPS)}
 	governed = doctype == "Supplier" or bool(cint(is_credit))
 	return {"applies": bool(start) and governed, "rules_from": str(start or ""),
+		"payment_terms_required": payment_terms_required(doctype),
 		"exempt_groups": list(DOCUMENT_EXEMPT_SUPPLIER_GROUPS)}
 
 
@@ -481,6 +504,9 @@ def validate_party_at_transaction(doc, _method=None):
 	master = frappe.get_doc(party_type, party)
 	if is_governed(master) and is_new_master(master) and not _cash_sale_allowed(doc, party_type):
 		problems += missing_details(master, after_insert=True)
+	if _("Payment Terms") not in problems:
+		# old suppliers too (a new one's are already named above)
+		problems += missing_payment_terms(master)
 	if not any("Supporting Document" in p for p in problems):
 		# old masters too: a Company supplier / a VAT-registered customer holds a document
 		problems += missing_document(master)

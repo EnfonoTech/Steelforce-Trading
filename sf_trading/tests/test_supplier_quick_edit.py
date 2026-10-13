@@ -28,8 +28,10 @@ class TestSupplierQuickEdit(FrappeTestCase):
 			data = sqe.get_quick_edit_data(self.supplier)
 		self.assertTrue(data["rules_apply"])
 		self.assertTrue(data["needs_document"])
+		self.assertTrue(data["payment_terms_required"])
 		for item in ("Payment Terms", "Tax ID"):
 			self.assertIn(item, data["blocking"])
+		self.assertEqual(data["blocking"].count("Payment Terms"), 1)
 
 	def test_saving_the_dialog_clears_the_blockers(self):
 		terms = frappe.db.get_value("Payment Terms Template", {}, "name")
@@ -52,3 +54,38 @@ class TestSupplierQuickEdit(FrappeTestCase):
 			data = sqe.get_quick_edit_data(self.supplier)
 		self.assertFalse(data["rules_apply"])
 		self.assertTrue(any("TL-1" in e for e in data["expired"]))
+
+
+class TestPaymentTermsInTheBanner(FrappeTestCase):
+	"""Every supplier carries Payment Terms (party_documents.missing_payment_terms): the banner lists them
+	for an old supplier as for a new one, and the dialog marks the field."""
+
+	def _blocking(self, supplier, rules_on=True):
+		from sf_trading import supplier_validation as sv
+
+		start = frappe.utils.add_days(frappe.utils.now_datetime(), -30) if rules_on else None
+		with patch.object(pd, "rules_from", return_value=start), patch.object(sv, "enforcement_enabled", return_value=False), \
+				patch.object(pd, "expired_financial_rows", return_value=[]), patch.object(pd, "has_document", return_value=True):
+			return sqe.blocking(supplier)
+
+	def _supplier(self, created, **values):
+		from sf_trading.tests.test_master_rules import Party
+
+		return Party("Supplier", created=created, supplier_type="Individual", **values)
+
+	def test_an_old_supplier_without_terms_is_listed(self):
+		state = self._blocking(self._supplier("2025-01-01"))
+		self.assertFalse(state.applies)
+		self.assertEqual(state.missing, ["Payment Terms"])
+
+	def test_an_old_supplier_with_terms_blocks_nothing(self):
+		self.assertEqual(self._blocking(self._supplier("2025-01-01", payment_terms="Net 30")).missing, [])
+
+	def test_a_new_supplier_is_not_listed_twice(self):
+		new = self._supplier(str(frappe.utils.today()))
+		with patch.object(pd, "has_mobile", return_value=True), patch.object(pd, "has_email", return_value=True):
+			state = self._blocking(new)
+		self.assertEqual(state.missing.count("Payment Terms"), 1)
+
+	def test_nothing_is_listed_once_the_master_rules_are_off(self):
+		self.assertEqual(self._blocking(self._supplier("2025-01-01"), rules_on=False).missing, [])

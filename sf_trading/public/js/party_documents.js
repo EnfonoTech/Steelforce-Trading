@@ -6,7 +6,8 @@
 //     Ahead, Grace Days, Financial Implication.
 //   * On a master the rules govern (every supplier, a credit customer, created on or after SF Trading
 //     Settings > New-Master Rules From) Payment Terms and the documents grid are marked required,
-//     and the form says what is still missing. The server enforces the same rules.
+//     and the form says what is still missing. The server enforces the same rules. Payment Terms are
+//     also marked on every older supplier: buying from or paying one without them is refused.
 
 // loaded by both the Customer and the Supplier form: register the handlers once per session
 if (!window.sf_party_documents_loaded) {
@@ -30,10 +31,11 @@ function sf_party_rules_apply(frm) {
 function sf_party_mark_required(frm, quiet) {
 	sf_party_rules_apply(frm).then((rules) => {
 		const required = rules.applies ? 1 : 0;
-		// Payment Terms: every credit customer, old or new (sales_order_governance), as well as a
-		// governed new master
+		// Payment Terms: every credit customer, old or new (sales_order_governance), every supplier, old
+		// or new (the server says so: party_documents.payment_terms_required), as well as a governed
+		// new master
 		const credit = frm.doctype === "Customer" && (frm.doc.credit_limits || []).some((row) => flt(row.credit_limit) > 0);
-		frm.toggle_reqd("payment_terms", required || credit ? 1 : 0);
+		frm.toggle_reqd("payment_terms", required || credit || rules.payment_terms_required ? 1 : 0);
 		if (frm.fields_dict.custom_supporting_documents) {
 			// a Company supplier / a VAT-registered customer needs one whatever its age -- unless its
 			// Supplier Group is one that holds none (party_documents.DOCUMENT_EXEMPT_SUPPLIER_GROUPS)
