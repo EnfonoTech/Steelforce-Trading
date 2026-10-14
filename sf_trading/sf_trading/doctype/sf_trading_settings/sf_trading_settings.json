@@ -37,7 +37,10 @@
   "names_and_numbers_section",
   "title_case_masters",
   "names_and_numbers_column_break",
-  "number_new_accounts"
+  "number_new_accounts",
+  "purchase_receipt_section",
+  "disable_purchase_receipt",
+  "purchase_receipt_bypass"
  ],
  "fields": [
   {
@@ -252,12 +255,32 @@
    "fieldtype": "Check",
    "label": "Number New Accounts Automatically",
    "description": "A new account that has no number gets the next one in the series its parent account already uses, so the chart stays numbered in order (a party ledger continues its group's initial-letter series). A number typed by hand is never changed."
+  },
+  {
+   "fieldname": "purchase_receipt_section",
+   "fieldtype": "Section Break",
+   "label": "Purchase Receipt (GRN)"
+  },
+  {
+   "default": "0",
+   "description": "When ticked, Purchase Receipt is closed to everyone: it cannot be opened, made or listed, and goods come in through the Purchase Invoice (Update Stock) instead. Only the roles and users below, and Administrator, still use it.",
+   "fieldname": "disable_purchase_receipt",
+   "fieldtype": "Check",
+   "label": "Disable Purchase Receipt (GRN)"
+  },
+  {
+   "depends_on": "disable_purchase_receipt",
+   "description": "Roles or users who still see and use Purchase Receipt while it is disabled.",
+   "fieldname": "purchase_receipt_bypass",
+   "fieldtype": "Table",
+   "label": "Allowed to Use Purchase Receipt",
+   "options": "SF Override Entry"
   }
  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-14 19:00:00.000000",
+ "modified": "2026-10-15 02:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",

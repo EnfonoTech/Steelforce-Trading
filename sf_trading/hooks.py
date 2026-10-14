@@ -156,6 +156,8 @@ doctype_js = {
 		"public/js/party_gate_alert.js",
 		# Create -> Goods In: arrival recorded for quantity only (sf_trading/goods_in.py)
 		"public/js/purchase_order_goods_in.js",
+		# no Create -> Purchase Receipt while GRN is disabled for this user (purchase_receipt_gate.py)
+		"public/js/purchase_order_grn.js",
 	],
 	"Purchase Invoice":   [
 		"public/js/purchase_tax_template.js",
@@ -346,12 +348,18 @@ permission_query_conditions = {
 	"Ticket": "sf_trading.ticket.get_permission_query_conditions",
 	# a branch user sees the delivery people who serve one of their branches (the Branches table)
 	"Driver": "sf_trading.driver_branches.permission_query_conditions",
+	# GRN disabled in SF Trading Settings: only the bypass roster sees Purchase Receipt
+	"Purchase Receipt": "sf_trading.purchase_receipt_gate.permission_query_conditions",
 }
 
 has_permission = {
 	"Ticket": "sf_trading.ticket.has_permission",
 	"Driver": "sf_trading.driver_branches.has_permission",
+	"Purchase Receipt": "sf_trading.purchase_receipt_gate.has_permission",
 }
+
+# the desk drops Purchase Receipt for a user GRN is disabled for -- see purchase_receipt_gate.py
+boot_session = ["sf_trading.purchase_receipt_gate.boot_session"]
 
 # DocType Class
 # ---------------
@@ -421,6 +429,10 @@ doc_events = {
 	# the account's name from it -- see sf_trading/account_numbering.py
 	"Account": {
 		"before_insert": "sf_trading.account_numbering.number_new_account",
+	},
+	# a change to Disable Purchase Receipt (GRN) or its roster reaches the desk without a re-login
+	"SF Trading Settings": {
+		"on_update": "sf_trading.purchase_receipt_gate.clear_boot_cache",
 	},
 	"Stock Entry": {
 		# before_validate, so the header account faces ERPNext's own account checks
