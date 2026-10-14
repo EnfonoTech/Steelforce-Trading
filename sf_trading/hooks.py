@@ -874,8 +874,14 @@ before_request = [
 	# the whitelist override above only covers the HTTP door; a saved custom report and an export
 	# reach the same function by module attribute, so it is repointed here as well
 	"sf_trading.api.query_report_columns.install",
+	# Balance Sheet / Profit and Loss / Cash Flow read the ledger by account, not by walking the year
+	"sf_trading.report_speed.install",
 ]
-before_job = ["sf_trading.api.query_report_columns.install"]
+# a Prepared Report runs in a background job, which has no request
+before_job = [
+	"sf_trading.api.query_report_columns.install",
+	"sf_trading.report_speed.install",
+]
 # after_request = ["sf_trading.utils.after_request"]
 
 # Job Events

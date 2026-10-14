@@ -40,7 +40,9 @@
   "number_new_accounts",
   "purchase_receipt_section",
   "disable_purchase_receipt",
-  "purchase_receipt_bypass"
+  "purchase_receipt_bypass",
+  "report_speed_section",
+  "fast_financial_statements"
  ],
  "fields": [
   {
@@ -275,12 +277,24 @@
    "fieldtype": "Table",
    "label": "Allowed to Use Purchase Receipt",
    "options": "SF Override Entry"
+  },
+  {
+   "fieldname": "report_speed_section",
+   "fieldtype": "Section Break",
+   "label": "Report Speed"
+  },
+  {
+   "default": "1",
+   "description": "Balance Sheet, Profit and Loss and Cash Flow read each account type's ledger rows by account instead of walking the whole year once per type, and Cash Flow answers its per-period sums from one daily read. The figures are the same, several times faster. Untick it to go back to ERPNext's own queries at once, no restart needed.",
+   "fieldname": "fast_financial_statements",
+   "fieldtype": "Check",
+   "label": "Faster Balance Sheet, Profit and Loss and Cash Flow"
   }
  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-15 02:00:00.000000",
+ "modified": "2026-10-15 03:30:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",
