@@ -493,10 +493,10 @@ def get_data(filters):
 
 	data.append(_row("<b>" + _link(_("Opening Cash Balance"), "Opening Cash Balance") + "</b>", opening_balance, 0, 0, 0))
 	data.append(_row("<b>" + _link(_("Total Sales"), "Total Sales") + "</b>", total_sales_income, 0, -total_sales_discount, total_sales_margin))
-	data.append(_row(_link("CASH SALES", "Cash Sales"), bucket_income(cash_b), 0, bucket_discount_adj(cash_b), bucket_margin(cash_b)))
-	data.append(_row(_link("CARD/BPAY SALES", "Bank Sales"), bucket_income(bank_b), 0, bucket_discount_adj(bank_b), bucket_margin(bank_b)))
-	data.append(_row(_link("CHEQUE SALES", "Cheque Sales"), bucket_income(cheque_b), 0, bucket_discount_adj(cheque_b), bucket_margin(cheque_b)))
-	data.append(_row(_link("CREDIT SALES", "Credit Sales"), bucket_income(credit_b), credit_return_total, bucket_discount_adj(credit_b), bucket_margin(credit_b)))
+	data.append(_row(_link("CASH", "Cash Sales"), bucket_income(cash_b), 0, bucket_discount_adj(cash_b), bucket_margin(cash_b)))
+	data.append(_row(_link("CARD/BPAY", "Bank Sales"), bucket_income(bank_b), 0, bucket_discount_adj(bank_b), bucket_margin(bank_b)))
+	data.append(_row(_link("CHEQUE", "Cheque Sales"), bucket_income(cheque_b), 0, bucket_discount_adj(cheque_b), bucket_margin(cheque_b)))
+	data.append(_row(_link("CREDIT", "Credit Sales"), bucket_income(credit_b), credit_return_total, bucket_discount_adj(credit_b), bucket_margin(credit_b)))
 	data.append(_row(_link("Home Credit (Delivery)", "Home Credit (Delivery)"), bucket_income(home_b), 0, bucket_discount_adj(home_b), bucket_margin(home_b)))
 	# Sales Return - Cash is the normal case for this business and always shown.
 	# Bank/Cheque refunds are rare exceptions — only show those rows when this
