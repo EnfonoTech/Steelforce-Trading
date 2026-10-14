@@ -368,12 +368,13 @@ class TestRenamingThem(FrappeTestCase):
 
 	def test_a_refusal_stops_the_batch_and_is_reported(self):
 		module = MagicMock()
-		module.update_account_number.side_effect = [None, frappe.ValidationError("wait 5 minutes"), None]
+		module.update_account_number.side_effect = [None, frappe.ValidationError("Please <b>wait</b> 5 minutes"), None]
 		with patch.dict("sys.modules", {"erpnext.accounts.doctype.account.account": module}):
 			result = an.number_existing_accounts("Steel Force Trading WLL", apply=1)
 		self.assertEqual(module.update_account_number.call_count, 2)
 		self.assertEqual([item["account"] for item in result["applied"]], ["A - SFB"])
 		self.assertEqual(result["stopped"]["account"], "B - SFB")
-		self.assertIn("wait 5 minutes", result["stopped"]["reason"])
+		# what ERPNext says is shown as text, not as markup
+		self.assertEqual(result["stopped"]["reason"], "Please wait 5 minutes")
 		self.assertEqual(result["left"], 2)
 		self.db.rollback.assert_called_once()

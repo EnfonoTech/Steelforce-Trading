@@ -38,7 +38,7 @@ from collections import Counter, defaultdict
 
 import frappe
 from frappe import _
-from frappe.utils import cint, cstr
+from frappe.utils import cint, cstr, strip_html
 
 SETTINGS = "SF Trading Settings"
 SWITCH = "number_new_accounts"
@@ -253,7 +253,7 @@ def number_existing_accounts(company: str, apply=0, limit=25) -> dict:
 		try:
 			update_account_number(item["account"], item["account_name"], item["number"])
 		except Exception as error:
-			stopped = {"account": item["account"], "reason": cstr(error)}
+			stopped = {"account": item["account"], "reason": strip_html(cstr(error)).strip()}
 			frappe.db.rollback()
 			break
 		frappe.db.commit()
