@@ -33,7 +33,10 @@
   "landed_cost_column_break",
   "landed_cost_require_on_purchase",
   "master_rules_section",
-  "master_rules_from"
+  "master_rules_from",
+  "purchase_receipt_section",
+  "disable_purchase_receipt",
+  "purchase_receipt_bypass"
  ],
  "fields": [
   {
@@ -224,12 +227,32 @@
    "fieldtype": "Datetime",
    "label": "New-Master Rules From",
    "description": "Masters created at or after this moment are held to the rules. Blank switches them off."
+  },
+  {
+   "fieldname": "purchase_receipt_section",
+   "fieldtype": "Section Break",
+   "label": "Purchase Receipt (GRN)"
+  },
+  {
+   "default": "0",
+   "description": "When ticked, Purchase Receipt is closed to everyone: it cannot be opened, made or listed, and goods come in through the Purchase Invoice (Update Stock) instead. Only the roles and users below, and Administrator, still use it.",
+   "fieldname": "disable_purchase_receipt",
+   "fieldtype": "Check",
+   "label": "Disable Purchase Receipt (GRN)"
+  },
+  {
+   "depends_on": "disable_purchase_receipt",
+   "description": "Roles or users who still see and use Purchase Receipt while it is disabled.",
+   "fieldname": "purchase_receipt_bypass",
+   "fieldtype": "Table",
+   "label": "Allowed to Use Purchase Receipt",
+   "options": "SF Override Entry"
   }
  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-11 13:30:00.000000",
+ "modified": "2026-10-14 17:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",
