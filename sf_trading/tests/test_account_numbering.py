@@ -169,17 +169,31 @@ class TestNothingToDo(FrappeTestCase):
 
 
 class TestTheSwitch(FrappeTestCase):
-	def read(self, stored):
-		with patch.object(an.frappe.db, "get_single_value", return_value=stored):
-			return an.switched_on()
+	def read(self, stored, field_exists=True):
+		with patch.object(an.frappe.db, "get_single_value", return_value=stored) as read, \
+				patch.object(an.frappe, "get_meta", return_value=MagicMock(has_field=lambda fieldname: field_exists)):
+			return an.switched_on(), read
 
 	def test_a_site_that_never_set_it_counts_as_on(self):
-		self.assertTrue(self.read(None))
+		self.assertTrue(self.read(None)[0])
 
 	def test_a_stored_value_decides(self):
-		self.assertTrue(self.read(1))
-		self.assertFalse(self.read(0))
-		self.assertFalse(self.read("0"))
+		self.assertTrue(self.read(1)[0])
+		self.assertFalse(self.read(0)[0])
+		self.assertFalse(self.read("0")[0])
+
+	def test_the_field_not_being_there_yet_counts_as_on_and_is_not_read(self):
+		# the code is pulled before migrate makes the field: reading it would raise on every account made
+		on, read = self.read(None, field_exists=False)
+		self.assertTrue(on)
+		read.assert_not_called()
+
+	def test_a_switch_that_cannot_be_read_counts_as_on(self):
+		with patch.object(an.frappe, "get_meta", side_effect=RuntimeError("boom")):
+			self.assertTrue(an.switched_on())
+		with patch.object(an.frappe, "get_meta", return_value=MagicMock(has_field=lambda fieldname: True)), \
+				patch.object(an.frappe.db, "get_single_value", side_effect=frappe.ValidationError("no such field")):
+			self.assertTrue(an.switched_on())
 
 
 class TestTheHook(FrappeTestCase):

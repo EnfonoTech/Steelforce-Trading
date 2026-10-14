@@ -164,8 +164,18 @@ def _stems(base: str) -> list:
 
 
 def switched_on() -> bool:
-	"""The settings switch; a site that never set it counts as on (a Single never receives a new field's default)."""
-	value = frappe.db.get_single_value(SETTINGS, SWITCH)
+	"""The settings switch.
+
+	On when a site never set it (a Single never receives a new field's default) and on when the field is not
+	there yet: the code is pulled before `bench migrate` makes it, and reading a field a table does not have
+	raises -- which would stop every save these hooks run on. A switch that cannot be read counts as on.
+	"""
+	try:
+		if not frappe.get_meta(SETTINGS).has_field(SWITCH):
+			return True
+		value = frappe.db.get_single_value(SETTINGS, SWITCH)
+	except Exception:
+		return True
 	return True if value is None else bool(cint(value))
 
 
