@@ -498,6 +498,9 @@ doc_events = {
 		"onload": "sf_trading.party_documents.set_onload",
 		"before_save": [
 			"sf_trading.customer_permission.auto_add_branch_on_credit_limit",
+			# after every validate hook of every app (the backup app also title-cases names, with str.title(), which
+			# turns John's into John'S) and before the receivable ledger is named from the name
+			"sf_trading.title_case.title_case_party",
 			"sf_trading.party_accounts.create_customer_receivable_account",
 		],
 		# a brand new customer starts Pending Verification; existing ones were grandfathered
@@ -522,7 +525,11 @@ doc_events = {
 		],
 		"on_update": "sf_trading.party_documents.relink_attachments",
 		"onload": "sf_trading.party_documents.set_onload",
-		"before_save": "sf_trading.party_accounts.create_supplier_payable_account",
+		# title case first (after every validate hook of every app), then the payable ledger named from it
+		"before_save": [
+			"sf_trading.title_case.title_case_party",
+			"sf_trading.party_accounts.create_supplier_payable_account",
+		],
 		"before_insert": "sf_trading.title_case.title_case_party",
 		"before_rename": "sf_trading.title_case.title_case_rename",
 		"after_insert": "sf_trading.supplier_validation.remind_attachment",

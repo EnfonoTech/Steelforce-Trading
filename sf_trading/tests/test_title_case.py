@@ -186,11 +186,22 @@ class TestRegistered(FrappeTestCase):
 			for event, handler in (
 				("before_insert", "sf_trading.title_case.title_case_party"),
 				("validate", "sf_trading.title_case.title_case_party"),
+				("before_save", "sf_trading.title_case.title_case_party"),
 				("before_rename", "sf_trading.title_case.title_case_rename"),
 			):
 				registered = events[event]
 				registered = [registered] if isinstance(registered, str) else registered
 				self.assertIn(handler, registered, "%s %s" % (doctype, event))
+
+	def test_the_name_is_final_before_the_ledger_is_named_from_it(self):
+		"""before_save runs after every validate hook (the backup app also title-cases, with str.title()), and the
+		party's own ledger is named from the name: title case has to come first."""
+		from sf_trading import hooks
+
+		for doctype, ledger in (("Customer", "sf_trading.party_accounts.create_customer_receivable_account"),
+				("Supplier", "sf_trading.party_accounts.create_supplier_payable_account")):
+			registered = hooks.doc_events[doctype]["before_save"]
+			self.assertLess(registered.index("sf_trading.title_case.title_case_party"), registered.index(ledger), doctype)
 
 	def test_every_handler_named_in_the_hooks_exists(self):
 		for path in ("sf_trading.title_case.title_case_party", "sf_trading.title_case.title_case_rename",
