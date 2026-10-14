@@ -21,14 +21,16 @@ or any mark ends a run, so "W.L.L" stays "W.L.L", "AL-AWANI & SONS" becomes "Al-
 "JOHN'S" is "John's"). Letters of any script count as letters, so an Arabic name has nothing to change
 and a Latin letter with an accent keeps its word whole. Runs of spaces are collapsed to one.
 
-Switch: SF Trading Settings > "Save Customer and Supplier Names in Title Case". Ticked by default; a site that
-never set it counts as ticked. Untick it and nothing here does anything.
+Switch: SF Trading Settings > "Save Customer and Supplier Names in Title Case". ON unless unticked (a site that never
+stored it, or has not migrated the field yet, counts as ON -- see switches.py). Unticked, nothing here does anything.
 """
 
 from __future__ import annotations
 
 import frappe
-from frappe.utils import cint, cstr
+from frappe.utils import cstr
+
+from sf_trading import switches
 
 SETTINGS = "SF Trading Settings"
 SWITCH = "title_case_masters"
@@ -66,19 +68,8 @@ def title_case(text) -> str:
 
 
 def switched_on() -> bool:
-	"""The settings switch.
-
-	On when a site never set it (a Single never receives a new field's default) and on when the field is not
-	there yet: the code is pulled before `bench migrate` makes it, and reading a field a table does not have
-	raises -- which would stop every save these hooks run on. A switch that cannot be read counts as on.
-	"""
-	try:
-		if not frappe.get_meta(SETTINGS).has_field(SWITCH):
-			return True
-		value = frappe.db.get_single_value(SETTINGS, SWITCH)
-	except Exception:
-		return True
-	return True if value is None else bool(cint(value))
+	"""The settings switch: ON unless somebody unticked it (see switches.py for how "never set" and "not there yet" read)."""
+	return switches.is_on(SWITCH)
 
 
 def title_case_party(doc, method=None):

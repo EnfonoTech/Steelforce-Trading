@@ -27,8 +27,8 @@ get (oldest first, a group before its children); `number_existing_accounts` rena
 ERPNext's own `update_account_number`, which follows every link. ERPNext refuses that while entries
 are being posted (it wants 5 quiet minutes), so a batch stops at the first refusal and says so.
 
-Switch: SF Trading Settings > "Number New Accounts Automatically" (ticked by default; a site that never
-set it counts as ticked).
+Switch: SF Trading Settings > "Number New Accounts Automatically" (ON unless unticked; a site that never stored it,
+or has not migrated the field yet, counts as ON -- see switches.py).
 """
 
 from __future__ import annotations
@@ -39,6 +39,8 @@ from collections import Counter, defaultdict
 import frappe
 from frappe import _
 from frappe.utils import cint, cstr, strip_html
+
+from sf_trading import switches
 
 SETTINGS = "SF Trading Settings"
 SWITCH = "number_new_accounts"
@@ -164,19 +166,8 @@ def _stems(base: str) -> list:
 
 
 def switched_on() -> bool:
-	"""The settings switch.
-
-	On when a site never set it (a Single never receives a new field's default) and on when the field is not
-	there yet: the code is pulled before `bench migrate` makes it, and reading a field a table does not have
-	raises -- which would stop every save these hooks run on. A switch that cannot be read counts as on.
-	"""
-	try:
-		if not frappe.get_meta(SETTINGS).has_field(SWITCH):
-			return True
-		value = frappe.db.get_single_value(SETTINGS, SWITCH)
-	except Exception:
-		return True
-	return True if value is None else bool(cint(value))
+	"""The settings switch: ON unless somebody unticked it (see switches.py for how "never set" and "not there yet" read)."""
+	return switches.is_on(SWITCH)
 
 
 def chart_of(company: str) -> Chart:

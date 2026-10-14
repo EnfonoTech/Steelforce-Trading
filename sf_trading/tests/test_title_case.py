@@ -76,32 +76,14 @@ class Party:
 
 
 class TestTheSwitch(FrappeTestCase):
-	def read(self, stored, field_exists=True):
-		with patch.object(tc.frappe.db, "get_single_value", return_value=stored) as read, \
-				patch.object(tc.frappe, "get_meta", return_value=MagicMock(has_field=lambda fieldname: field_exists)):
-			return tc.switched_on(), read
+	"""The reading itself (a switch nobody stored is ON, a field not migrated yet is ON) is switches.py's, tested in
+	test_switches.py: here only that this module asks for its own switch."""
 
-	def test_a_site_that_never_set_it_counts_as_on(self):
-		self.assertTrue(self.read(None)[0])
-
-	def test_a_stored_value_decides(self):
-		self.assertTrue(self.read(1)[0])
-		self.assertTrue(self.read("1")[0])
-		self.assertFalse(self.read(0)[0])
-		self.assertFalse(self.read("0")[0])
-
-	def test_the_field_not_being_there_yet_counts_as_on_and_is_not_read(self):
-		# the code is pulled before migrate makes the field: reading it would raise on every save
-		on, read = self.read(None, field_exists=False)
-		self.assertTrue(on)
-		read.assert_not_called()
-
-	def test_a_switch_that_cannot_be_read_counts_as_on(self):
-		with patch.object(tc.frappe, "get_meta", side_effect=RuntimeError("boom")):
-			self.assertTrue(tc.switched_on())
-		with patch.object(tc.frappe, "get_meta", return_value=MagicMock(has_field=lambda fieldname: True)), \
-				patch.object(tc.frappe.db, "get_single_value", side_effect=frappe.ValidationError("no such field")):
-			self.assertTrue(tc.switched_on())
+	def test_it_asks_the_helper_for_its_own_switch(self):
+		for answer in (True, False):
+			with patch.object(tc.switches, "is_on", return_value=answer) as read:
+				self.assertEqual(tc.switched_on(), answer)
+			read.assert_called_once_with("title_case_masters")
 
 
 class TestTheHooks(FrappeTestCase):
