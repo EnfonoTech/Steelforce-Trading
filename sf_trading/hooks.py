@@ -152,6 +152,8 @@ doctype_js = {
 		"public/js/supplier_quick_edit.js",
 		# a popup when the customer / supplier picked on a new voucher would be refused -- see party_alert.py
 		"public/js/party_gate_alert.js",
+		# Create -> Goods In: arrival recorded for quantity only (sf_trading/goods_in.py)
+		"public/js/purchase_order_goods_in.js",
 	],
 	"Purchase Invoice":   [
 		"public/js/purchase_tax_template.js",
@@ -292,6 +294,10 @@ after_migrate = [
 	"sf_trading.party_documents.place_documents_grid",
 	# PM's own Actions entry for a cancellation request stays hidden until a reason is picked
 	"sf_trading.approval_routing.ensure_request_condition",
+	# Strict Stock Reservation switches: Company check + Warehouse override
+	"sf_trading.strict_stock_reservation.ensure_custom_fields",
+	# the Goods In link on a Purchase Invoice row
+	"sf_trading.goods_in.ensure_custom_fields",
 ]
 
 after_install = [
@@ -384,6 +390,9 @@ _SUPPLIER_GATE = "sf_trading.supplier_validation.validate_supplier_at_transactio
 # a new supplier / B2B customer must be complete, and no party may hold an expired document that
 # carries a Financial Implication -- see sf_trading/party_documents.py
 _MASTER_GATE = "sf_trading.party_documents.validate_party_at_transaction"
+# Quantity a Goods In already recorded cannot be received again by a Purchase Receipt or a
+# stock-updating Purchase Invoice made straight from the Purchase Order -- see sf_trading/goods_in.py.
+_GOODS_IN_GATE = "sf_trading.goods_in.validate_receipt_against_goods_in"
 
 # Requires custom_return_reason to say more than just "Other" when that is the picked
 # custom_return_reason_template -- a different, narrower concern than sales_return.py's
@@ -596,6 +605,9 @@ doc_events = {
 		"before_submit": [
 			# GS Issue 18: a customer already sitting at the open-order cap gets no more
 			"sf_trading.sales_order_governance.before_submit_cap_pending_orders",
+			# rows in a strict warehouse reserve their stock on submit, no others do -- see
+			# sf_trading/strict_stock_reservation.py
+			"sf_trading.strict_stock_reservation.reserve_strict_rows_on_submit",
 			# GS Issue 20: same contact-completeness rule as Sales Invoice
 			"sf_trading.sales_order_governance.validate_customer_contact_at_transaction",
 			# GS Issue 13: same credit-customer rule as Sales Invoice -- the only 2-contact-number
@@ -628,7 +640,16 @@ doc_events = {
 			"sf_trading.sdbnb.validate_company_sdbnb",
 			"sf_trading.sbnd.validate_company_sbnd",
 			"sf_trading.stock_reconciliation_account.validate_company_account",
+			"sf_trading.strict_stock_reservation.validate_company",
 		],
+	},
+	# Strict Stock Reservation: the warehouse's own override, and reservations only where it
+	# applies -- see sf_trading/strict_stock_reservation.py
+	"Warehouse": {
+		"validate": "sf_trading.strict_stock_reservation.validate_warehouse",
+	},
+	"Stock Reservation Entry": {
+		"validate": "sf_trading.strict_stock_reservation.validate_reservation_warehouse",
 	},
 	# Purpose "Stock Reconciliation": the Company's own Difference Account and no other, and none
 	# at all without one -- see sf_trading/stock_reconciliation_account.py
@@ -659,9 +680,15 @@ doc_events = {
 			_SUPPLIER_GATE,
 			_MASTER_GATE,
 			"sf_trading.landed_cost.validate_charges",
+			# goods come in by one route only: a Goods In's quantity is invoiced from that Goods In
+			_GOODS_IN_GATE,
 		],
 		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
-		"on_submit": "sf_trading.api.purchase_return.auto_create_pr_return",
+		"on_submit": [
+			"sf_trading.api.purchase_return.auto_create_pr_return",
+			"sf_trading.goods_in.update_invoiced_qty",
+		],
+		"on_cancel": "sf_trading.goods_in.update_invoiced_qty",
 		# Valuation charges are landed costs: held to the expense entry they name
 		"before_submit": "sf_trading.landed_cost.require_links",
 	},
@@ -673,7 +700,7 @@ doc_events = {
 	},
 	"Purchase Receipt": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_BRANCH_HOOK, _LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE, _MASTER_GATE, "sf_trading.landed_cost.validate_charges"],
+		"validate": [_BRANCH_HOOK, _LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE, _MASTER_GATE, "sf_trading.landed_cost.validate_charges", _GOODS_IN_GATE],
 		"before_submit": "sf_trading.landed_cost.require_links",
 	},
 	# every charge names the expense entry it absorbs, and may not take more than it booked
@@ -785,7 +812,7 @@ override_doctype_dashboards = {
 	"Quotation": ["sf_trading.api.quotation.get_dashboard_data"],
 	"Sales Order": [_ADVICE_DASHBOARD],
 	"Sales Invoice": [_ADVICE_DASHBOARD],
-	"Purchase Order": [_ADVICE_DASHBOARD],
+	"Purchase Order": [_ADVICE_DASHBOARD, "sf_trading.goods_in.purchase_order_dashboard"],
 	"Purchase Invoice": [_ADVICE_DASHBOARD],
 	"Journal Entry": [_ADVICE_DASHBOARD],
 	"Dunning": [_ADVICE_DASHBOARD],

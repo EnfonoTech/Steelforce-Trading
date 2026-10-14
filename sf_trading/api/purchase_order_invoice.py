@@ -182,6 +182,11 @@ def untick_stock_when_the_goods_already_arrived(doc, method=None):
 		return
 
 	rows = doc.get("items") or []
+	# an invoice made from a Goods In IS the goods' arrival: the Goods In recorded them without
+	# stock, so this invoice has to take them in, however much of the order arrived before it
+	# (sf_trading/goods_in.py)
+	if rows and all(row.get("custom_goods_in_item") for row in rows):
+		return
 	if any(row.get("purchase_receipt") or row.get("pr_detail") for row in rows):
 		message = _(
 			"Update Stock has been turned off: this invoice bills a Purchase Receipt, which has "
@@ -211,7 +216,13 @@ def make_purchase_invoice(source_name, target_doc=None, args=None):
 		make_purchase_invoice as core_make_purchase_invoice,
 	)
 
+	from sf_trading.goods_in import link_invoice_to_goods_in
+
 	invoice = core_make_purchase_invoice(source_name, target_doc=target_doc, args=args)
+	# goods recorded on a Goods In come into stock with this invoice: it carries those Goods In
+	# rows with Update Stock on, and nothing else (sf_trading/goods_in.py)
+	if link_invoice_to_goods_in(invoice):
+		return invoice
 	try:
 		set_update_stock(invoice)
 	except Exception:
