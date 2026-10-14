@@ -415,6 +415,11 @@ _SDBNB_DN_HOOK = "sf_trading.sdbnb.set_delivery_note_expense_account"
 _SBND_DN_HOOK = "sf_trading.sbnd.set_delivery_note_expense_account"
 
 doc_events = {
+	# a new account with no number gets the next one in its parent's series, before ERPNext builds
+	# the account's name from it -- see sf_trading/account_numbering.py
+	"Account": {
+		"before_insert": "sf_trading.account_numbering.number_new_account",
+	},
 	"Stock Entry": {
 		# before_validate, so the header account faces ERPNext's own account checks
 		# rather than being written past them
@@ -482,7 +487,8 @@ doc_events = {
 			# GS Issue 19: keep every branch's own Credit Limit sub-allocation from adding up to
 			# more than the customer's own company-wide Credit Limit
 			"sf_trading.customer_permission.validate_branch_credit_limit_allocation",
-			"sf_trading.party_accounts.apply_title_case",
+			# every save keeps the display name in Title Case -- see sf_trading/title_case.py
+			"sf_trading.title_case.title_case_party",
 			# only a credit approver may switch "Allow Cash Sales Without Credit Documents"
 			"sf_trading.sales_order_governance.validate_cash_override_change",
 			# supporting-document rows, and what a new B2B customer must carry
@@ -496,7 +502,13 @@ doc_events = {
 		],
 		# a brand new customer starts Pending Verification; existing ones were grandfathered
 		# in as Approved by the rollout patch, so this never touches a re-saved customer
-		"before_insert": "sf_trading.credit_customer_approval.default_new_customer_status",
+		"before_insert": [
+			"sf_trading.credit_customer_approval.default_new_customer_status",
+			# before Frappe makes the ID from the name: the ID comes out in Title Case too
+			"sf_trading.title_case.title_case_party",
+		],
+		# a rename from the desk is put in Title Case as well
+		"before_rename": "sf_trading.title_case.title_case_rename",
 	},
 	"Supplier": {
 		"validate": [
@@ -504,13 +516,15 @@ doc_events = {
 			# Tax ID mandatory + unique and a document attached, for every supplier, existing
 			# ones too -- see sf_trading/supplier_validation.py
 			"sf_trading.supplier_validation.validate",
-			"sf_trading.party_accounts.apply_title_case",
+			"sf_trading.title_case.title_case_party",
 			# supporting-document rows, and what a new supplier must carry
 			"sf_trading.party_documents.validate_master",
 		],
 		"on_update": "sf_trading.party_documents.relink_attachments",
 		"onload": "sf_trading.party_documents.set_onload",
 		"before_save": "sf_trading.party_accounts.create_supplier_payable_account",
+		"before_insert": "sf_trading.title_case.title_case_party",
+		"before_rename": "sf_trading.title_case.title_case_rename",
 		"after_insert": "sf_trading.supplier_validation.remind_attachment",
 	},
 	"Driver": {

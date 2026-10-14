@@ -1,10 +1,8 @@
 """
-Party account automation + Title Case for Customer / Supplier.
+Party account automation for Customer / Supplier. (Title Case of their names moved to title_case.py.)
 
 Hooked via doc_events in hooks.py:
-  Customer → validate     → apply_title_case
   Customer → before_save  → create_customer_receivable_account
-  Supplier → validate     → apply_title_case
   Supplier → before_save  → create_supplier_payable_account
 
 Customer: for every Credit Limit row with credit_limit > 0, creates a
@@ -29,11 +27,10 @@ from frappe.utils import flt
 # ── Title Case ────────────────────────────────────────────────────────────────
 
 def apply_title_case(doc, method=None):
-	"""Enforce Title Case on the customer / supplier name on every save."""
-	if doc.doctype == "Customer" and doc.customer_name:
-		doc.customer_name = doc.customer_name.strip().title()
-	elif doc.doctype == "Supplier" and doc.supplier_name:
-		doc.supplier_name = doc.supplier_name.strip().title()
+	"""Kept for anything still pointing here: the rule, and the ID it also covers, are in title_case.py."""
+	from sf_trading.title_case import title_case_party
+
+	title_case_party(doc, method)
 
 
 # ── Account auto-creation ─────────────────────────────────────────────────────

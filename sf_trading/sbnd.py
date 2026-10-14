@@ -614,10 +614,10 @@ def create_sbnd_account(
 
 	ensure_account_type_options()
 
-	abbr = frappe.get_cached_value("Company", company, "abbr")
-	name = account_name + " - " + abbr
+	# found by its name, not by "<name> - <abbr>": the account may carry a number in front (account_numbering.py)
+	name = frappe.db.get_value("Account", {"company": company, "account_name": account_name}, "name")
 
-	if frappe.db.exists("Account", name):
+	if name:
 		if frappe.db.get_value("Account", name, "account_type") != SBND_ACCOUNT_TYPE:
 			frappe.db.set_value("Account", name, "account_type", SBND_ACCOUNT_TYPE)
 		return name
