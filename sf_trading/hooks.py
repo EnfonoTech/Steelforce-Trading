@@ -82,6 +82,8 @@ doctype_js = {
 		"public/js/salesperson_by_company.js",
 		# the whole Sales Order -> Delivery Note -> Sales Invoice chain, not just this one's own hop
 		"public/js/document_trail.js",
+		# no Print on a draft sale; a draft return still prints -- see sf_trading/draft_print.py
+		"public/js/sales_invoice_draft_print.js",
 	],
 	"Stock Entry":      "public/js/stock_entry.js",
 	"Company":          "public/js/company_stock_reco_account.js",
@@ -573,6 +575,8 @@ doc_events = {
 			"sf_trading.planned_payment.apply_planned_payments",
 		],
 		"on_cancel": "sf_trading.api.quotation.update_quotation_status_from_invoice",
+		# a draft sale does not print; a draft return does -- see sf_trading/draft_print.py
+		"before_print": "sf_trading.draft_print.block_draft_sale_print",
 	},
 	"Sales Order": {
 		"before_validate": [
