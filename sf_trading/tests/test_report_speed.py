@@ -139,7 +139,7 @@ class TestAccountsUnder(FrappeTestCase):
 class TestFastAccountingEntries(FrappeTestCase):
 	"""The statement it builds: the stock one with the hint and the EXISTS test gone, everything else kept."""
 
-	def build(self, doctype="GL Entry", accounts=("Cash - T", "Bank - T"), **kwargs):
+	def build(self, doctype="GL Entry", accounts=("Cash - T", "Bank - T"), match_conditions="", **kwargs):
 		filters = frappe._dict(company="Test Co")
 		captured = {}
 
@@ -151,7 +151,7 @@ class TestFastAccountingEntries(FrappeTestCase):
 			report_speed.frappe.db, "get_single_value", return_value=0
 		), patch.object(report_speed, "accounts_under", return_value=list(accounts)), patch.object(
 			financial_statements, "apply_additional_conditions", lambda doctype, query, *a, **k: query
-		), patch("frappe.desk.reportview.build_match_conditions", return_value=""):
+		), patch("frappe.desk.reportview.build_match_conditions", return_value=match_conditions):
 			result = report_speed.fast_get_accounting_entries(doctype, "2026-01-01", "2026-12-31", filters, **kwargs)
 		self.assertEqual(result, ["row"])
 		return captured
@@ -197,6 +197,23 @@ class TestFastAccountingEntries(FrappeTestCase):
 		got = self.build(root_type="Asset", group_by_account=True)
 		self.assertTrue(got["query"].rstrip().endswith("GROUP BY `account`"))
 		self.assertIn("SUM(`debit`)", got["query"])
+		self.assertNotIn("ORDER BY", got["query"])
+
+	def test_the_rows_come_in_the_order_the_forced_index_gave(self):
+		# the statements add the rows up in the order they read them: posting_date, then name (the primary key ends every
+		# secondary-index entry), exactly what scanning posting_date_company_index delivered
+		got = self.build(root_type="Asset")
+		self.assertTrue(got["query"].rstrip().endswith("ORDER BY `posting_date`, `name`"))
+
+	def test_user_permission_conditions_still_come_before_the_order(self):
+		# build_match_conditions text is appended to the end of the statement: the ORDER BY must follow it, never precede it
+		got = self.build(root_type="Asset", match_conditions=" (`tabGL Entry`.`branch` in ('SFSB'))")
+		sql = got["query"]
+		self.assertIn("and (`tabGL Entry`.`branch` in ('SFSB'))", sql)
+		self.assertLess(sql.index("and (`tabGL Entry`.`branch`"), sql.index("ORDER BY"))
+
+	def test_closing_balances_have_no_order_added(self):
+		self.assertNotIn("ORDER BY", self.build("Account Closing Balance", root_type="Asset", period_closing_voucher="PCV-1")["query"])
 
 
 @unittest.skipIf(financial_statements is None, "erpnext is not installed")
@@ -449,7 +466,30 @@ class TestSameFiguresOnRealData(FrappeTestCase):
 			self.skipTest("no ledger data")
 		base = {"company": company, "filter_based_on": "Fiscal Year", "from_fiscal_year": year, "to_fiscal_year": year, "accumulated_values": 0, "include_default_book_entries": 1}
 		for report in ("Balance Sheet", "Profit and Loss Statement", "Cash Flow"):
-			for periodicity in ("Yearly", "Monthly"):
+			for periodicity in ("Yearly", "Quarterly", "Monthly"):
 				filters = dict(base, periodicity=periodicity)
 				with self.subTest(report=report, periodicity=periodicity):
 					self.assertEqual(self.answer(report, filters, True), self.answer(report, filters, False))
+
+	def test_a_date_range_balance_sheet_is_identical_to_the_last_digit(self):
+		# its opening balance is not rounded, so it shows any change in the order the ledger rows are added up in
+		company = frappe.db.get_value("GL Entry", {"is_cancelled": 0}, "company")
+		last = frappe.db.get_value("GL Entry", {"is_cancelled": 0, "company": company}, "max(posting_date)")
+		if not (company and last):
+			self.skipTest("no ledger data")
+		end = frappe.utils.getdate(last)
+		start = frappe.utils.add_months(frappe.utils.get_first_day(end), -2)
+		filters = {"company": company, "filter_based_on": "Date Range", "period_start_date": str(start), "period_end_date": str(end), "periodicity": "Monthly", "include_default_book_entries": 1}
+		self.assertEqual(self.answer("Balance Sheet", filters, True), self.answer("Balance Sheet", filters, False))
+
+	def test_dimension_and_cost_centre_filters_are_identical(self):
+		company = frappe.db.get_value("GL Entry", {"is_cancelled": 0}, "company")
+		year = frappe.db.get_value("Fiscal Year", {}, "name", order_by="year_start_date desc")
+		cost_center = frappe.db.get_value("GL Entry", {"company": company, "cost_center": ["is", "set"]}, "cost_center")
+		if not (company and year and cost_center):
+			self.skipTest("no ledger data with a cost centre")
+		base = {"company": company, "filter_based_on": "Fiscal Year", "from_fiscal_year": year, "to_fiscal_year": year, "accumulated_values": 0, "include_default_book_entries": 1}
+		for report in ("Balance Sheet", "Profit and Loss Statement", "Cash Flow"):
+			filters = dict(base, periodicity="Monthly", cost_center=[cost_center])
+			with self.subTest(report=report):
+				self.assertEqual(self.answer(report, filters, True), self.answer(report, filters, False))

@@ -8,7 +8,8 @@ ERPNext builds a financial statement from the year's GL Entry rows and reads the
    forces `posting_date_company_index` and keeps the root's accounts with an EXISTS(select ... from tabAccount) test,
    so every one of those reads walks EVERY row of the year -- 309,000 on steelforce, about 2 s apiece -- to keep a
    fraction of them. The accounts of a root are few and known, so they are named in the query instead and MariaDB
-   chooses its own way in: only the rows of those accounts are read. Same rows, same totals.
+   chooses its own way in: only the rows of those accounts are read. Same rows, in the same order (posting_date, name,
+   which the forced index used to give for free), so the same totals to the last digit.
 
 2. One query per period and account type. Cash Flow asks `cash_flow.get_account_type_based_gl_data` for
    `sum(credit) - sum(debit)` once for every period and every account type: 72 statements for a monthly year. One
@@ -161,6 +162,11 @@ def fast_get_accounting_entries(
 
 	if group_by_account:
 		query += " GROUP BY `account`"
+	elif doctype == "GL Entry":
+		# CHANGED: the forced index also handed the rows over in posting_date order, then by name (the primary key ends every
+		# secondary-index entry), and the statements add the rows up in the order they read them: another order moves a
+		# floating-point sum in its last digits (a Balance Sheet by Date Range showed an opening balance 3e-9 apart). Say it.
+		query += " ORDER BY `posting_date`, `name`"
 
 	return frappe.db.sql(query, params, as_dict=True)
 
