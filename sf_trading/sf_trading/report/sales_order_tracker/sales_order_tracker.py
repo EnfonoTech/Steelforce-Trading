@@ -44,11 +44,19 @@ Close Check says, from the data on the row, whether closing the order by hand is
 
 The reason is written beside it, and "Tick Ready To Close" on the report ticks every ready order.
 
+Why Not Invoiced says why an open order has no invoice yet, from sf_trading/order_stock.py: an invoice or
+Delivery Note saved and never submitted, the stock short (the line's own warehouse, and where else the rest
+sits), the customer refused by the Sales Invoice gates, a delivery date not come, an order on hold, goods
+delivered and never billed -- and, when none of those is the matter, "Stock Ready, Not Invoiced": the order
+that is simply waiting for someone. Stock says whether the warehouse holds what is still to be delivered
+(In Stock / Part Stock / No Stock). "Stock Drill-Down" opens the Sales Order Stock Drill Down report on the
+order: item by item, warehouse by warehouse, the orders competing for the same goods.
+
 Views: Order Wise (one row per order) and Item Wise (one row per order line: ordered, delivered,
-returned, still to deliver and billed per item). Filters: company, tracking state, ERPNext status,
-customer, customer group, territory, branch, cost center, sales person, item, item group, payment,
-converted to (invoice / delivery note / both / neither), has a return, return stock status, order
-and delivery date windows, a single order.
+returned, still to deliver and billed per item, and the stock behind the line). Filters: company, tracking
+state, why not invoiced, stock, ERPNext status, customer, customer group, territory, branch, cost center,
+sales person, item, item group, payment, converted to (invoice / delivery note / both / neither), has a
+return, return stock status, order and delivery date windows, a single order.
 """
 
 from collections import defaultdict
@@ -56,6 +64,8 @@ from collections import defaultdict
 import frappe
 from frappe import _
 from frappe.utils import cint, cstr, date_diff, flt, getdate, nowdate
+
+from sf_trading import order_stock
 
 TOLERANCE = 0.005
 CHUNK = 1000
@@ -105,6 +115,8 @@ def execute(filters=None):
 
 	orders = get_orders(filters)
 	facts = get_facts([o.name for o in orders], filters.company)
+	# the stock, drafts and customer gates behind "why not invoiced": only for orders with something left to invoice
+	facts.stock = order_stock.load([o for o in orders if order_stock.needs_reason(o)], filters.company)
 	today = getdate(nowdate())
 	rows = []
 	for order in orders:
@@ -116,7 +128,7 @@ def execute(filters=None):
 	currency = frappe.get_cached_value("Company", filters.company, "default_currency")
 	summary = get_summary(rows, currency)
 	if filters.get("view") == ITEM_WISE:
-		return get_item_columns(), item_rows(rows, filters), None, None, summary
+		return get_item_columns(), item_rows(rows, filters, facts), None, None, summary
 	return get_columns(), rows, None, None, summary
 
 
@@ -146,7 +158,7 @@ def get_orders(filters) -> list:
 
 	fields = ["name", "transaction_date", "delivery_date", "customer", "customer_name", "status", "grand_total",
 		"per_delivered", "per_billed", "advance_paid", "skip_delivery_note"]
-	for optional in ("branch", "customer_group", "territory", "cost_center", "custom_sales_person"):
+	for optional in ("branch", "customer_group", "territory", "cost_center", "custom_sales_person", "custom_payment_mode"):
 		if meta.has_field(optional):
 			fields.append(optional)
 	return frappe.get_list("Sales Order", filters=conditions, fields=fields, order_by="transaction_date desc, name desc",
@@ -385,6 +397,9 @@ def build_row(order, facts, today) -> frappe._dict:
 	billed_in_full = flt(order.per_billed, 2) >= 100
 	pending_qty = flt(facts.pending_return_qty.get(name), 3)
 
+	stock = facts.get("stock")
+	reason, why_detail, stock_state = order_stock.reason_for(order, stock, today) if stock else ("", "", "")
+
 	state = classify(order.status, days_overdue, paid_state, returned, converted, billed_in_full)
 	reasons = sorted({cstr(r.get("reason")).strip() for r in si_returns.values() if cstr(r.get("reason")).strip()})
 	check, check_reason = close_check(order.status, state, billed_in_full, paid_state, outstanding, returned,
@@ -404,6 +419,12 @@ def build_row(order, facts, today) -> frappe._dict:
 		status=order.status,
 		converted_to=converted_to(invoices, delivery_notes),
 		tracking_state=state,
+		why_not_invoiced=reason,
+		why_detail=why_detail,
+		stock_drilldown=name if reason else "",
+		stock_check=stock_state,
+		stock_there=1 if reason in order_stock.ACTIONABLE and stock_state == order_stock.IN_STOCK else 0,
+		waiting_days=date_diff(today, order.transaction_date) if reason and order.get("transaction_date") else 0,
 		needs_attention=state in ATTENTION_STATES,
 		grand_total=flt(order.grand_total),
 		per_delivered=flt(order.per_delivered),
@@ -436,6 +457,10 @@ def wanted(row, filters) -> bool:
 		return False
 	if filters.get("payment_state") and row.payment_state != filters.payment_state:
 		return False
+	if filters.get("why_not_invoiced") and row.why_not_invoiced != filters.why_not_invoiced:
+		return False
+	if filters.get("stock_check") and row.stock_check != filters.stock_check:
+		return False
 	if cint(filters.get("has_return")) and not row.has_return:
 		return False
 	if filters.get("converted_to") and row.converted_to != filters.converted_to:
@@ -463,6 +488,10 @@ def get_summary(rows, currency) -> list:
 		{"label": _("Overdue - Returned"), "value": count(OVERDUE_RETURNED), "datatype": "Int", "indicator": "orange"},
 		{"label": _("Converted, Open"), "value": count(CONVERTED), "datatype": "Int", "indicator": "blue"},
 		{"label": _("Not Due"), "value": count(NOT_DUE), "datatype": "Int", "indicator": "green"},
+		{"label": _("Stock There, Not Invoiced"), "datatype": "Int", "indicator": "red",
+			"value": len([r for r in rows if r.stock_there])},
+		{"label": _("Waiting For Stock"), "datatype": "Int", "indicator": "orange",
+			"value": len([r for r in rows if r.why_not_invoiced in (order_stock.NO_STOCK, order_stock.PART_STOCK)])},
 		{"label": _("Ready To Close"), "datatype": "Int", "indicator": "green",
 			"value": len([r for r in rows if r.close_check == READY_TO_CLOSE])},
 		{"label": _("Unpaid On Open Orders"), "datatype": "Currency", "currency": currency, "indicator": "red",
@@ -470,11 +499,14 @@ def get_summary(rows, currency) -> list:
 	]
 
 
-def item_rows(rows, filters) -> list:
-	"""One row per order line of the orders shown, carrying the order's state."""
+def item_rows(rows, filters, facts=None) -> list:
+	"""One row per order line of the orders shown, carrying the order's state and, for a line still to be
+	delivered, the stock behind it."""
 	by_order = {r.sales_order: r for r in rows}
 	if not by_order:
 		return []
+	stock = (facts or {}).get("stock")
+	behind = {(order, line.name): line for order, lines in (stock.lines if stock else {}).items() for line in lines}
 	conditions = {"parent": ["in", list(by_order)]}
 	if filters.get("item_code"):
 		conditions["item_code"] = filters.item_code
@@ -483,15 +515,21 @@ def item_rows(rows, filters) -> list:
 		conditions["item_group"] = ["in", frappe.get_all("Item Group", filters={"lft": [">=", lft], "rgt": ["<=", rgt]},
 			pluck="name") or [filters.item_group]]
 	lines = frappe.get_all("Sales Order Item", filters=conditions,
-		fields=["parent", "idx", "item_code", "item_name", "item_group", "uom", "qty", "delivered_qty", "returned_qty",
+		fields=["name", "parent", "idx", "item_code", "item_name", "item_group", "uom", "qty", "delivered_qty", "returned_qty",
 			"rate", "amount", "billed_amt", "warehouse"])
 	out = []
 	for line in lines:
 		order = by_order.get(line.parent)
 		if not order:
 			continue
+		held = behind.get((line.parent, line.name))
 		out.append(frappe._dict(
 			order,
+			line_stock=held.state if held and held.tracked else "",
+			stock_at_warehouse=held.actual if held and held.tracked else None,
+			reserved_total=held.reserved if held and held.tracked else None,
+			stock_elsewhere=", ".join("%s %s" % (warehouse, order_stock.qty(count)) for warehouse, count in
+				sorted(held.elsewhere.items(), key=lambda kv: -kv[1])) if held and held.tracked else "",
 			item_code=line.item_code,
 			item_name=line.item_name,
 			item_group=line.item_group,
@@ -521,6 +559,7 @@ def get_item_columns() -> list:
 		col("delivery_date", "Delivery Date", "Date", 95),
 		col("days_overdue", "Days Overdue", "Int", 90),
 		col("tracking_state", "Tracking State", "Data", 150),
+		col("why_not_invoiced", "Why Not Invoiced", "Data", 170),
 		col("item_code", "Item", "Link", 130, "Item"),
 		col("item_name", "Item Name", "Data", 200),
 		col("item_group", "Item Group", "Link", 120, "Item Group"),
@@ -529,6 +568,10 @@ def get_item_columns() -> list:
 		col("delivered_qty", "Delivered Qty", "Float", 100),
 		col("returned_qty", "Returned Qty", "Float", 100),
 		col("pending_qty", "Still To Deliver", "Float", 105),
+		col("line_stock", "Line Stock", "Data", 95),
+		col("stock_at_warehouse", "Stock At Warehouse", "Float", 115),
+		col("reserved_total", "Reserved (All Orders)", "Float", 125),
+		col("stock_elsewhere", "Stock Elsewhere", "Data", 220),
 		col("rate", "Rate", "Currency", 95),
 		col("line_amount", "Line Amount", "Currency", 110),
 		col("billed_amt", "Billed", "Currency", 105),
@@ -536,7 +579,7 @@ def get_item_columns() -> list:
 		col("payment_state", "Payment", "Data", 100),
 		col("return_stock", "Return Stock", "Data", 130),
 		col("close_check", "Close?", "Data", 150),
-		col("close_reason", "Why", "Data", 320),
+		col("close_reason", "Close Check Reason", "Data", 320),
 		col("suggested_action", "Suggested Action", "Data", 300),
 		{"fieldname": "can_close", "label": _("Can Close"), "fieldtype": "Check", "width": 70, "hidden": 1},
 	]
@@ -557,6 +600,10 @@ def get_columns() -> list:
 		col("days_overdue", "Days Overdue", "Int", 90),
 		col("status", "ERPNext Status", "Data", 130),
 		col("tracking_state", "Tracking State", "Data", 150),
+		col("why_not_invoiced", "Why Not Invoiced", "Data", 175),
+		col("stock_check", "Stock", "Data", 95),
+		col("waiting_days", "Days Waiting", "Int", 90),
+		col("why_detail", "Why Not Invoiced - Details", "Data", 380),
 		col("converted_to", "Converted To", "Data", 105),
 		col("grand_total", "Order Total", "Currency", 110),
 		col("per_delivered", "% Delivered", "Percent", 90),
@@ -574,8 +621,9 @@ def get_columns() -> list:
 		col("return_reasons", "Return Reason", "Data", 130),
 		col("pending_return_qty", "Qty Awaiting DN Return", "Float", 120),
 		col("close_check", "Close?", "Data", 150),
-		col("close_reason", "Why", "Data", 360),
+		col("close_reason", "Close Check Reason", "Data", 360),
 		col("suggested_action", "Suggested Action", "Data", 340),
+		col("stock_drilldown", "Stock Drill-Down", "Data", 115),
 		{"fieldname": "can_close", "label": _("Can Close"), "fieldtype": "Check", "width": 70, "hidden": 1},
 	]
 

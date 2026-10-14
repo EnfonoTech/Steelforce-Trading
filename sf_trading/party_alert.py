@@ -90,6 +90,19 @@ def _refusal(gate, voucher) -> str | None:
 	return None
 
 
+def party_problems(doctype: str, header: dict) -> list:
+	"""What the gates registered on `doctype` refuse its party for, for a voucher with this header: one sentence
+	per refusing gate, empty when nothing refuses. No permission check of its own -- the caller (a report that
+	already holds the party's orders) has its own; `get_party_alert` is the one the form calls."""
+	voucher = _voucher(doctype, header)
+	problems = []
+	for path in GATES.get(doctype, ()):
+		text = _refusal(frappe.get_attr(path), voucher)
+		if text and text not in problems:
+			problems.append(text)
+	return problems
+
+
 @frappe.whitelist()
 def get_party_alert(doctype: str, doc) -> dict:
 	"""What the voucher's customer or supplier would be refused for, by the gates that refuse it.

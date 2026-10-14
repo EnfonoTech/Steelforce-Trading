@@ -9,6 +9,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 from frappe.utils import add_days, getdate, nowdate
 
+from sf_trading import order_stock
 from sf_trading.sf_trading.report.sales_order_tracker import sales_order_tracker as sot
 
 TODAY = getdate(nowdate())
@@ -299,3 +300,117 @@ class TestDetailAndFilters(FrappeTestCase):
 		columns, rows, *_ = sot.execute({"company": company, "include_closed": 1, "converted_to": "Neither",
 			"close_check": "Keep Open"})
 		self.assertIn("close_check", [c["fieldname"] for c in columns])
+
+
+class TestWhyNotInvoiced(FrappeTestCase):
+	"""The reason an open order has no invoice, beside its tracking state (sf_trading/order_stock.py)."""
+
+	def stock_facts(self, lines=None, **kw):
+		stock = frappe._dict(lines=lines or {}, draft_invoices={}, draft_notes={}, delivered_notes={}, blocks={})
+		stock.update(kw)
+		return frappe._dict(open_qty={}, invoices={}, delivery_notes={}, si_returns={}, dn_returns={}, pending_return_qty={},
+			stock=stock)
+
+	def held(self, item="ITEM-A", pending=10, actual=100, warehouse="SFSB - SFB", name="r1"):
+		row = frappe._dict(name=name, item_code=item, pending=pending, pending_stock=pending, actual=actual, reserved=0,
+			warehouse=warehouse, tracked=True, elsewhere={"SFSS - SFB": 7})
+		row.state = order_stock.line_state(pending, actual)
+		return row
+
+	def test_stock_there_and_nothing_raised_is_flagged_and_counted_as_waiting(self):
+		facts = self.stock_facts({"SO-1": [self.held()]})
+		row = sot.build_row(order(per_delivered=0, delivery_date=TODAY), facts, TODAY)
+		self.assertEqual(row.why_not_invoiced, order_stock.STOCK_READY)
+		self.assertEqual(row.stock_check, order_stock.IN_STOCK)
+		self.assertEqual(row.stock_there, 1)
+		self.assertEqual(row.waiting_days, 30)
+		self.assertEqual(row.stock_drilldown, "SO-1")
+		self.assertIn("nothing has been raised", row.why_detail)
+
+	def test_short_stock_is_the_reason_and_not_counted_as_stock_there(self):
+		facts = self.stock_facts({"SO-1": [self.held(pending=40, actual=22)]})
+		row = sot.build_row(order(per_delivered=0, delivery_date=TODAY), facts, TODAY)
+		self.assertEqual((row.why_not_invoiced, row.stock_check, row.stock_there),
+			(order_stock.PART_STOCK, order_stock.PART_STOCK, 0))
+		self.assertIn("22 of 40 at SFSB - SFB", row.why_detail)
+		self.assertIn("also 7 in SFSS - SFB", row.why_detail)
+
+	def test_a_draft_invoice_is_the_reason_even_with_the_stock_there(self):
+		facts = self.stock_facts({"SO-1": [self.held()]}, draft_invoices={"SO-1": {"20010008906"}})
+		row = sot.build_row(order(per_delivered=0, delivery_date=TODAY), facts, TODAY)
+		self.assertEqual(row.why_not_invoiced, order_stock.DRAFT_INVOICE)
+		# the stock is there all the same: it is still one the report counts as "stock there, not invoiced"
+		self.assertEqual(row.stock_there, 1)
+
+	def test_an_order_on_hold_or_not_due_is_waiting_on_purpose_and_is_not_stock_there_not_invoiced(self):
+		facts = self.stock_facts({"SO-1": [self.held()]})
+		held = sot.build_row(order(status="On Hold", per_delivered=0), facts, TODAY)
+		not_due = sot.build_row(order(per_delivered=0, delivery_date=add_days(TODAY, 4)), facts, TODAY)
+		self.assertEqual((held.why_not_invoiced, held.stock_there), (order_stock.ON_HOLD, 0))
+		self.assertEqual((not_due.why_not_invoiced, not_due.stock_there), (order_stock.NOT_DUE, 0))
+
+	def test_the_customer_the_invoice_would_be_refused_for(self):
+		facts = self.stock_facts({"SO-1": [self.held()]}, blocks={("C", ""): ["Customer is not approved"]})
+		row = sot.build_row(order(per_delivered=0, delivery_date=TODAY), facts, TODAY)
+		self.assertEqual(row.why_not_invoiced, order_stock.CUSTOMER_BLOCKED)
+
+	def test_a_finished_or_billed_order_has_no_reason(self):
+		facts = self.stock_facts({"SO-1": [self.held()]})
+		for values in (dict(status="Completed"), dict(status="Closed"), dict(per_billed=100)):
+			row = sot.build_row(order(**values), facts, TODAY)
+			self.assertEqual((row.why_not_invoiced, row.why_detail, row.stock_there, row.waiting_days, row.stock_drilldown),
+				("", "", 0, 0, ""), values)
+
+	def test_without_the_stock_facts_nothing_changes(self):
+		facts = frappe._dict(open_qty={}, invoices={}, delivery_notes={}, si_returns={}, dn_returns={}, pending_return_qty={})
+		row = sot.build_row(order(), facts, TODAY)
+		self.assertEqual((row.why_not_invoiced, row.stock_check, row.stock_there), ("", "", 0))
+
+	def test_filters_by_the_reason_and_by_the_stock(self):
+		row = frappe._dict(tracking_state=sot.CONVERTED, needs_attention=False, payment_state=sot.NOT_INVOICED, has_return=0,
+			why_not_invoiced=order_stock.STOCK_READY, stock_check=order_stock.IN_STOCK)
+		self.assertTrue(sot.wanted(row, frappe._dict(why_not_invoiced=order_stock.STOCK_READY)))
+		self.assertFalse(sot.wanted(row, frappe._dict(why_not_invoiced=order_stock.NO_STOCK)))
+		self.assertTrue(sot.wanted(row, frappe._dict(stock_check=order_stock.IN_STOCK)))
+		self.assertFalse(sot.wanted(row, frappe._dict(stock_check=order_stock.NO_STOCK)))
+
+	def test_the_summary_counts_stock_there_and_waiting_for_stock(self):
+		def row(reason, check):
+			return frappe._dict(tracking_state=sot.CONVERTED, close_check=sot.KEEP_OPEN, outstanding_amount=0, why_not_invoiced=reason,
+				stock_there=1 if reason and check == order_stock.IN_STOCK else 0)
+		rows = [row(order_stock.STOCK_READY, order_stock.IN_STOCK), row(order_stock.DRAFT_INVOICE, order_stock.IN_STOCK),
+			row(order_stock.NO_STOCK, order_stock.NO_STOCK), row(order_stock.PART_STOCK, order_stock.PART_STOCK), row("", "")]
+		by_label = {card["label"]: card["value"] for card in sot.get_summary(rows, "BHD")}
+		self.assertEqual(by_label["Stock There, Not Invoiced"], 2)
+		self.assertEqual(by_label["Waiting For Stock"], 2)
+
+	def test_the_item_wise_view_carries_the_stock_behind_each_line(self):
+		parent = frappe._dict(sales_order="SO-1", needs_attention=False, days_overdue=0, tracking_state=sot.CONVERTED,
+			customer_name="C")
+		lines = [
+			frappe._dict(name="r1", parent="SO-1", idx=1, item_code="A", item_name="A", item_group="G", uom="Nos", qty=40,
+				delivered_qty=0, returned_qty=0, rate=1, amount=40, billed_amt=0, warehouse="SFSB - SFB"),
+			frappe._dict(name="r2", parent="SO-1", idx=2, item_code="B", item_name="B", item_group="G", uom="Nos", qty=3,
+				delivered_qty=3, returned_qty=0, rate=1, amount=3, billed_amt=3, warehouse="SFSB - SFB"),
+		]
+		facts = self.stock_facts({"SO-1": [self.held("A", pending=40, actual=22, name="r1")]})
+		with patch.object(frappe, "get_all", return_value=lines):
+			rows = sot.item_rows([parent], frappe._dict(), facts)
+		first, second = rows
+		self.assertEqual((first.line_stock, first.stock_at_warehouse, first.reserved_total), (order_stock.PART_STOCK, 22, 0))
+		self.assertEqual(first.stock_elsewhere, "SFSS - SFB 7")
+		# a line with nothing left to deliver has no stock to speak of
+		self.assertEqual((second.line_stock, second.stock_at_warehouse, second.stock_elsewhere), ("", None, ""))
+
+	def test_the_columns_are_there_in_both_views(self):
+		order_wise = [c["fieldname"] for c in sot.get_columns()]
+		for name in ("why_not_invoiced", "stock_check", "waiting_days", "why_detail", "stock_drilldown"):
+			self.assertIn(name, order_wise)
+		item_wise = [c["fieldname"] for c in sot.get_item_columns()]
+		for name in ("why_not_invoiced", "line_stock", "stock_at_warehouse", "reserved_total", "stock_elsewhere"):
+			self.assertIn(name, item_wise)
+
+	def test_the_close_checks_reason_is_not_confused_with_it(self):
+		labels = {c["fieldname"]: c["label"] for c in sot.get_columns()}
+		self.assertNotEqual(labels["close_reason"], "Why")
+		self.assertIn("Why Not Invoiced", labels["why_not_invoiced"])
