@@ -414,3 +414,73 @@ class TestWhyNotInvoiced(FrappeTestCase):
 		labels = {c["fieldname"]: c["label"] for c in sot.get_columns()}
 		self.assertNotEqual(labels["close_reason"], "Why")
 		self.assertIn("Why Not Invoiced", labels["why_not_invoiced"])
+
+
+class TestWhatTheTeamActsOn(FrappeTestCase):
+	"""The reason, what to do about it and where, up front, and the orders to act on first."""
+
+	def stock_facts(self, lines, **kw):
+		stock = frappe._dict(lines=lines, draft_invoices={}, draft_notes={}, delivered_notes={}, blocks={})
+		stock.update(kw)
+		return frappe._dict(open_qty={}, invoices={}, delivery_notes={}, si_returns={}, dn_returns={}, pending_return_qty={}, stock=stock)
+
+	def held(self, item="A", pending=10, actual=100, warehouse="SFSB - SFB", elsewhere=None):
+		row = frappe._dict(name=item + "-row", item_code=item, pending=pending, pending_stock=pending, actual=actual, reserved=0,
+			warehouse=warehouse, tracked=True, elsewhere=elsewhere or {})
+		row.state = order_stock.line_state(pending, actual)
+		return row
+
+	def row(self, lines, **values):
+		return sot.build_row(order(per_delivered=0, delivery_date=TODAY, **values), self.stock_facts({"SO-1": lines}), TODAY)
+
+	def test_stock_there_says_raise_the_invoice_and_names_the_warehouse(self):
+		row = self.row([self.held(warehouse="SFSS - SFB")])
+		self.assertEqual((row.why_not_invoiced, row.needs_action, row.warehouses), (order_stock.STOCK_READY, 1, "SFSS - SFB"))
+		self.assertIn("Raise the Sales Invoice", row.next_step)
+
+	def test_no_stock_is_not_something_to_invoice_but_says_where_it_sits(self):
+		row = self.row([self.held(pending=10, actual=0, elsewhere={"SFWH - SFB": 82})])
+		self.assertEqual((row.why_not_invoiced, row.needs_action), (order_stock.NO_STOCK, 0))
+		self.assertEqual(row.next_step, "Transfer the stock from SFWH - SFB (82 there) or buy it")
+
+	def test_an_order_with_lines_in_two_warehouses_names_both(self):
+		row = self.row([self.held("A", warehouse="SFSS - SFB"), self.held("B", warehouse="SFSB - SFB")])
+		self.assertEqual(row.warehouses, "SFSB - SFB, SFSS - SFB")
+
+	def test_a_finished_order_has_no_step_and_nothing_to_act_on(self):
+		row = sot.build_row(order(status="Completed"), self.stock_facts({"SO-1": [self.held()]}), TODAY)
+		self.assertEqual((row.next_step, row.needs_action, row.warehouses), ("", 0, ""))
+
+	def test_the_orders_to_act_on_come_first_longest_waiting_first(self):
+		def r(name, **v):
+			base = dict(sales_order=name, needs_action=0, needs_attention=False, days_overdue=0, waiting_days=0)
+			base.update(v)
+			return frappe._dict(base)
+		rows = [r("OVERDUE-NOT-ACTIONABLE", needs_attention=True, days_overdue=30), r("ACT-1-DAY", needs_action=1, waiting_days=1),
+			r("QUIET"), r("ACT-9-DAYS", needs_action=1, waiting_days=9), r("ACT-3-DAYS", needs_action=1, waiting_days=3)]
+		rows.sort(key=sot.row_order)
+		self.assertEqual([x.sales_order for x in rows], ["ACT-9-DAYS", "ACT-3-DAYS", "ACT-1-DAY", "OVERDUE-NOT-ACTIONABLE", "QUIET"])
+
+	def test_needs_action_now_shows_only_those(self):
+		row = frappe._dict(tracking_state=sot.CONVERTED, needs_attention=False, payment_state=sot.NOT_INVOICED, has_return=0,
+			needs_action=1, why_not_invoiced=order_stock.STOCK_READY, stock_check=order_stock.IN_STOCK)
+		self.assertTrue(sot.wanted(row, frappe._dict(needs_action=1)))
+		self.assertTrue(sot.wanted(row, frappe._dict(needs_action=0)))
+		self.assertFalse(sot.wanted(frappe._dict(row, needs_action=0), frappe._dict(needs_action=1)))
+
+	def test_a_card_counts_the_orders_to_act_on(self):
+		def r(action):
+			return frappe._dict(tracking_state=sot.CONVERTED, close_check=sot.KEEP_OPEN, outstanding_amount=0, why_not_invoiced="x",
+				stock_there=0, needs_action=action)
+		by_label = {card["label"]: card["value"] for card in sot.get_summary([r(1), r(1), r(0)], "BHD")}
+		self.assertEqual(by_label["Needs Action Now"], 2)
+
+	def test_the_reason_the_step_and_the_warehouse_are_the_first_columns_after_the_order_and_customer(self):
+		names = [c["fieldname"] for c in sot.get_columns()]
+		self.assertEqual(names[:6], ["sales_order", "customer_name", "why_not_invoiced", "next_step", "stock_check", "warehouses"])
+		self.assertEqual(len(names), len(set(names)), "a column is listed twice")
+
+	def test_item_wise_has_the_step_beside_the_reason(self):
+		names = [c["fieldname"] for c in sot.get_item_columns()]
+		self.assertEqual(names.index("next_step"), names.index("why_not_invoiced") + 1)
+		self.assertEqual(len(names), len(set(names)))

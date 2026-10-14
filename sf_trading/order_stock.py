@@ -54,8 +54,9 @@ NOT_INVOICED = "Not Invoiced Yet"
 REASONS = (STOCK_READY, DRAFT_INVOICE, DRAFT_DELIVERY, NO_STOCK, PART_STOCK, CUSTOMER_BLOCKED,
 	DELIVERED_NOT_BILLED, NOT_DUE, ON_HOLD, NOT_INVOICED)
 
-#: the reasons somebody has to act on (an order on hold, or not due yet, is waiting on purpose)
-ACTIONABLE = (STOCK_READY, DRAFT_INVOICE, DRAFT_DELIVERY, CUSTOMER_BLOCKED)
+#: the reasons somebody has to act on today. An order on hold, or not due yet, is waiting on purpose; No Stock /
+#: Part Stock wait for the warehouse and purchasing (they have a next step too, but nobody can invoice yet)
+ACTIONABLE = (STOCK_READY, DRAFT_INVOICE, DRAFT_DELIVERY, CUSTOMER_BLOCKED, DELIVERED_NOT_BILLED, NOT_INVOICED)
 
 #: statuses of an order that has nothing left to invoice or cannot be
 FINISHED = ("Closed", "Completed", "Cancelled", "Draft")
@@ -124,6 +125,42 @@ def stock_note(lines) -> str:
 	if len(short) > NOTE_LINES:
 		parts.append(_("and %s more line(s)") % (len(short) - NOTE_LINES))
 	return "; ".join(parts)
+
+
+def warehouses_of(lines) -> str:
+	"""The warehouses an order still has goods to deliver from, as one text: "SFSB - SFB, SFSS - SFB"."""
+	return ", ".join(sorted({line.warehouse for line in lines if line.get("warehouse")}))
+
+
+def next_step(reason, lines=()) -> str:
+	"""What the team does about an order that has this reason, in a sentence ("" when there is no reason)."""
+	if reason == STOCK_READY:
+		return _("Raise the Sales Invoice now: the stock is there")
+	if reason == DRAFT_INVOICE:
+		return _("Open the draft invoice and submit it")
+	if reason == DRAFT_DELIVERY:
+		return _("Submit the draft Delivery Note, then raise the invoice")
+	if reason == CUSTOMER_BLOCKED:
+		return _("Complete the customer's details or approval (see the details), then invoice")
+	if reason == DELIVERED_NOT_BILLED:
+		return _("Raise the invoice for the goods already delivered")
+	if reason == NOT_INVOICED:
+		return _("Raise the Sales Invoice")
+	if reason in (NO_STOCK, PART_STOCK):
+		# where the rest of the first short line sits, when it sits anywhere the user may see
+		short = [line for line in lines if line.get("tracked") and line.get("state") in (PART_STOCK, NO_STOCK)
+			and line.get("elsewhere")]
+		if short:
+			warehouse, count = max(short[0].elsewhere.items(), key=lambda item: item[1])
+			return _("Transfer the stock from %s (%s there) or buy it") % (warehouse, qty(count))
+		if reason == PART_STOCK:
+			return _("Invoice the part that is in stock, or complete the stock first")
+		return _("Get the stock: buy it or transfer it in")
+	if reason == NOT_DUE:
+		return _("Nothing yet: the delivery date has not come")
+	if reason == ON_HOLD:
+		return _("Release the hold, or close the order")
+	return ""
 
 
 def why_not_invoiced(order, today, *, lines=(), draft_invoices=(), draft_notes=(), delivered_notes=(), blocks=()) -> tuple:

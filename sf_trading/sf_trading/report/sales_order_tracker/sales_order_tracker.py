@@ -48,9 +48,13 @@ Why Not Invoiced says why an open order has no invoice yet, from sf_trading/orde
 Delivery Note saved and never submitted, the stock short (the line's own warehouse, and where else the rest
 sits), the customer refused by the Sales Invoice gates, a delivery date not come, an order on hold, goods
 delivered and never billed -- and, when none of those is the matter, "Stock Ready, Not Invoiced": the order
-that is simply waiting for someone. Stock says whether the warehouse holds what is still to be delivered
-(In Stock / Part Stock / No Stock). "Stock Drill-Down" opens the Sales Order Stock Drill Down report on the
-order: item by item, warehouse by warehouse, the orders competing for the same goods.
+that is simply waiting for someone. Next Step says what the team does about it, in a sentence; Stock says
+whether the warehouse holds what is still to be delivered (In Stock / Part Stock / No Stock) and Warehouse
+which warehouse(s) the goods are to come from. Colour says who has to move: RED = somebody raises or submits
+something today, ORANGE = chase the stock, GREEN = nothing to do yet, GRAY = on hold. The orders somebody has
+to act on come first (oldest first), and "Needs Action Now" shows only those. "Stock Drill-Down" opens the
+Sales Order Stock Drill Down report on the order: item by item, warehouse by warehouse, the orders competing
+for the same goods.
 
 Views: Order Wise (one row per order) and Item Wise (one row per order line: ordered, delivered,
 returned, still to deliver and billed per item, and the stock behind the line). Filters: company, tracking
@@ -124,7 +128,7 @@ def execute(filters=None):
 		if wanted(row, filters):
 			rows.append(row)
 
-	rows.sort(key=lambda r: (not r.needs_attention, -r.days_overdue, r.sales_order))
+	rows.sort(key=row_order)
 	currency = frappe.get_cached_value("Company", filters.company, "default_currency")
 	summary = get_summary(rows, currency)
 	if filters.get("view") == ITEM_WISE:
@@ -399,6 +403,7 @@ def build_row(order, facts, today) -> frappe._dict:
 
 	stock = facts.get("stock")
 	reason, why_detail, stock_state = order_stock.reason_for(order, stock, today) if stock else ("", "", "")
+	held = stock.lines.get(name, []) if stock else []
 
 	state = classify(order.status, days_overdue, paid_state, returned, converted, billed_in_full)
 	reasons = sorted({cstr(r.get("reason")).strip() for r in si_returns.values() if cstr(r.get("reason")).strip()})
@@ -421,6 +426,9 @@ def build_row(order, facts, today) -> frappe._dict:
 		tracking_state=state,
 		why_not_invoiced=reason,
 		why_detail=why_detail,
+		next_step=order_stock.next_step(reason, held),
+		needs_action=1 if reason in order_stock.ACTIONABLE else 0,
+		warehouses=order_stock.warehouses_of(held) if reason else "",
 		stock_drilldown=name if reason else "",
 		stock_check=stock_state,
 		stock_there=1 if reason in order_stock.ACTIONABLE and stock_state == order_stock.IN_STOCK else 0,
@@ -449,6 +457,13 @@ def build_row(order, facts, today) -> frappe._dict:
 	)
 
 
+def row_order(row) -> tuple:
+	"""The orders somebody has to act on come first, the longest waiting first; then the ones that need attention
+	(overdue, most days first); then the rest."""
+	return (not row.needs_action, -cint(row.waiting_days) if row.needs_action else 0, not row.needs_attention,
+		-cint(row.days_overdue), row.sales_order)
+
+
 def wanted(row, filters) -> bool:
 	state = filters.get("tracking_state")
 	if state == NEEDS_ATTENTION and not row.needs_attention:
@@ -458,6 +473,8 @@ def wanted(row, filters) -> bool:
 	if filters.get("payment_state") and row.payment_state != filters.payment_state:
 		return False
 	if filters.get("why_not_invoiced") and row.why_not_invoiced != filters.why_not_invoiced:
+		return False
+	if cint(filters.get("needs_action")) and not row.needs_action:
 		return False
 	if filters.get("stock_check") and row.stock_check != filters.stock_check:
 		return False
@@ -488,6 +505,8 @@ def get_summary(rows, currency) -> list:
 		{"label": _("Overdue - Returned"), "value": count(OVERDUE_RETURNED), "datatype": "Int", "indicator": "orange"},
 		{"label": _("Converted, Open"), "value": count(CONVERTED), "datatype": "Int", "indicator": "blue"},
 		{"label": _("Not Due"), "value": count(NOT_DUE), "datatype": "Int", "indicator": "green"},
+		{"label": _("Needs Action Now"), "datatype": "Int", "indicator": "red",
+			"value": len([r for r in rows if r.needs_action])},
 		{"label": _("Stock There, Not Invoiced"), "datatype": "Int", "indicator": "red",
 			"value": len([r for r in rows if r.stock_there])},
 		{"label": _("Waiting For Stock"), "datatype": "Int", "indicator": "orange",
@@ -544,7 +563,7 @@ def item_rows(rows, filters, facts=None) -> list:
 			billed_amt=flt(line.billed_amt),
 			idx=line.idx,
 		))
-	out.sort(key=lambda r: (not r.needs_attention, -r.days_overdue, r.sales_order, r.idx))
+	out.sort(key=lambda r: row_order(r) + (r.idx,))
 	return out
 
 
@@ -560,6 +579,7 @@ def get_item_columns() -> list:
 		col("days_overdue", "Days Overdue", "Int", 90),
 		col("tracking_state", "Tracking State", "Data", 150),
 		col("why_not_invoiced", "Why Not Invoiced", "Data", 170),
+		col("next_step", "Next Step", "Data", 260),
 		col("item_code", "Item", "Link", 130, "Item"),
 		col("item_name", "Item Name", "Data", 200),
 		col("item_group", "Item Group", "Link", 120, "Item Group"),
@@ -590,20 +610,22 @@ def get_columns() -> list:
 		return {"fieldname": fieldname, "label": _(label), "fieldtype": fieldtype, "width": width, "options": options}
 
 	return [
-		col("sales_order", "Sales Order", "Link", 150, "Sales Order"),
+		col("sales_order", "Sales Order", "Link", 160, "Sales Order"),
+		col("customer_name", "Customer Name", "Data", 180),
+		col("why_not_invoiced", "Why Not Invoiced", "Data", 185),
+		col("next_step", "Next Step", "Data", 300),
+		col("stock_check", "Stock", "Data", 95),
+		col("warehouses", "Warehouse", "Data", 140),
+		col("waiting_days", "Days Waiting", "Int", 90),
+		col("why_detail", "Why Not Invoiced - Details", "Data", 380),
 		col("transaction_date", "Order Date", "Date", 95),
 		col("customer", "Customer", "Link", 130, "Customer"),
-		col("customer_name", "Customer Name", "Data", 180),
 		col("branch", "Branch", "Link", 100, "Branch"),
 		col("sales_person", "Sales Person", "Link", 120, "Sales Person"),
 		col("delivery_date", "Delivery Date", "Date", 95),
 		col("days_overdue", "Days Overdue", "Int", 90),
 		col("status", "ERPNext Status", "Data", 130),
 		col("tracking_state", "Tracking State", "Data", 150),
-		col("why_not_invoiced", "Why Not Invoiced", "Data", 175),
-		col("stock_check", "Stock", "Data", 95),
-		col("waiting_days", "Days Waiting", "Int", 90),
-		col("why_detail", "Why Not Invoiced - Details", "Data", 380),
 		col("converted_to", "Converted To", "Data", 105),
 		col("grand_total", "Order Total", "Currency", 110),
 		col("per_delivered", "% Delivered", "Percent", 90),

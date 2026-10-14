@@ -345,3 +345,51 @@ class TestOneOrder(FrappeTestCase):
 		facts = self.facts(lines={"SO-1": [line()]}, blocks={("C", "Credit"): ["no credit documents"], ("C", ""): []})
 		self.assertEqual(stock.reason_for(order(custom_payment_mode="Credit"), facts, TODAY)[0], stock.CUSTOMER_BLOCKED)
 		self.assertEqual(stock.reason_for(order(custom_payment_mode=""), facts, TODAY)[0], stock.STOCK_READY)
+
+
+class TestNextStep(FrappeTestCase):
+	def test_every_reason_says_what_to_do(self):
+		for reason in stock.REASONS:
+			self.assertTrue(stock.next_step(reason, [line(pending=4, actual=1)]), reason)
+
+	def test_the_rows_somebody_invoices_say_so(self):
+		self.assertIn("Raise the Sales Invoice", stock.next_step(stock.STOCK_READY))
+		self.assertIn("submit", stock.next_step(stock.DRAFT_INVOICE))
+		self.assertIn("Delivery Note", stock.next_step(stock.DRAFT_DELIVERY))
+		self.assertIn("already delivered", stock.next_step(stock.DELIVERED_NOT_BILLED))
+		self.assertIn("customer", stock.next_step(stock.CUSTOMER_BLOCKED).lower())
+
+	def test_no_stock_names_where_the_rest_sits_when_it_sits_anywhere(self):
+		short = line("FLAT BAR", pending=40, actual=0, elsewhere={"SFWH - SFB": 82, "SFSS - SFB": 4})
+		self.assertEqual(stock.next_step(stock.NO_STOCK, [short]), "Transfer the stock from SFWH - SFB (82 there) or buy it")
+
+	def test_no_stock_with_nothing_anywhere_says_to_get_it(self):
+		self.assertEqual(stock.next_step(stock.NO_STOCK, [line(pending=5, actual=0)]), "Get the stock: buy it or transfer it in")
+
+	def test_part_stock_with_nothing_elsewhere(self):
+		self.assertIn("Invoice the part that is in stock", stock.next_step(stock.PART_STOCK, [line(pending=5, actual=2)]))
+
+	def test_a_line_that_is_in_stock_is_not_where_the_transfer_comes_from(self):
+		fine = line("A", pending=1, actual=9, elsewhere={"SFWH - SFB": 50})
+		short = line("B", pending=9, actual=1, elsewhere={"SFSS - SFB": 20})
+		self.assertEqual(stock.next_step(stock.PART_STOCK, [fine, short]), "Transfer the stock from SFSS - SFB (20 there) or buy it")
+
+	def test_no_reason_no_step(self):
+		self.assertEqual(stock.next_step("", []), "")
+		self.assertEqual(stock.next_step("Something Else"), "")
+
+
+class TestWhoHasToMove(FrappeTestCase):
+	def test_what_somebody_acts_on_today(self):
+		for reason in (stock.STOCK_READY, stock.DRAFT_INVOICE, stock.DRAFT_DELIVERY, stock.CUSTOMER_BLOCKED,
+				stock.DELIVERED_NOT_BILLED, stock.NOT_INVOICED):
+			self.assertIn(reason, stock.ACTIONABLE, reason)
+
+	def test_what_waits_on_purpose_or_on_the_warehouse_is_not(self):
+		for reason in (stock.NO_STOCK, stock.PART_STOCK, stock.NOT_DUE, stock.ON_HOLD):
+			self.assertNotIn(reason, stock.ACTIONABLE, reason)
+
+	def test_the_warehouses_of_an_order(self):
+		lines = [line("A", warehouse="SFSS - SFB"), line("B", warehouse="SFSB - SFB"), line("C", warehouse="SFSS - SFB")]
+		self.assertEqual(stock.warehouses_of(lines), "SFSB - SFB, SFSS - SFB")
+		self.assertEqual(stock.warehouses_of([]), "")

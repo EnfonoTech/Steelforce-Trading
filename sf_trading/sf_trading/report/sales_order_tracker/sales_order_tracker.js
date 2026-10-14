@@ -19,18 +19,19 @@ var SF_SOT_COLORS = {
 	"Closed": "gray",
 };
 
-// why an open order has no invoice yet (sf_trading/order_stock.py)
+// why an open order has no invoice yet (sf_trading/order_stock.py), coloured by who has to move:
+// red = somebody raises or submits something today, orange = chase the stock, green = nothing to do yet, gray = held
 var SF_SOT_WHY_COLORS = {
 	"Stock Ready, Not Invoiced": "red",
-	"Invoice In Draft": "orange",
-	"Delivery Note In Draft": "orange",
-	"No Stock": "gray",
-	"Part Stock": "orange",
+	"Invoice In Draft": "red",
+	"Delivery Note In Draft": "red",
 	"Customer Blocked": "red",
-	"Delivered, Not Billed": "orange",
+	"Delivered, Not Billed": "red",
+	"Not Invoiced Yet": "red",
+	"No Stock": "orange",
+	"Part Stock": "orange",
 	"Not Due Yet": "green",
 	"On Hold": "gray",
-	"Not Invoiced Yet": "blue",
 };
 
 // what the warehouse holds against what is still to be delivered
@@ -84,6 +85,12 @@ frappe.query_reports["Sales Order Tracker"] = {
 				"On Hold",
 				"Not Invoiced Yet",
 			].join("\n"),
+		},
+		{
+			fieldname: "needs_action",
+			label: __("Needs Action Now"),
+			fieldtype: "Check",
+			default: 0,
 		},
 		{
 			fieldname: "stock_check",
@@ -157,11 +164,20 @@ frappe.query_reports["Sales Order Tracker"] = {
 			const color = SF_SOT_COLORS[data.tracking_state];
 			value = `<span class="indicator-pill ${color} ellipsis"><span class="ellipsis">${data.tracking_state}</span></span>`;
 		}
-		if (column.fieldname === "why_not_invoiced" && SF_SOT_WHY_COLORS[data.why_not_invoiced]) {
-			const color = SF_SOT_WHY_COLORS[data.why_not_invoiced];
-			value = `<span class="indicator-pill ${color} ellipsis"><span class="ellipsis">${frappe.utils.escape_html(
+		const why_color = SF_SOT_WHY_COLORS[data.why_not_invoiced];
+		if (column.fieldname === "why_not_invoiced" && why_color) {
+			value = `<span class="indicator-pill ${why_color} ellipsis" style="font-weight: 600;"><span class="ellipsis">${frappe.utils.escape_html(
 				data.why_not_invoiced
 			)}</span></span>`;
+		}
+		if (column.fieldname === "next_step" && why_color && data.next_step) {
+			value = `<span style="color: var(--${why_color}-600); font-weight: 600;">${frappe.utils.escape_html(data.next_step)}</span>`;
+		}
+		if ((column.fieldname === "sales_order" || column.fieldname === "customer_name") && why_color) {
+			// a bar down the left of the row's first cells, in the colour of the reason, so the rows to act on stand out
+			value = `<span style="display: inline-block; border-left: 5px solid var(--${why_color}-500); padding-left: 6px;${
+				data.needs_action && column.fieldname === "customer_name" ? " font-weight: 600;" : ""
+			}">${value}</span>`;
 		}
 		if (column.fieldname === "stock_check" && SF_SOT_STOCK_COLORS[data.stock_check]) {
 			const color = SF_SOT_STOCK_COLORS[data.stock_check];
@@ -172,7 +188,8 @@ frappe.query_reports["Sales Order Tracker"] = {
 			value = `<span class="indicator-pill ${color} ellipsis"><span class="ellipsis">${data.line_stock}</span></span>`;
 		}
 		if (column.fieldname === "waiting_days" && data.waiting_days > 0) {
-			value = `<span style="font-weight: 600;">${data.waiting_days}</span>`;
+			const late = data.needs_action && data.waiting_days >= 2;
+			value = `<span style="font-weight: 600;${late ? " color: var(--red-600);" : ""}">${data.waiting_days}</span>`;
 		}
 		if (column.fieldname === "stock_drilldown" && data.stock_drilldown) {
 			// the order item by item and warehouse by warehouse, with the orders that compete for the same stock

@@ -244,3 +244,52 @@ class TestTheReport(FrappeTestCase):
 		self.assertEqual(names(drill.wanted_lines(stock, frappe._dict())), ["a", "b"])
 		self.assertEqual(names(drill.wanted_lines(stock, frappe._dict(item_code="TUBE"))), ["a"])
 		self.assertEqual(names(drill.wanted_lines(stock, frappe._dict(warehouse=SFSS))), ["b"])
+
+
+class TestTheWarehouseOnEveryRow(FrappeTestCase):
+	"""Each row says which warehouse it is about, so the rows read the same sorted or exported."""
+
+	def setUp(self):
+		by_pair, by_item = bins(**{"TUBE": [(SFSB, 15, 13), (SFSS, 116, 0)], "BAR": [(SFSB, 22, 40), (SFSS, 5, 0)]})
+		self.stock = frappe._dict(bins=by_pair, bins_by_item=by_item, warehouses={SFSB, SFSS}, lines={})
+		self.lines = [line("SO-1", "TUBE", "d1", 3), line("SO-2", "BAR", "d2", 40), line("SO-3", "BAR", "d3", 2, warehouse=SFSS)]
+		self.sequence = {
+			("TUBE", SFSB): order_stock.demand_in_sequence(15, [entry("SO-1", "d1", 3, "A", 1)]),
+			("BAR", SFSB): order_stock.demand_in_sequence(22, [entry("SO-2", "d2", 40, "B", 2)]),
+			("BAR", SFSS): order_stock.demand_in_sequence(5, [entry("SO-3", "d3", 2, "C", 1)]),
+		}
+		self.orders = {name: frappe._dict(name=name, customer_name=name) for name in ("SO-1", "SO-2", "SO-3")}
+		self.reasons = {"SO-1": (order_stock.STOCK_READY, "d", order_stock.IN_STOCK),
+			"SO-2": (order_stock.PART_STOCK, "d", order_stock.PART_STOCK), "SO-3": (order_stock.STOCK_READY, "d", order_stock.IN_STOCK)}
+		self.rows, _counts = drill.build_tree(self.lines, self.stock, self.sequence, self.orders, self.reasons, TODAY, frappe._dict())
+
+	def test_every_row_has_a_warehouse(self):
+		for row in self.rows:
+			self.assertTrue(row["warehouse"], row["node"])
+
+	def test_a_warehouse_row_is_its_own_warehouse(self):
+		for row in [r for r in self.rows if r["kind"] == "Warehouse"]:
+			self.assertEqual(row["warehouse"], row["label"])
+
+	def test_an_order_row_is_the_warehouse_its_line_is_delivered_from(self):
+		by_order = {r["sales_order"]: r["warehouse"] for r in self.rows if r["kind"] == "Order"}
+		self.assertEqual(by_order, {"SO-1": SFSB, "SO-2": SFSB, "SO-3": SFSS})
+
+	def test_an_order_row_sits_under_its_own_warehouse_row(self):
+		by_node = {r["node"]: r for r in self.rows}
+		for row in [r for r in self.rows if r["kind"] == "Order"]:
+			self.assertEqual(by_node[row["parent_node"]]["warehouse"], row["warehouse"])
+
+	def test_an_item_row_lists_the_warehouses_its_orders_are_to_be_delivered_from(self):
+		items = {r["node"]: r["warehouse"] for r in self.rows if r["kind"] == "Item"}
+		self.assertEqual(items, {"TUBE": SFSB, "BAR": "%s, %s" % (SFSB, SFSS)})
+
+	def test_an_order_row_says_what_to_do(self):
+		by_order = {r["sales_order"]: r["next_step"] for r in self.rows if r["kind"] == "Order"}
+		self.assertIn("Raise the Sales Invoice", by_order["SO-1"])
+		self.assertIn("Invoice the part that is in stock", by_order["SO-2"])
+
+	def test_the_columns_have_the_warehouse_beside_the_label_and_the_step_beside_the_reason(self):
+		names = [c["fieldname"] for c in drill.get_columns()]
+		self.assertEqual(names[:2], ["label", "warehouse"])
+		self.assertEqual(names.index("next_step"), names.index("why_not_invoiced") + 1)

@@ -11,18 +11,19 @@ var SF_SOSD_COLORS = {
 	"Not Covered": "red",
 };
 
-// why an open order has no invoice yet (the tracker's own words)
+// why an open order has no invoice yet (the tracker's own words), coloured by who has to move:
+// red = somebody raises or submits something today, orange = chase the stock, green = nothing to do yet, gray = held
 var SF_SOSD_WHY_COLORS = {
 	"Stock Ready, Not Invoiced": "red",
-	"Invoice In Draft": "orange",
-	"Delivery Note In Draft": "orange",
-	"No Stock": "gray",
-	"Part Stock": "orange",
+	"Invoice In Draft": "red",
+	"Delivery Note In Draft": "red",
 	"Customer Blocked": "red",
-	"Delivered, Not Billed": "orange",
+	"Delivered, Not Billed": "red",
+	"Not Invoiced Yet": "red",
+	"No Stock": "orange",
+	"Part Stock": "orange",
 	"Not Due Yet": "green",
 	"On Hold": "gray",
-	"Not Invoiced Yet": "blue",
 };
 
 frappe.query_reports["Sales Order Stock Drill Down"] = {
@@ -65,11 +66,11 @@ frappe.query_reports["Sales Order Stock Drill Down"] = {
 		{ fieldname: "to_date", label: __("Order Date To"), fieldtype: "Date" },
 	],
 
-	// Item > Warehouse > Order: the items open on their warehouses, a warehouse opens on its orders
+	// Item > Warehouse > Order, all open: every order is seen under its warehouse (collapse from the footer)
 	tree: true,
 	name_field: "node",
 	parent_field: "parent_node",
-	initial_depth: 1,
+	initial_depth: 3,
 
 	formatter(value, row, column, data, default_formatter) {
 		value = default_formatter(value, row, column, data);
@@ -86,11 +87,17 @@ frappe.query_reports["Sales Order Stock Drill Down"] = {
 			const color = SF_SOSD_COLORS[data.stock_status];
 			value = `<span class="indicator-pill ${color} ellipsis"><span class="ellipsis">${data.stock_status}</span></span>`;
 		}
-		if (column.fieldname === "why_not_invoiced" && SF_SOSD_WHY_COLORS[data.why_not_invoiced]) {
-			const color = SF_SOSD_WHY_COLORS[data.why_not_invoiced];
-			value = `<span class="indicator-pill ${color} ellipsis"><span class="ellipsis">${frappe.utils.escape_html(
+		const why_color = SF_SOSD_WHY_COLORS[data.why_not_invoiced];
+		if (column.fieldname === "why_not_invoiced" && why_color) {
+			value = `<span class="indicator-pill ${why_color} ellipsis" style="font-weight: 600;"><span class="ellipsis">${frappe.utils.escape_html(
 				data.why_not_invoiced
 			)}</span></span>`;
+		}
+		if (column.fieldname === "next_step" && why_color && data.next_step) {
+			value = `<span style="color: var(--${why_color}-600); font-weight: 600;">${frappe.utils.escape_html(data.next_step)}</span>`;
+		}
+		if (column.fieldname === "warehouse" && data.warehouse && data.kind !== "Item") {
+			value = `<b>${value}</b>`;
 		}
 		if (column.fieldname === "free_qty" && data.free_qty < 0) {
 			value = `<span style="color: var(--red-600);">${value}</span>`;

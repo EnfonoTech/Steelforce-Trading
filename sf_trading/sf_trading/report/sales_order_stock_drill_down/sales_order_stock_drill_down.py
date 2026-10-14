@@ -12,7 +12,11 @@ orders out the way the stock sees them.
       Warehouse   the same at one warehouse -- the warehouses the orders name, and the others that hold the item
         Order     each open order asking that warehouse for the item, OLDEST FIRST: what it still needs, the
                   stock left after serving it and the orders before it, whether the stock covers it, and why
-                  that order has not been invoiced (the tracker's own reason)
+                  that order has not been invoiced (the tracker's own reason) with what to do about it
+
+The Warehouse column is filled on every row: the warehouses holding demand on an item row, the warehouse itself on a
+warehouse row, and the warehouse the order line is to be delivered from on an order row -- so the rows read the same
+when they are exported or sorted. The tree opens fully (item, warehouses, orders); collapse it from the report footer.
 
 Stock Says (item and warehouse rows)
     Enough      what is on hand covers everything the open orders have reserved there
@@ -152,6 +156,7 @@ def build_tree(lines, stock, sequence, orders, reasons, today, filters) -> tuple
 					"indent": 2,
 					"kind": ORDER,
 					"label": entry["sales_order"],
+					"warehouse": warehouse,
 					"sales_order": entry["sales_order"],
 					"customer_name": entry.get("customer_name") or (order.customer_name if order else ""),
 					"order_date": entry.get("transaction_date"),
@@ -160,6 +165,7 @@ def build_tree(lines, stock, sequence, orders, reasons, today, filters) -> tuple
 					"stock_after": flt(entry["stock_after"], 3),
 					"stock_status": entry["covered"],
 					"why_not_invoiced": reason,
+					"next_step": order_stock.next_step(reason, (stock.get("lines") or {}).get(entry["sales_order"], [])),
 					"why_detail": why,
 					"uom": first.stock_uom,
 				})
@@ -169,6 +175,7 @@ def build_tree(lines, stock, sequence, orders, reasons, today, filters) -> tuple
 				"indent": 1,
 				"kind": WAREHOUSE,
 				"label": warehouse,
+				"warehouse": warehouse,
 				"pending_qty": flt(pending, 3),
 				"stock_qty": flt(actual, 3),
 				"reserved_qty": flt(reserved, 3),
@@ -190,6 +197,7 @@ def build_tree(lines, stock, sequence, orders, reasons, today, filters) -> tuple
 			"indent": 0,
 			"kind": ITEM,
 			"label": "%s - %s" % (item, first.item_name) if first.item_name and first.item_name != item else item,
+			"warehouse": ", ".join(sorted(by_warehouse)),
 			"pending_qty": flt(totals["pending"], 3),
 			"stock_qty": flt(totals["stock"], 3),
 			"reserved_qty": flt(totals["reserved"], 3),
@@ -225,6 +233,7 @@ def get_columns() -> list:
 
 	return [
 		col("label", "Item / Warehouse / Order", "Data", 340),
+		col("warehouse", "Warehouse", "Data", 150),
 		col("kind", "Level", "Data", 85),
 		col("customer_name", "Customer", "Data", 190),
 		col("order_date", "Order Date", "Date", 95),
@@ -236,7 +245,8 @@ def get_columns() -> list:
 		col("stock_after", "Left After This Order", "Float", 135),
 		col("stock_status", "Stock Says", "Data", 110),
 		col("orders", "Orders", "Int", 70),
-		col("why_not_invoiced", "Why Not Invoiced", "Data", 175),
+		col("why_not_invoiced", "Why Not Invoiced", "Data", 185),
+		col("next_step", "Next Step", "Data", 300),
 		col("why_detail", "Why Not Invoiced - Details", "Data", 380),
 		col("item_group", "Item Group", "Link", 130, "Item Group"),
 		col("uom", "UOM", "Link", 70, "UOM"),
