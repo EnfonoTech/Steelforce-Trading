@@ -42,7 +42,9 @@
   "disable_purchase_receipt",
   "purchase_receipt_bypass",
   "report_speed_section",
-  "fast_financial_statements"
+  "fast_financial_statements",
+  "asset_tracking_section",
+  "asset_tracking_defaults"
  ],
  "fields": [
   {
@@ -289,6 +291,18 @@
    "fieldname": "fast_financial_statements",
    "fieldtype": "Check",
    "label": "Faster Balance Sheet, Profit and Loss and Cash Flow"
+  },
+  {
+   "fieldname": "asset_tracking_section",
+   "fieldtype": "Section Break",
+   "label": "Asset Tracking"
+  },
+  {
+   "description": "One row per Company, the same shape as the Item master's own Company-wise account defaults. Location is mandatory on core Asset and nothing maps a Warehouse to one, so a tracking Asset (sf_trading.asset_tracking_item, for an Item with Track as Asset ticked) uses that Company's row here when the purchase row's own Asset Location resolves none. A Company with no row here, or a row with a field left blank, simply leaves that value unresolved for that Company — logged, not guessed, for staff to raise and finish by hand.",
+   "fieldname": "asset_tracking_defaults",
+   "fieldtype": "Table",
+   "label": "Asset Tracking Defaults (per Company)",
+   "options": "SF Trading Asset Tracking Default"
   }
  ],
  "index_web_pages_for_search": 1,
