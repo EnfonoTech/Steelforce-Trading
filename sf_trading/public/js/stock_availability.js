@@ -23,12 +23,16 @@ sf_trading.add_stock_availability_button = function(frm) {
 			if (grid_row && grid_row.doc) {
 				frm._sf_stock_avail_row_cdt = grid_row.doc.doctype;
 				frm._sf_stock_avail_row_cdn = grid_row.doc.name;
+				sf_trading.highlight_picked_row(frm);
 			}
 		};
 		grid.wrapper[0].addEventListener("click", remember, true);
 		grid.wrapper[0].addEventListener("focusin", remember, true);
 		grid.wrapper.data("sf_stock_avail_click_bound", true);
 	}
+
+	// a re-render of the grid drops the class; the picked row is still remembered, so mark it again
+	sf_trading.highlight_picked_row(frm);
 
 	let $toolbar = grid.wrapper.find(".grid-buttons");
 	if (!$toolbar.length) $toolbar = grid.wrapper.find(".grid-footer .grid-buttons");
@@ -54,6 +58,25 @@ sf_trading.add_stock_availability_button = function(frm) {
 	} else {
 		$toolbar.append(btn);
 	}
+};
+
+// Mark the row the item buttons will open on (Stock Availability, Last Purchase Rate, Selling
+// History all take the row last clicked), so the user can see which item that is before pressing
+// one -- on a submitted document too, where the row checkboxes are greyed out.
+sf_trading.highlight_picked_row = function(frm) {
+	const grid = frm.fields_dict.items && frm.fields_dict.items.grid;
+	if (!grid) return;
+	if (!document.getElementById("sf-picked-row-style")) {
+		$(`<style id="sf-picked-row-style">
+			.grid-row.sf-picked-row > .data-row {
+				background-color: var(--yellow-50, #fffcef);
+				box-shadow: inset 3px 0 0 var(--yellow-500, #edba13);
+			}
+		</style>`).appendTo(document.head);
+	}
+	grid.wrapper.find(".grid-row.sf-picked-row").removeClass("sf-picked-row");
+	const cdn = frm._sf_stock_avail_row_cdn;
+	if (cdn) grid.wrapper.find(`.grid-row[data-name="${CSS.escape(cdn)}"]`).addClass("sf-picked-row");
 };
 
 sf_trading.get_default_item_for_stock_availability = function(frm) {

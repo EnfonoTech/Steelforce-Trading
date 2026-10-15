@@ -14,6 +14,24 @@ sf_trading.add_selling_history_button = function (frm) {
 	if (!frm.fields_dict.items || !frm.fields_dict.items.grid) return;
 
 	const grid = frm.fields_dict.items.grid;
+
+	// Remember the row the buyer last clicked, as Stock Availability does, so the dialog opens on
+	// that one item. Kept by reference (cdt + name) and read at click time, so a changed item code
+	// is never stale. Works on a submitted order too, where the rows are read-only.
+	if (!grid.wrapper.data("sf_selling_history_click_bound")) {
+		const remember = function (e) {
+			const $body = grid.wrapper.find(".grid-body");
+			if (!$body.length || !$body[0].contains(e.target)) return;
+			const grid_row = $(e.target).closest(".grid-row").data("grid_row");
+			if (grid_row && grid_row.doc) {
+				frm._sf_selling_history_row = [grid_row.doc.doctype, grid_row.doc.name];
+			}
+		};
+		grid.wrapper[0].addEventListener("click", remember, true);
+		grid.wrapper[0].addEventListener("focusin", remember, true);
+		grid.wrapper.data("sf_selling_history_click_bound", true);
+	}
+
 	let $toolbar = grid.wrapper.find(".grid-buttons");
 	if (!$toolbar.length) $toolbar = grid.wrapper.find(".grid-footer .grid-buttons");
 	if (!$toolbar.length) return;
@@ -48,6 +66,19 @@ sf_trading.add_selling_history_button = function (frm) {
 	else $toolbar.append(btn);
 };
 
+// The item of the row open or last clicked in the items grid; null when none was, and the dialog
+// then shows every item on the order.
+sf_trading.get_selling_history_item = function (frm) {
+	const items_grid = frm.fields_dict.items && frm.fields_dict.items.grid;
+	const open_row = frappe.ui.form.get_open_grid_form();
+	if (open_row && open_row.grid === items_grid && open_row.doc && open_row.doc.item_code) {
+		return open_row.doc.item_code;
+	}
+	const [cdt, cdn] = frm._sf_selling_history_row || [];
+	const row = cdt && (locals[cdt] || {})[cdn];
+	return (row && row.item_code) || null;
+};
+
 sf_trading.open_selling_history_dialog = function (frm) {
 	const items = (frm.doc.items || []).map((row) => row.item_code).filter(Boolean);
 	if (!items.length) {
@@ -62,6 +93,7 @@ sf_trading.open_selling_history_dialog = function (frm) {
 	// the order's own branch, read from its cost centre — the same way every branch-aware report
 	// on this site reads it
 	const branch_cc = frm.doc.cost_center || (frm.doc.items[0] || {}).cost_center || null;
+	const picked = sf_trading.get_selling_history_item(frm);
 
 	const dialog = new frappe.ui.Dialog({
 		title: __("Selling History"),
@@ -97,7 +129,8 @@ sf_trading.open_selling_history_dialog = function (frm) {
 				fieldtype: "Select",
 				label: __("Item"),
 				options: [__("All items on this order")].concat(items).join("\n"),
-				default: __("All items on this order"),
+				// item-wise: the clicked row's item; every item only when no row was picked
+				default: items.includes(picked) ? picked : __("All items on this order"),
 			},
 			{ fieldtype: "Section Break" },
 			{ fieldname: "results", fieldtype: "HTML" },
@@ -109,12 +142,15 @@ sf_trading.open_selling_history_dialog = function (frm) {
 	});
 
 	dialog.show();
-	sf_trading.load_selling_history(frm, dialog, items);
+	// the first load names the picked item itself: the Select's default is not yet in get_values()
+	// at this point, and reading it there would load every item while the dropdown shows one
+	sf_trading.load_selling_history(frm, dialog, items, picked);
 };
 
-sf_trading.load_selling_history = function (frm, dialog, items) {
+sf_trading.load_selling_history = function (frm, dialog, items, initial_item) {
 	const values = dialog.get_values(true) || {};
-	const chosen = values.item_code && items.includes(values.item_code) ? [values.item_code] : items;
+	const wanted = initial_item || values.item_code;
+	const chosen = wanted && items.includes(wanted) ? [wanted] : items;
 	const $body = dialog.fields_dict.results.$wrapper;
 	$body.html(`<div class="text-muted" style="padding: 12px">${__("Loading…")}</div>`);
 
