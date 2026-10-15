@@ -84,6 +84,8 @@ doctype_js = {
 		"public/js/document_trail.js",
 		# no Print on a draft sale; a draft return still prints -- see sf_trading/draft_print.py
 		"public/js/sales_invoice_draft_print.js",
+		# a Cash sale is due the day it is made, whatever terms the customer carries -- see cash_due_date.py
+		"public/js/cash_due_date.js",
 	],
 	"Stock Entry":      "public/js/stock_entry.js",
 	"Company":          "public/js/company_stock_reco_account.js",
@@ -120,6 +122,8 @@ doctype_js = {
 		"public/js/salesperson_by_company.js",
 		# the whole Sales Order -> Delivery Note -> Sales Invoice chain, not just this one's own hop
 		"public/js/document_trail.js",
+		# a Cash order carries no payment terms of its customer -- see cash_due_date.py
+		"public/js/cash_due_date.js",
 	],
 	# same Sales Team restriction as Sales Invoice / Sales Order -- Delivery Note carries the same
 	# child table but no other doctype-specific script of its own yet; also the SO -> DN -> SI chain
@@ -454,6 +458,8 @@ doc_events = {
 	},
 	"Payment Entry": {
 		"validate": [
+			# a Pay or Receive entry must name a voucher (SF Trading Settings switch) -- see payment_entry_voucher_gate.py
+			"sf_trading.payment_entry_voucher_gate.validate_has_voucher",
 			"sf_trading.api.payment_advice_hooks.validate_payment_entry_advice",
 			# each reference row carries the date of the document it is paying
 			"sf_trading.payment_entry_reference_date.set_reference_dates",
@@ -601,6 +607,8 @@ doc_events = {
 			# a cash return may not ENTER the approval chain with no refund planned: the approval
 			# submits it server-side, where the payment popup cannot ask anything
 			"sf_trading.planned_payment.require_plan_before_approval",
+			# a Cash sale is due the day it is made; runs after the controller built the schedule
+			"sf_trading.cash_due_date.apply_cash_due_date",
 		],
 		# the refund a return promised is checked while refusing is still safe, and paid the
 		# moment the return is submitted -- approval and refund land together. before_submit,
@@ -645,6 +653,8 @@ doc_events = {
 			"sf_trading.api.sales_invoice_override.validate_driver_payment",
 			"sf_trading.api.sales_invoice_override.validate_driver_cash_limit",
 			"sf_trading.driver_branches.validate_driver_serves_branch",
+			# a Cash order is due the day it is made, same as the invoice
+			"sf_trading.cash_due_date.apply_cash_due_date",
 		],
 		# before_submit, not validate: a draft order can still be saved while a customer's
 		# contact details are being fixed elsewhere -- only SUBMIT is refused.

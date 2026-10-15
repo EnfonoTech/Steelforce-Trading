@@ -24,3 +24,4 @@ sf_trading.patches.v0_1.set_master_rules_from
 sf_trading.patches.v0_1.stock_reconciliation_operations_approval
 sf_trading.patches.v0_1.seed_naming_switches
 sf_trading.patches.v0_1.seed_report_speed_switch
+sf_trading.patches.v0_1.seed_payment_entry_voucher_switch

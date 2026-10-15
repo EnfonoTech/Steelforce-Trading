@@ -44,7 +44,9 @@
   "report_speed_section",
   "fast_financial_statements",
   "asset_tracking_section",
-  "asset_tracking_defaults"
+  "asset_tracking_defaults",
+  "payment_entry_section",
+  "require_voucher_on_payment_entry"
  ],
  "fields": [
   {
@@ -303,6 +305,18 @@
    "fieldtype": "Table",
    "label": "Asset Tracking Defaults (per Company)",
    "options": "SF Trading Asset Tracking Default"
+  },
+  {
+   "fieldname": "payment_entry_section",
+   "fieldtype": "Section Break",
+   "label": "Payment Entry"
+  },
+  {
+   "default": "1",
+   "description": "A Pay or Receive Payment Entry cannot be saved with an empty References table: it must name an invoice, an order or a journal entry (every party type). An Internal Transfer is not affected. Untick it to allow a Payment Entry with no voucher again, at once, no restart needed.",
+   "fieldname": "require_voucher_on_payment_entry",
+   "fieldtype": "Check",
+   "label": "Refuse a Payment Entry with no voucher"
   }
  ],
  "index_web_pages_for_search": 1,
