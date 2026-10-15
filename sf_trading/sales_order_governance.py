@@ -28,14 +28,8 @@ from sf_trading.party_contact_cache import party_email_addresses, party_phone_nu
 #: Branch Head" only has one role to look at, not two spellings of the same idea.
 ROLE_BRANCH_HEAD = "Branch Head"
 
-#: How many open Sales Orders one customer may hold before new ones are blocked (GS Issue 18).
-#: "Open" here means submitted and not yet fully delivered+billed. Scoped per-customer: the call's
-#: own wording ("if more than two are pending") did not name salesman or branch, and per-customer is
-#: the reading that matches Issue 19's own real example (one customer, two branches, both missed).
-#: Revisit if the client means a different grouping.
-PENDING_SO_CAP = 2
-
-_OPEN_STATUSES = ("To Deliver and Bill", "To Bill", "To Deliver")
+# The fixed cap of 2 open Sales Orders per customer (GS Issue 18) and its daily notification were removed 2026-10-15: Sales Order
+# limits are now configured per Customer and per Salesperson -- see sf_trading/sales_order_limits.py.
 
 #: Customer checkbox: a credit customer whose credit documents are still missing may buy for CASH.
 #: Credit (and Cheque, which is post-dated credit here) stays refused until the documents are in.
@@ -270,67 +264,3 @@ def cancel_sales_order_with_remark(sales_order: str, remark: str = None, reason:
 	doc.custom_cancellation_remark = remark
 	doc.cancel()
 	return {"name": doc.name, "docstatus": doc.docstatus}
-
-
-def count_open_sales_orders(customer: str, exclude: str | None = None) -> int:
-	filters = {
-		"customer": customer,
-		"docstatus": 1,
-		"status": ["in", _OPEN_STATUSES],
-	}
-	if exclude:
-		filters["name"] = ["!=", exclude]
-	return frappe.db.count("Sales Order", filters)
-
-
-def before_submit_cap_pending_orders(doc, _method=None):
-	"""Sales Order before_submit: refuse a new order once the customer already has
-	PENDING_SO_CAP or more open (GS Issue 18)."""
-	if not doc.get("customer"):
-		return
-
-	existing = count_open_sales_orders(doc.customer, exclude=doc.name)
-	if existing >= PENDING_SO_CAP:
-		frappe.throw(
-			_(
-				"Customer %s already has %d open Sales Orders (limit %d). "
-				"Clear the existing ones before submitting another."
-			)
-			% (doc.customer_name or doc.customer, existing, PENDING_SO_CAP),
-			title=_("Too Many Open Sales Orders"),
-		)
-
-
-def notify_customers_over_pending_cap():
-	"""Daily scheduled job: tell Sales Manager who is currently sitting at/over the cap.
-
-	A notify-only companion to the hard block above -- so the situation is visible before it
-	becomes a refused submission, not only after.
-	"""
-	rows = frappe.db.sql(
-		"""
-		SELECT customer, customer_name, COUNT(*) AS open_orders
-		FROM `tabSales Order`
-		WHERE docstatus = 1 AND status IN %(statuses)s
-		GROUP BY customer
-		HAVING COUNT(*) >= %(cap)s
-		""",
-		{"statuses": _OPEN_STATUSES, "cap": PENDING_SO_CAP},
-		as_dict=True,
-	)
-	if not rows:
-		return
-
-	lines = "".join(
-		"<li>%s (%s): %d open orders</li>" % (r.customer_name or r.customer, r.customer, r.open_orders)
-		for r in rows
-	)
-	for user in frappe.get_all(
-		"Has Role", filters={"role": "Sales Manager", "parenttype": "User"}, pluck="parent"
-	):
-		frappe.sendmail(
-			recipients=[user],
-			subject=_("Customers at or over the open Sales Order limit"),
-			message="<ul>%s</ul>" % lines,
-			now=False,
-		)

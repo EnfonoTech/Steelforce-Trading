@@ -57,11 +57,6 @@ class TestOpenItems(FrappeTestCase):
 	@classmethod
 	def setUpClass(cls):
 		super().setUpClass()
-		# These tests are about the open-item engine, not the open-order cap (GS Issue 18): a
-		# class raises many orders for one customer, and the cap would refuse the third
-		cap = mock.patch("sf_trading.sales_order_governance.PENDING_SO_CAP", 10**6)
-		cap.start()
-		cls.addClassCleanup(cap.stop)
 		cls.company = get_test_company()
 		cls.warehouse = "Stores - " + ABBR
 		cls.cost_center = "Main - " + ABBR

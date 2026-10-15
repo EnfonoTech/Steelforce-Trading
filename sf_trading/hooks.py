@@ -522,6 +522,8 @@ doc_events = {
 			"sf_trading.sales_order_governance.validate_cash_override_change",
 			# supporting-document rows, and what a new B2B customer must carry
 			"sf_trading.party_documents.validate_master",
+			# one row per branch, and the Branch Cash Limits may not add up to more than the Cash Collection Limit
+			"sf_trading.sales_order_limits.validate_branch_cash_limit_allocation",
 		],
 		"on_update": "sf_trading.party_documents.relink_attachments",
 		"onload": "sf_trading.party_documents.set_onload",
@@ -562,6 +564,10 @@ doc_events = {
 		"before_insert": "sf_trading.title_case.title_case_party",
 		"before_rename": "sf_trading.title_case.title_case_rename",
 		"after_insert": "sf_trading.supplier_validation.remind_attachment",
+	},
+	# a Salesperson carries the same Cash Collection Limit / Payment Collection Days / Branch Cash Limits as a Driver and a Customer
+	"Sales Person": {
+		"validate": "sf_trading.sales_order_limits.validate_branch_cash_limit_allocation",
 	},
 	"Driver": {
 		"validate": [
@@ -655,12 +661,12 @@ doc_events = {
 			"sf_trading.driver_branches.validate_driver_serves_branch",
 			# a Cash order is due the day it is made, same as the invoice
 			"sf_trading.cash_due_date.apply_cash_due_date",
+			# the Driver's cash limit and payment days, by Customer and by Salesperson -- see sales_order_limits.py
+			"sf_trading.sales_order_limits.validate_sales_order_limits",
 		],
 		# before_submit, not validate: a draft order can still be saved while a customer's
 		# contact details are being fixed elsewhere -- only SUBMIT is refused.
 		"before_submit": [
-			# GS Issue 18: a customer already sitting at the open-order cap gets no more
-			"sf_trading.sales_order_governance.before_submit_cap_pending_orders",
 			# rows in a strict warehouse reserve their stock on submit, no others do -- see
 			# sf_trading/strict_stock_reservation.py
 			"sf_trading.strict_stock_reservation.reserve_strict_rows_on_submit",
@@ -1002,6 +1008,14 @@ fixtures = [
 					"Driver-custom_payment_days",
 					"Driver-custom_cash_limit",
 					"Driver-custom_branch_cash_limits",
+					"Customer-custom_cash_limits_section",
+					"Customer-custom_payment_days",
+					"Customer-custom_cash_limit",
+					"Customer-custom_branch_cash_limits",
+					"Sales Person-custom_cash_limits_section",
+					"Sales Person-custom_payment_days",
+					"Sales Person-custom_cash_limit",
+					"Sales Person-custom_branch_cash_limits",
 					"Sales Invoice-custom_sales_person",
 					"Quotation-branch",
 					"Quotation-cost_center",
@@ -1301,9 +1315,6 @@ pm_workflow_applicability = [
 scheduler_events = {
 	"daily": [
 		"sf_trading.api.overdue_notifications.notify_overdue_invoices",
-		# GS Issue 18: tell Sales Manager who is at/over the open-order cap, before it becomes
-		# a refused submission
-		"sf_trading.sales_order_governance.notify_customers_over_pending_cap",
 		"sf_trading.document_expiry.check_expiring_documents",
 	],
 	# every tick: each Payment Automation Settings row names its own weekday + time,

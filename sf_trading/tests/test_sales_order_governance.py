@@ -1,4 +1,4 @@
-"""Tests for GS Issues 17/18/20 -- cancellation control and the open-order cap.
+"""Tests for GS Issues 17/20 -- cancellation control and contact completeness.
 
     bench --site <scratch-site> run-tests --module sf_trading.tests.test_sales_order_governance
 """
@@ -11,7 +11,6 @@ from frappe.tests.utils import FrappeTestCase
 from sf_trading import sales_order_governance as gov
 
 MISSING_PHONE = "sf_trading.sales_order_governance.missing_contact_phone"
-COUNT_OPEN = "sf_trading.sales_order_governance.count_open_sales_orders"
 
 
 class StubDoc:
@@ -48,22 +47,6 @@ class TestContactCompletenessAtTransaction(FrappeTestCase):
 		with patch(MISSING_PHONE) as lookup:
 			gov.validate_customer_contact_at_transaction(sales_order(customer=None))
 		lookup.assert_not_called()
-
-
-class TestPendingOrderCap(FrappeTestCase):
-	def test_blocks_the_third_open_order(self):
-		with patch(COUNT_OPEN, return_value=gov.PENDING_SO_CAP):
-			with self.assertRaises(frappe.ValidationError):
-				gov.before_submit_cap_pending_orders(sales_order())
-
-	def test_a_customer_below_the_cap_is_not_blocked(self):
-		with patch(COUNT_OPEN, return_value=gov.PENDING_SO_CAP - 1):
-			gov.before_submit_cap_pending_orders(sales_order())  # must not raise
-
-	def test_excludes_the_document_itself_from_its_own_count(self):
-		with patch(COUNT_OPEN, return_value=0) as counter:
-			gov.before_submit_cap_pending_orders(sales_order())
-		counter.assert_called_once_with("CUST-2026-00042", exclude="SAL-ORD-2026-00099")
 
 
 class TestCancellationControl(FrappeTestCase):
