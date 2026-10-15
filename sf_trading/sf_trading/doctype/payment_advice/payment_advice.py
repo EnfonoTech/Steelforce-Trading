@@ -36,6 +36,8 @@ from frappe.utils import add_days, cint, flt, getdate, get_link_to_form, money_i
 from erpnext.accounts.party import get_party_account
 from erpnext.setup.utils import get_exchange_rate
 
+from sf_trading.payment_term_split import single_open_term, split_by_payment_term
+
 # An Employee is paid the same way a Supplier is — money leaves the company against
 # documents somebody else's app owns. Everything Employee-specific below is resolved
 # through hooks rather than named here, so sf_trading needs no knowledge of the HR app
@@ -1547,7 +1549,10 @@ def build_payment_entry(advice):
     for row in allocations:
         reference = payment_entry_reference(advice.party_type, row)
         if reference:
-            pe.append("references", reference)
+            # a document under a term-allocated Payment Terms Template must be paid against a named
+            # term: name it here when the advice row does not (see sf_trading/payment_term_split.py)
+            for part in split_by_payment_term(reference):
+                pe.append("references", part)
 
     # currencies: read them, never assume they match (company_currency was read above, for
     # the guard's message)
@@ -1764,6 +1769,10 @@ def get_reference_details(reference_doctype: str, reference_record: str, company
         "exchange_rate": flt(values.get("conversion_rate")) or 1.0,
         "cost_center": values.get("cost_center"),
         "reference_status": values.get("status"),
+        # the one open instalment of a term-allocated document; None otherwise (and so also clears a term
+        # left by the previous pick). With several open the row stands for the whole document and the
+        # Payment Entry is split per term when it is made
+        "payment_term": single_open_term(reference_doctype, reference_record),
     }
 
 
