@@ -81,6 +81,8 @@ def blocking(doc) -> frappe._dict:
 @frappe.whitelist()
 def get_quick_edit_data(supplier: str) -> dict:
 	"""Current values and what blocks billing right now."""
+	from sf_trading import party_documents as pd
+
 	frappe.has_permission(PARTY, "read", doc=supplier, throw=True)
 	doc = frappe.get_doc(PARTY, supplier)
 	phones = party_phone_numbers(PARTY, supplier)
