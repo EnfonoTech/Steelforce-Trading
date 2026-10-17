@@ -10,6 +10,7 @@ fixtures are created:
 from datetime import date
 from unittest.mock import patch
 
+import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from sf_trading import payment_term_split as pts
@@ -101,3 +102,114 @@ class TestPaymentTermSplit(FrappeTestCase):
 		original = reference("Purchase Invoice", "PI", 50)
 		self.split(original, rows=rows)
 		self.assertEqual(original, reference("Purchase Invoice", "PI", 50))
+
+
+class FakeDoc:
+	"""Just enough of a Document: get / set / append, attribute access."""
+
+	def __init__(self, **values):
+		self.__dict__.update(values)
+		self.rebuilt = 0
+
+	def get(self, key, default=None):
+		return getattr(self, key, default)
+
+	def set(self, key, value):
+		setattr(self, key, value)
+
+	def append(self, key, row):
+		getattr(self, key).append(frappe._dict(row))
+
+	def set_payment_schedule(self):
+		self.rebuilt += 1
+		self.payment_schedule = [frappe._dict(payment_term="CASH", paid_amount=0)]
+
+
+def pe_row(name, amount, term=None, doctype="Purchase Invoice"):
+	return frappe._dict(
+		name="row-" + name, idx=1, reference_doctype=doctype, reference_name=name, allocated_amount=amount, payment_term=term,
+		total_amount=100, outstanding_amount=100, exchange_rate=1,
+	)
+
+
+class TestFillReferenceTerms(FrappeTestCase):
+	def fill(self, doc, template="CASH", flag=1, rows=None):
+		def get_value(doctype, name, field):
+			return flag if doctype == "Payment Terms Template" else template
+
+		with patch.object(pts.frappe.db, "get_value", side_effect=get_value), patch.object(pts.frappe, "get_all", return_value=rows or []):
+			pts.fill_reference_terms(doc)
+		return doc
+
+	def test_a_row_picked_by_hand_gets_its_term(self):
+		"""The live case: a new Payment Entry to Batelco, reference 20020000379, no Payment Term chosen."""
+		doc = FakeDoc(references=[pe_row("20020000379", 16.773)])
+		self.fill(doc, rows=schedule(("CASH", 16.773, date(2026, 10, 11))))
+		self.assertEqual([(r.reference_name, r.payment_term, r.allocated_amount) for r in doc.references], [("20020000379", "CASH", 16.773)])
+		# the other fields of the row travel with it
+		self.assertEqual((doc.references[0].total_amount, doc.references[0].outstanding_amount), (100, 100))
+
+	def test_a_row_is_split_over_the_open_instalments(self):
+		doc = FakeDoc(references=[pe_row("PI-1", 50)])
+		self.fill(doc, rows=schedule(("T1", 30.0, date(2026, 10, 1)), ("T2", 70.0, date(2026, 11, 1))))
+		self.assertEqual([(r.payment_term, r.allocated_amount) for r in doc.references], [("T1", 30.0), ("T2", 20.0)])
+
+	def test_the_other_rows_keep_their_place_and_values(self):
+		doc = FakeDoc(references=[pe_row("PI-0", 5, term="X"), pe_row("PI-1", 20), pe_row("JV-1", 7, doctype="Journal Entry")])
+		self.fill(doc, rows=schedule(("CASH", 20.0, date(2026, 10, 1))))
+		got = [(r.reference_name, r.payment_term, r.allocated_amount) for r in doc.references]
+		# PI-0 already names a term; the Journal Entry is not a term document, so only PI-1 is rewritten
+		self.assertEqual(got[0], ("PI-0", "X", 5))
+		self.assertEqual(got[1][:2], ("PI-1", "CASH"))
+		self.assertEqual(got[2], ("JV-1", None, 7))
+
+	def test_nothing_changes_when_no_row_needs_a_term(self):
+		rows = [pe_row("PI-0", 5, term="X")]
+		doc = FakeDoc(references=rows)
+		self.fill(doc, rows=schedule(("CASH", 20.0, date(2026, 10, 1))))
+		self.assertIs(doc.references, rows)
+
+	def test_a_template_without_term_allocation_is_untouched(self):
+		rows = [pe_row("PI-1", 20)]
+		doc = FakeDoc(references=rows)
+		self.fill(doc, template="30 Days Credit", flag=0, rows=schedule(("30 Days", 20.0, date(2026, 10, 1))))
+		self.assertIs(doc.references, rows)
+
+	def test_no_references_is_fine(self):
+		doc = FakeDoc(references=[])
+		self.fill(doc)
+		self.assertEqual(doc.references, [])
+
+
+class TestRepairTermLessSchedule(FrappeTestCase):
+	def repair(self, doc, flag=1):
+		with patch.object(pts.frappe.db, "get_value", return_value=flag):
+			pts.repair_term_less_schedule(doc)
+		return doc
+
+	def invoice(self, **over):
+		values = dict(
+			payment_terms_template="CASH", is_return=0, is_pos=0, is_opening="No",
+			payment_schedule=[frappe._dict(payment_term=None, paid_amount=0)],
+		)
+		values.update(over)
+		return FakeDoc(**values)
+
+	def test_a_term_allocated_template_on_a_term_less_schedule_is_rebuilt(self):
+		doc = self.repair(self.invoice())
+		self.assertEqual(doc.rebuilt, 1)
+		self.assertEqual([r.payment_term for r in doc.payment_schedule], ["CASH"])
+
+	def test_left_alone_when_the_terms_are_named_or_nothing_applies(self):
+		named = self.repair(self.invoice(payment_schedule=[frappe._dict(payment_term="CASH", paid_amount=0)]))
+		self.assertEqual(named.rebuilt, 0)
+		self.assertEqual(self.repair(self.invoice(), flag=0).rebuilt, 0)  # template without term allocation
+		self.assertEqual(self.repair(self.invoice(payment_terms_template=None)).rebuilt, 0)
+		self.assertEqual(self.repair(self.invoice(payment_schedule=[])).rebuilt, 0)  # core builds it from the template
+		self.assertEqual(self.repair(self.invoice(is_return=1)).rebuilt, 0)
+		self.assertEqual(self.repair(self.invoice(is_pos=1)).rebuilt, 0)
+		self.assertEqual(self.repair(self.invoice(is_opening="Yes")).rebuilt, 0)
+
+	def test_a_schedule_that_already_holds_a_payment_is_not_rebuilt(self):
+		doc = self.repair(self.invoice(payment_schedule=[frappe._dict(payment_term=None, paid_amount=5)]))
+		self.assertEqual(doc.rebuilt, 0)

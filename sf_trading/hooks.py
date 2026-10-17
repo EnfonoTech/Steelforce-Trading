@@ -457,6 +457,9 @@ doc_events = {
 		"before_submit": "sf_trading.period_closing.validate_open_items",
 	},
 	"Payment Entry": {
+		# a reference with no Payment Term to a term-allocated document gets its term (split per instalment) BEFORE
+		# core's own validate refuses it -- see payment_term_split.py
+		"before_validate": "sf_trading.payment_term_split.fill_reference_terms",
 		"validate": [
 			# a Pay or Receive entry must name a voucher (SF Trading Settings switch) -- see payment_entry_voucher_gate.py
 			"sf_trading.payment_entry_voucher_gate.validate_has_voucher",
@@ -613,6 +616,8 @@ doc_events = {
 			# a cash return may not ENTER the approval chain with no refund planned: the approval
 			# submits it server-side, where the payment popup cannot ask anything
 			"sf_trading.planned_payment.require_plan_before_approval",
+			# a term-allocated template must come with a schedule that names its terms -- see payment_term_split.py
+			"sf_trading.payment_term_split.repair_term_less_schedule",
 			# a Cash sale is due the day it is made; runs after the controller built the schedule
 			"sf_trading.cash_due_date.apply_cash_due_date",
 		],
@@ -659,6 +664,8 @@ doc_events = {
 			"sf_trading.api.sales_invoice_override.validate_driver_payment",
 			"sf_trading.api.sales_invoice_override.validate_driver_cash_limit",
 			"sf_trading.driver_branches.validate_driver_serves_branch",
+			# a term-allocated template must come with a schedule that names its terms -- see payment_term_split.py
+			"sf_trading.payment_term_split.repair_term_less_schedule",
 			# a Cash order is due the day it is made, same as the invoice
 			"sf_trading.cash_due_date.apply_cash_due_date",
 			# the Driver's cash limit and payment days, by Customer and by Salesperson -- see sales_order_limits.py
@@ -744,6 +751,8 @@ doc_events = {
 			"sf_trading.landed_cost.validate_charges",
 			# goods come in by one route only: a Goods In's quantity is invoiced from that Goods In
 			_GOODS_IN_GATE,
+			# a term-allocated template with a schedule that names no term could never be paid -- see payment_term_split.py
+			"sf_trading.payment_term_split.repair_term_less_schedule",
 		],
 		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
 		"on_submit": [
@@ -757,7 +766,7 @@ doc_events = {
 	},
 	"Purchase Order": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE, _MASTER_GATE],
+		"validate": [_LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE, _MASTER_GATE, "sf_trading.payment_term_split.repair_term_less_schedule"],
 		# a remark is mandatory, checked before docstatus flips -- see purchase_order_cancel.py
 		"before_cancel": "sf_trading.purchase_order_cancel.before_cancel_require_remark",
 	},
