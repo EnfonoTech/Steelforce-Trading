@@ -88,6 +88,8 @@ doctype_js = {
 		"public/js/cash_due_date.js",
 	],
 	"Stock Entry":      "public/js/stock_entry.js",
+	# Item Code and Item Name are typed in capitals on the form -- the server enforces it, see item_case.py
+	"Item":             "public/js/item_uppercase.js",
 	"Company":          "public/js/company_stock_reco_account.js",
 	"Material Request": "public/js/material_request.js",
 	"Customer":         [
@@ -812,6 +814,10 @@ doc_events = {
 	# manual/Item-Code entry keeps governing stock items untouched -- see item_naming.py)
 	"Item": {
 		"autoname": "sf_trading.item_naming.autoname",
+		# the Item master is kept in CAPITALS: before_insert runs before Frappe names the record, before_validate on every save
+		# -- see sf_trading/item_case.py
+		"before_insert": "sf_trading.item_case.capitalise_item",
+		"before_validate": "sf_trading.item_case.capitalise_item",
 	},
 	# a reply in a Ticket's comment box reaches everyone on the ticket. Both handlers return at
 	# once for any other doctype, so a site that has not migrated the Ticket table is untouched.

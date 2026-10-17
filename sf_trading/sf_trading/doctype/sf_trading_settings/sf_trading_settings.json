@@ -46,7 +46,9 @@
   "asset_tracking_section",
   "asset_tracking_defaults",
   "payment_entry_section",
-  "require_voucher_on_payment_entry"
+  "require_voucher_on_payment_entry",
+  "item_master_section",
+  "uppercase_item_master"
  ],
  "fields": [
   {
@@ -317,6 +319,18 @@
    "fieldname": "require_voucher_on_payment_entry",
    "fieldtype": "Check",
    "label": "Refuse a Payment Entry with no voucher"
+  },
+  {
+   "fieldname": "item_master_section",
+   "fieldtype": "Section Break",
+   "label": "Item Master"
+  },
+  {
+   "default": "1",
+   "description": "Item Code (of a new item) and Item Name are always saved in CAPITALS, with no leading or trailing spaces. An existing item's code is never changed by a save. Untick it to stop capitalising, at once, no restart needed.",
+   "fieldname": "uppercase_item_master",
+   "fieldtype": "Check",
+   "label": "Capitalise the Item master"
   }
  ],
  "index_web_pages_for_search": 1,

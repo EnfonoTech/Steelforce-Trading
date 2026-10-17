@@ -26,3 +26,5 @@ sf_trading.patches.v0_1.seed_naming_switches
 sf_trading.patches.v0_1.seed_report_speed_switch
 sf_trading.patches.v0_1.seed_payment_entry_voucher_switch
 sf_trading.patches.v0_1.name_payment_terms_on_term_less_schedules
+sf_trading.patches.v0_1.seed_item_case_switch
+sf_trading.patches.v0_1.uppercase_existing_items
