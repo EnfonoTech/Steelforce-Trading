@@ -36,7 +36,9 @@ def add_item_barcode(doc, method=None):
 	if doc.get("barcodes"):
 		return
 
-	code = doc.get("item_code") or doc.get("name")
+	# the record's name, which is the code the item goes by: for a stock item it is the typed Item Code, for a service item the series name
+	# (SVC-GEN-00005) that autoname gave it -- the typed text is replaced by it on save, so it is not the one to use
+	code = doc.get("name") or doc.get("item_code")
 	if not code or barcode_taken(code, doc.get("name")):
 		return
 

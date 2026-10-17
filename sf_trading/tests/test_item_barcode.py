@@ -66,13 +66,14 @@ class TestTheHook(FrappeTestCase):
 		self.run_hook(item)
 		self.assertEqual(len(item.barcodes), 1)
 
-	def test_the_item_code_is_used_and_the_name_only_when_there_is_none(self):
-		item = FakeItem("NAME-1", item_code="CODE-1")
+	def test_the_records_name_is_the_code_and_the_typed_code_only_when_there_is_no_name_yet(self):
+		# a service item: the typed Item Code is replaced by the series name (SVC-GEN-00005) when it is saved
+		item = FakeItem("SVC-GEN-00005", item_code="zz typed text")
 		self.run_hook(item)
-		self.assertEqual(item.barcodes[0]["barcode"], "CODE-1")
-		item = FakeItem("NAME-2", item_code="")
+		self.assertEqual(item.barcodes[0]["barcode"], "SVC-GEN-00005")
+		item = FakeItem("", item_code="CODE-2")
 		self.run_hook(item)
-		self.assertEqual(item.barcodes[0]["barcode"], "NAME-2")
+		self.assertEqual(item.barcodes[0]["barcode"], "CODE-2")
 
 	def test_an_item_with_no_code_at_all_gets_nothing_and_no_error(self):
 		item = FakeItem(name="", item_code="")
