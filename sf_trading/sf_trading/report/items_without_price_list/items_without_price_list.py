@@ -389,6 +389,11 @@ def build_rows(items: list, kind: str, price_list: str, on_date, warehouses, bra
 			if cost:
 				floor = cost * (1 + _margin_for_group(item.item_group, margins) / 100.0)
 
+		if not branch and scopes:
+			# no Branch filter: a document with no branch is priced from the general price, so that is the one
+			# shown when there is one; a price limited to some branches is shown only when there is no other
+			rows = sorted(rows, key=lambda row: bool(scopes.get(row.get("name"))))
+
 		price = chosen_price(rows, on_date)
 		status = status_for(rows, on_date)
 		served = sorted(scopes.get(price.get("name"), ())) if price else []

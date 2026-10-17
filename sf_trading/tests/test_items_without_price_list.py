@@ -347,6 +347,23 @@ class TestTheRows(FrappeTestCase):
 		self.assertEqual(rows[0]["price_branches"], "All Branches")
 		self.assertEqual(rows[1]["price_branches"], "Dock, Mall")
 
+	def test_without_a_branch_the_general_price_is_the_one_shown(self):
+		# newest first, as ERPNext orders them: the branch price was made last
+		own = {"A": [price_row(9.0, name="IP-B"), price_row(8.0, name="IP-A"), price_row(10.0, name="IP-ALL")]}
+		scopes = {"IP-B": {"Dock"}, "IP-A": {"Mall"}}
+		row = self.build([item("A")], own=own, scopes=scopes)[0]
+		self.assertEqual((row["price_in_list"], row["price_branches"]), (10.0, "All Branches"))
+
+	def test_without_a_branch_a_limited_price_is_shown_when_it_is_the_only_one(self):
+		own = {"A": [price_row(9.0, name="IP-B")]}
+		row = self.build([item("A")], own=own, scopes={"IP-B": {"Dock"}})[0]
+		self.assertEqual((row["status"], row["price_in_list"], row["price_branches"]), (report.STATUS_PRICED, 9.0, "Dock"))
+
+	def test_with_a_branch_the_rows_come_in_the_order_the_branch_sees_them(self):
+		own = {"A": [price_row(9.0, name="IP-B"), price_row(10.0, name="IP-ALL")]}
+		row = self.build([item("A")], own=own, scopes={"IP-B": {"Dock"}}, branch="Dock")[0]
+		self.assertEqual(row["price_in_list"], 9.0)
+
 	def test_an_unpriced_item_has_no_price_scope(self):
 		self.assertEqual(self.build([item("A")])[0]["price_branches"], "")
 
