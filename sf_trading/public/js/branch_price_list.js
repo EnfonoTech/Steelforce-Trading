@@ -82,3 +82,17 @@ Object.keys(SF_BRANCH_PRICE_FIELD).forEach(function (doctype) {
 		},
 	});
 });
+
+// A Sales Invoice row may carry a price list of its own (custom_price_list). It is not held to the
+// branch's configured set, but a list limited to other branches by its Applicable Branches table is
+// not offered. The server refuses it too (validate_price_list_allowed).
+frappe.ui.form.on("Sales Invoice", {
+	setup(frm) {
+		frm.set_query("custom_price_list", "items", function () {
+			return {
+				query: "sf_trading.branch_price_list.branch_price_list_query",
+				filters: { branch: frm.doc.branch || "", kind: "selling", row: 1 },
+			};
+		});
+	},
+});

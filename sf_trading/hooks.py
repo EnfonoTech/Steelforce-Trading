@@ -90,6 +90,8 @@ doctype_js = {
 	"Stock Entry":      "public/js/stock_entry.js",
 	# Item Code and Item Name are typed in capitals on the form -- the server enforces it, see item_case.py
 	"Item":             "public/js/item_uppercase.js",
+	# "Items Without Price" button: opens that report on this list
+	"Price List":       "public/js/price_list.js",
 	"Company":          "public/js/company_stock_reco_account.js",
 	"Material Request": "public/js/material_request.js",
 	"Customer":         [
@@ -448,6 +450,11 @@ doc_events = {
 	# a change to Disable Purchase Receipt (GRN) or its roster reaches the desk without a re-login
 	"SF Trading Settings": {
 		"on_update": "sf_trading.purchase_receipt_gate.clear_boot_cache",
+	},
+	# the branches a price list is limited to (Applicable Branches): none twice, none left out that
+	# its own Branch Configuration names -- see sf_trading/branch_price_list.py
+	"Price List": {
+		"validate": "sf_trading.branch_price_list.validate_price_list_branches",
 	},
 	"Stock Entry": {
 		# before_validate, so the header account faces ERPNext's own account checks
@@ -1043,6 +1050,7 @@ fixtures = [
 					"Sales Invoice Item-custom_price_list",
 					"Item Group-custom_min_margin_pct",
 					"Price List-custom_enforce_min_price",
+					"Price List-custom_applicable_branches",
 					"Material Request Item-custom_source_mr",
 					"Activity Log-custom_impersonation_reason",
 				)
