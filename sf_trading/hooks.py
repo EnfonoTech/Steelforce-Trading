@@ -826,7 +826,12 @@ doc_events = {
 		# the Item master is kept in CAPITALS: before_insert runs before Frappe names the record, before_validate on every save
 		# -- see sf_trading/item_case.py
 		"before_insert": "sf_trading.item_case.capitalise_item",
-		"before_validate": "sf_trading.item_case.capitalise_item",
+		"before_validate": [
+			"sf_trading.item_case.capitalise_item",
+			# an item with no barcode gets its Item Code as one (CODE-128, stock UOM); after the line above so it is the capitalised code
+			# -- see sf_trading/item_barcode.py
+			"sf_trading.item_barcode.add_item_barcode",
+		],
 	},
 	# a reply in a Ticket's comment box reaches everyone on the ticket. Both handlers return at
 	# once for any other doctype, so a site that has not migrated the Ticket table is untouched.
@@ -1100,6 +1105,9 @@ fixtures = [
 			"Customer-custom_commercial_registration_number-allow_in_quick_entry",
 			"Customer-custom_commercial_registration_number-mandatory_depends_on",
 			"Sales Invoice Item-barcode-in_list_view",
+			# CODE-128 is the type every Item's own-code barcode carries (sf_trading/item_barcode.py); ERPNext's list lacks it and blanks
+			# any type that is not in the list on every save
+			"Item Barcode-barcode_type-options",
 			"Sales Taxes and Charges-cost_center-ignore_user_permissions",
 			"Sales Invoice Item-cost_center-ignore_user_permissions",
 			"Purchase Invoice-is_paid-hidden",

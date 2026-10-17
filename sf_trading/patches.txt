@@ -29,3 +29,4 @@ sf_trading.patches.v0_1.name_payment_terms_on_term_less_schedules
 sf_trading.patches.v0_1.seed_item_case_switch
 sf_trading.patches.v0_1.uppercase_existing_items
 sf_trading.patches.v0_1.remove_price_list_branch_table
+sf_trading.patches.v0_1.add_item_barcodes
