@@ -8,6 +8,12 @@ its own price list -- not to teach Item Price about branches, which would mean p
 re-teaching Pricing Rules, the minimum-margin check, the item-search dropdown and the POS the same
 trick one at a time.
 
+That was the first answer. A price that differs per branch INSIDE one list was asked for next, and that
+one has to live on Item Price (Applicable Branches), so Item Price was taught after all -- the lookup
+wrapped, the duplicate check redone, the readers in this app updated: see item_price_branch.py. This
+module is unchanged by it in one respect: it still decides which lists a branch may use and which is its
+default. The Item Price table decides which prices inside those lists reach the branch.
+
 **Where the mapping lives.** On Branch Configuration, beside the branch's modes of payment, its
 warehouses, its cost centers and its users. That is already the one place a branch is described and
 the one place its access is controlled, so a price list belongs there too -- and it lets a branch
@@ -21,18 +27,6 @@ carry several lists with one marked **Default**, which a field on Price List cou
   * A branch may hold one default selling list and one default buying list, no more. Two defaults
     of a kind would each be a valid answer to "what is this branch priced from", and the document
     would take whichever the query returned first.
-
-The same relationship from the Price List side
-----------------------------------------------
-A Price List also carries an **Applicable Branches** table (Custom Field `custom_applicable_branches`).
-Empty, which is every list until somebody fills it, means the list is open to every branch: no
-filter, exactly as before. With rows, only those branches may use it -- on the document's Price
-List field, and on the per-row Price List of a Sales Invoice. It limits; it does not make the list
-a branch's default, because two lists naming one branch would leave "what is this branch priced
-from" with two answers. The default is still the ticked row on Branch Configuration.
-
-The two sides may not contradict each other: a list a branch's configuration names cannot leave
-that branch out of its Applicable Branches (checked from both forms on save).
 
 A branch list holds differences, not a whole catalogue
 ------------------------------------------------------
@@ -55,12 +49,10 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
+from sf_trading import item_price_branch
+
 CHILD = "Branch Configuration Price List"
 TABLE_FIELD = "price_list"
-
-# The Price List side: the branches a list is limited to. No rows = open to every branch.
-LIMIT_CHILD = "Price List Branch"
-LIMIT_FIELD = "custom_applicable_branches"
 
 # The price list field each side of the business keeps its answer in.
 PRICE_LIST_FIELD = {"selling": "selling_price_list", "buying": "buying_price_list"}
@@ -109,62 +101,16 @@ def _of_kind(rows: list, kind: str) -> list:
 	return [row for row in rows if row.price_list in usable]
 
 
-def limited_lists() -> dict:
-	"""{price list: {branches}} for every list that names branches. A list that names none is open."""
-	if not frappe.db.table_exists(LIMIT_CHILD):
-		return {}
-
-	limited = {}
-	for row in frappe.get_all(
-		LIMIT_CHILD,
-		filters={"parenttype": "Price List", "parentfield": LIMIT_FIELD},
-		fields=["parent", "branch"],
-		ignore_permissions=True,
-	):
-		if row.branch:
-			limited.setdefault(row.parent, set()).add(row.branch)
-	return limited
-
-
-def open_to_branch(price_list: str, branch: str, limited: dict | None = None) -> bool:
-	"""May a document of this branch use this list? Only a list that names branches can say no."""
-	limited = limited_lists() if limited is None else limited
-	branches = limited.get(price_list)
-	return not branches or not branch or branch in branches
-
-
-def excluded_price_lists(branch: str, kind: str) -> list:
-	"""Enabled lists of this kind that are limited to other branches and so are hidden from this one."""
-	if not branch or kind not in PRICE_LIST_FIELD:
-		return []
-
-	away = [name for name, branches in limited_lists().items() if branch not in branches]
-	if not away:
-		return []
-	return frappe.get_all(
-		"Price List",
-		filters={"name": ["in", away], "enabled": 1, kind: 1},
-		pluck="name",
-		ignore_permissions=True,
-	)
-
-
-def _open_rows(rows: list, branch: str) -> list:
-	"""Only the rows whose list is not limited away from this branch."""
-	limited = limited_lists()
-	return [row for row in rows if open_to_branch(row.price_list, branch, limited)]
-
-
 def allowed_price_lists(branch: str, kind: str) -> list:
 	"""Every price list this branch may use on this side. Empty means "no opinion"."""
 	if kind not in PRICE_LIST_FIELD:
 		return []
-	return [row.price_list for row in _open_rows(_of_kind(_rows(branch), kind), branch)]
+	return [row.price_list for row in _of_kind(_rows(branch), kind)]
 
 
 def default_price_list(branch: str, kind: str) -> str | None:
 	"""What this branch is priced from: its default row, or its only row."""
-	rows = _open_rows(_of_kind(_rows(branch), kind), branch)
+	rows = _of_kind(_rows(branch), kind)
 	if not rows:
 		return None
 
@@ -176,33 +122,16 @@ def default_price_list(branch: str, kind: str) -> str | None:
 
 
 def branch_managed_lists(kind: str) -> set:
-	"""Every price list any branch names, so a switch of branch can replace another's list.
-
-	A list limited to some branches by its own Applicable Branches table is every bit as much one
-	branch's list, so it counts too.
-	"""
-	managed = set()
-
-	if frappe.db.table_exists(CHILD):
-		rows = frappe.get_all(
-			CHILD,
-			filters={"parenttype": "Branch Configuration", "price_list": ["is", "set"]},
-			fields=["price_list", "is_default", "idx"],
-			ignore_permissions=True,
-		)
-		managed |= {row.price_list for row in _of_kind(rows, kind)}
-
-	limited = list(limited_lists())
-	if limited:
-		managed |= set(
-			frappe.get_all(
-				"Price List",
-				filters={"name": ["in", limited], "enabled": 1, kind: 1},
-				pluck="name",
-				ignore_permissions=True,
-			)
-		)
-	return managed
+	"""Every price list any branch names, so a switch of branch can replace another's list."""
+	if not frappe.db.table_exists(CHILD):
+		return set()
+	rows = frappe.get_all(
+		CHILD,
+		filters={"parenttype": "Branch Configuration", "price_list": ["is", "set"]},
+		fields=["price_list", "is_default", "idx"],
+		ignore_permissions=True,
+	)
+	return {row.price_list for row in _of_kind(rows, kind)}
 
 
 @frappe.whitelist()
@@ -223,20 +152,13 @@ def branch_price_list_query(doctype, txt, searchfield, start, page_len, filters)
 	"""
 	filters = filters or {}
 	kind = filters.get("kind") or "selling"
-	branch = filters.get("branch")
-	# a row's own Price List is not held to the branch's configured set, only to the lists that
-	# their Applicable Branches table keeps away from this branch
-	allowed = [] if filters.get("row") else allowed_price_lists(branch, kind)
+	allowed = allowed_price_lists(filters.get("branch"), kind)
 
-	conditions = [["enabled", "=", 1], [kind, "=", 1]]
+	conditions = {"enabled": 1, kind: 1}
 	if allowed:
-		conditions.append(["name", "in", [a for a in allowed if not txt or txt.lower() in a.lower()]])
-	else:
-		if txt:
-			conditions.append(["name", "like", f"%{txt}%"])
-		excluded = excluded_price_lists(branch, kind)
-		if excluded:
-			conditions.append(["name", "not in", excluded])
+		conditions["name"] = ["in", allowed]
+	if txt:
+		conditions["name"] = ["like", f"%{txt}%"] if not allowed else ["in", [a for a in allowed if txt.lower() in a.lower()]]
 
 	rows = frappe.get_all(
 		"Price List",
@@ -328,37 +250,18 @@ def validate_price_list_allowed(doc, method=None):
 		return
 
 	branch = doc.get("branch")
-	if not branch:
+	chosen = doc.get(PRICE_LIST_FIELD[kind])
+	if not branch or not chosen:
 		return
 
-	limited = limited_lists()
-	chosen = doc.get(PRICE_LIST_FIELD[kind])
+	allowed = allowed_price_lists(branch, kind)
+	if not allowed or chosen in allowed:
+		return
 
-	if chosen:
-		allowed = allowed_price_lists(branch, kind)
-		if allowed:
-			if chosen not in allowed:
-				frappe.throw(
-					_("%s is not one of the price lists branch %s may use: %s.")
-					% (frappe.bold(chosen), frappe.bold(branch), ", ".join(allowed)),
-					title=_("Price List Not Allowed for This Branch"),
-				)
-		elif not open_to_branch(chosen, branch, limited):
-			_refuse_limited(chosen, branch, limited)
-
-	# a Sales Invoice row may carry a price list of its own; the same limit applies to it
-	for row in doc.get("items") or []:
-		own = row.get("custom_price_list")
-		if own and not open_to_branch(own, branch, limited):
-			_refuse_limited(own, branch, limited, idx=row.get("idx"))
-
-
-def _refuse_limited(price_list: str, branch: str, limited: dict, idx=None):
-	where = (_("Row %s: ") % idx) if idx else ""
 	frappe.throw(
-		where
-		+ _("%s is limited to branches %s; branch %s is not one of them.")
-		% (frappe.bold(price_list), ", ".join(sorted(limited.get(price_list, ()))), frappe.bold(branch)),
+		_("{0} is not one of the price lists branch {1} may use: {2}.").format(
+			frappe.bold(chosen), frappe.bold(branch), ", ".join(allowed)
+		),
 		title=_("Price List Not Allowed for This Branch"),
 	)
 
@@ -377,35 +280,47 @@ def _fill_gaps_from(doc, fallback: str, branch_list: str):
 	if not rows:
 		return
 
-	priced_on_branch = set(
-		frappe.get_all(
-			"Item Price",
-			filters={
-				"price_list": branch_list,
-				"item_code": ["in", list({row.item_code for row in rows})],
-			},
-			pluck="item_code",
-			ignore_permissions=True,
+	# an Item Price may itself be limited to some branches (item_price_branch.py): only the prices a
+	# document of this branch can see count, on the branch's list and on the one it replaced
+	branch = doc.get("branch")
+	priced_on_branch = {
+		price.item_code
+		for price in item_price_branch.visible(
+			frappe.get_all(
+				"Item Price",
+				filters={
+					"price_list": branch_list,
+					"item_code": ["in", list({row.item_code for row in rows})],
+				},
+				fields=["name", "item_code"],
+				ignore_permissions=True,
+			),
+			branch,
+			name_of=lambda price: price.name,
 		)
-	)
+	}
 
 	gaps = [row for row in rows if row.item_code not in priced_on_branch]
 	if not gaps:
 		return
 
-	fallback_rates = {
-		price.item_code: flt(price.price_list_rate)
-		for price in frappe.get_all(
+	fallback_rates = {}
+	for price in item_price_branch.visible(
+		frappe.get_all(
 			"Item Price",
 			filters={
 				"price_list": fallback,
 				"item_code": ["in", list({row.item_code for row in gaps})],
 			},
-			fields=["item_code", "price_list_rate"],
+			fields=["name", "item_code", "price_list_rate"],
 			order_by="valid_from desc",
 			ignore_permissions=True,
-		)
-	}
+		),
+		branch,
+		name_of=lambda price: price.name,
+	):
+		# newest first, and the branch's own ahead of the general one: the first seen wins
+		fallback_rates.setdefault(price.item_code, flt(price.price_list_rate))
 	if not fallback_rates:
 		return
 
@@ -429,23 +344,10 @@ def validate_branch_price_lists(doc, method=None):
 	if not rows:
 		return
 
-	branch = doc.get("branch") or doc.get("name")
-	limited = limited_lists()
-
 	seen = set()
 	for row in rows:
 		if not row.price_list:
 			continue
-		if not open_to_branch(row.price_list, branch, limited):
-			frappe.throw(
-				_("Price list %s is limited to branches %s. Add branch %s to its Applicable Branches first, or take it off this branch.")
-				% (
-					frappe.bold(row.price_list),
-					", ".join(sorted(limited.get(row.price_list, ()))),
-					frappe.bold(branch),
-				),
-				title=_("Price List Limited to Other Branches"),
-			)
 		if row.price_list in seen:
 			frappe.throw(
 				_("Price list {0} is listed twice on this branch.").format(frappe.bold(row.price_list)),
@@ -474,41 +376,3 @@ def validate_branch_price_lists(doc, method=None):
 				),
 				title=_("More Than One Default"),
 			)
-
-
-def validate_price_list_branches(doc, method=None):
-	"""Price List validate: no branch twice, and no branch left out that its own configuration names."""
-	rows = doc.get(LIMIT_FIELD) or []
-	if not rows:
-		return
-
-	seen = set()
-	for row in rows:
-		if not row.get("branch"):
-			continue
-		if row.branch in seen:
-			frappe.throw(
-				_("Branch %s is listed twice in Applicable Branches.") % frappe.bold(row.branch),
-				title=_("Duplicate Branch"),
-			)
-		seen.add(row.branch)
-
-	if not seen or not doc.get("name") or not frappe.db.table_exists(CHILD):
-		return
-
-	left_out = [
-		branch
-		for branch in frappe.get_all(
-			CHILD,
-			filters={"parenttype": "Branch Configuration", "price_list": doc.name},
-			pluck="parent",
-			ignore_permissions=True,
-		)
-		if branch not in seen
-	]
-	if left_out:
-		frappe.throw(
-			_("Branch %s names this price list in its Branch Configuration, so it cannot be left out of Applicable Branches. Add it here, or take the list off that branch.")
-			% frappe.bold(", ".join(sorted(set(left_out)))),
-			title=_("Branch Left Out"),
-		)

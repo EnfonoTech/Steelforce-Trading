@@ -16,9 +16,21 @@ def _get_margin_pct(item_code):
 	return 0.0
 
 
+def _price_list_rate(item_code, price_list, branch):
+	"""The price this list holds for the item as a document of `branch` sees it (0 when none).
+
+	An Item Price may be limited to some branches (sf_trading/item_price_branch.py), so "the" price
+	of an item in a list is no longer one row: the branch's own, else the general one.
+	"""
+	from sf_trading import item_price_branch
+
+	row = item_price_branch.rate_for(item_code, price_list, branch, selling=1)
+	return flt(row.price_list_rate) if row else 0.0
+
+
 @frappe.whitelist()
 def get_min_selling_price(item_code, warehouse=None, price_list=None,
-                           conversion_rate=1.0, uom_cf=1.0, plc_conversion_rate=1.0):
+                           conversion_rate=1.0, uom_cf=1.0, plc_conversion_rate=1.0, branch=None):
 	"""
 	Return the minimum allowed selling rate for an item in *transaction* currency.
 	Used for real-time client-side validation (rate field onchange).
@@ -47,11 +59,7 @@ def get_min_selling_price(item_code, warehouse=None, price_list=None,
 	# When the price list has "Enforce Minimum Selling Price" ticked, it REPLACES the
 	# cost checks — only validate that the rate is >= the price list rate.
 	if price_list and frappe.db.get_value("Price List", price_list, "custom_enforce_min_price"):
-		pl_rate = flt(frappe.db.get_value(
-			"Item Price",
-			{"item_code": item_code, "price_list": price_list, "selling": 1},
-			"price_list_rate",
-		))
+		pl_rate = _price_list_rate(item_code, price_list, branch)
 		if not pl_rate:
 			return {"min_price": 0.0}
 		return {"min_price": pl_rate * plc_conversion_rate / conversion_rate}
@@ -124,11 +132,7 @@ def validate_selling_price(doc, method=None):
 		)
 
 		if enforce_pl:
-			pl_rate = flt(frappe.db.get_value(
-				"Item Price",
-				{"item_code": item.item_code, "price_list": effective_price_list, "selling": 1},
-				"price_list_rate",
-			))
+			pl_rate = _price_list_rate(item.item_code, effective_price_list, doc.get("branch"))
 			if not pl_rate:
 				continue
 			min_rate = pl_rate * plc_conversion_rate

@@ -1,6 +1,7 @@
 // apps/sf_trading/sf_trading/report/items_without_price_list/items_without_price_list.js
 
 const SF_STATUS_COLOURS = {
+	Priced: "#2e7d32",
 	"No Item Price": "#c62828",
 	"Zero Rate": "#ef6c00",
 	"Expired / Not Yet Valid": "#f9a825",
@@ -8,6 +9,20 @@ const SF_STATUS_COLOURS = {
 
 frappe.query_reports["Items Without Price List"] = {
 	filters: [
+		{
+			fieldname: "company",
+			label: __("Company"),
+			fieldtype: "Link",
+			options: "Company",
+			default: frappe.defaults.get_user_default("Company"),
+		},
+		{
+			fieldname: "show",
+			label: __("Show"),
+			fieldtype: "Select",
+			options: "Without Price\nWith Price\nAll Items",
+			default: "Without Price",
+		},
 		{
 			fieldname: "price_type",
 			label: __("Price Type"),
@@ -67,7 +82,7 @@ frappe.query_reports["Items Without Price List"] = {
 			fieldname: "status",
 			label: __("Status"),
 			fieldtype: "Select",
-			options: "\nNo Item Price\nZero Rate\nExpired / Not Yet Valid",
+			options: "\nPriced\nNo Item Price\nZero Rate\nExpired / Not Yet Valid",
 		},
 		{
 			fieldname: "as_on_date",

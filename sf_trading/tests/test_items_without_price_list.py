@@ -1,5 +1,5 @@
 # sf_trading/tests/test_items_without_price_list.py
-"""Items Without Price List: which items it keeps, why each is unpriced, and where else it is priced.
+"""Items Without Price List: which items it keeps (priced, unpriced or both), why, for which company and branch.
 
 Queries are patched and read back, so no data is needed and no Item Price is touched (never run a
 test module against a real site -- ERPNext's before_tests wipes Item Price):
@@ -23,8 +23,8 @@ class Row(dict):
 	__getattr__ = dict.get
 
 
-def price_row(rate, valid_from=None, valid_upto=None):
-	return Row(price_list_rate=rate, valid_from=valid_from, valid_upto=valid_upto)
+def price_row(rate, valid_from=None, valid_upto=None, name="IP-1"):
+	return Row(name=name, price_list_rate=rate, valid_from=valid_from, valid_upto=valid_upto)
 
 
 def item(code, group="Hand Tool", **extra):
@@ -36,21 +36,37 @@ def item(code, group="Hand Tool", **extra):
 	return Row(base)
 
 
-class TestWhyAnItemIsUnpriced(FrappeTestCase):
+class TestWhereAnItemStands(FrappeTestCase):
 	def test_no_row_at_all(self):
-		self.assertEqual(report.status_for([]), report.STATUS_NONE)
+		self.assertEqual(report.status_for([], ON), report.STATUS_NONE)
 
 	def test_rows_that_are_all_zero(self):
-		self.assertEqual(report.status_for([price_row(0), price_row(0)]), report.STATUS_ZERO)
+		self.assertEqual(report.status_for([price_row(0), price_row(0)], ON), report.STATUS_ZERO)
 
 	def test_a_real_rate_outside_its_dates(self):
-		self.assertEqual(report.status_for([price_row(0), price_row(2.5, valid_upto=dt.date(2026, 9, 1))]), report.STATUS_EXPIRED)
+		rows = [price_row(0), price_row(2.5, valid_upto=dt.date(2026, 9, 1))]
+		self.assertEqual(report.status_for(rows, ON), report.STATUS_EXPIRED)
+		rows = [price_row(2.5, valid_from=dt.date(2026, 11, 1))]
+		self.assertEqual(report.status_for(rows, ON), report.STATUS_EXPIRED)
 
-	def test_price_on_file_is_the_rate_that_lapsed_last(self):
-		rows = [price_row(1.0, valid_upto=dt.date(2026, 1, 1)), price_row(2.0, valid_upto=dt.date(2026, 6, 1)), price_row(0)]
-		self.assertEqual(report.price_on_file(rows), 2.0)
-		self.assertEqual(report.price_on_file([price_row(0)]), 0.0)
-		self.assertEqual(report.price_on_file([]), 0.0)
+	def test_a_valid_price_is_priced(self):
+		self.assertEqual(report.status_for([price_row(2.5)], ON), report.STATUS_PRICED)
+		rows = [price_row(2.5, valid_from=dt.date(2026, 1, 1), valid_upto=dt.date(2026, 12, 31))]
+		self.assertEqual(report.status_for(rows, ON), report.STATUS_PRICED)
+		# one valid row among lapsed ones is enough
+		self.assertEqual(report.status_for([price_row(1, valid_upto=dt.date(2026, 1, 1)), price_row(3)], ON), report.STATUS_PRICED)
+
+	def test_the_price_in_the_list_is_the_first_valid_row(self):
+		rows = [price_row(4.0, valid_upto=dt.date(2026, 1, 1), name="old"), price_row(5.0, name="now"), price_row(6.0, name="later")]
+		self.assertEqual(report.chosen_price(rows, ON).name, "now")
+
+	def test_an_expired_item_shows_the_price_that_lapsed_last(self):
+		rows = [price_row(1.0, valid_upto=dt.date(2026, 1, 1), name="a"), price_row(2.0, valid_upto=dt.date(2026, 6, 1), name="b"), price_row(0, name="c")]
+		self.assertEqual(report.chosen_price(rows, ON).name, "b")
+
+	def test_a_zero_only_or_empty_item_has_no_price_in_the_list(self):
+		self.assertIsNone(report.chosen_price([price_row(0)], ON))
+		self.assertIsNone(report.chosen_price([], ON))
 
 	def test_each_current_list_is_named_once_in_order(self):
 		text = report.current_lists_text([("Wholesale", 7.5), ("Offer Price", 8.8), ("Offer Price", 8.8)])
@@ -97,7 +113,7 @@ class TestTheItemQuery(FrappeTestCase):
 		query, values = sql.call_args.args[0], sql.call_args.args[1]
 		return query, values
 
-	def test_the_gap_is_always_asked_for(self):
+	def test_the_gap_is_asked_for_by_default(self):
 		query, values = self.ask()
 		self.assertIn("not exists (select 1 from `tabItem Price` p where", query)
 		self.assertIn("p.price_list_rate > 0", query)
@@ -133,6 +149,25 @@ class TestTheItemQuery(FrappeTestCase):
 		self.assertIn("it.brand = %(brand)s", query)
 		self.assertEqual((values["item_code"], values["brand"]), ("FILE", "Vito"))
 
+	def test_show_with_price_asks_for_a_valid_price_instead(self):
+		query, _values = self.ask(show="With Price")
+		self.assertNotIn("not exists (select 1 from `tabItem Price` p", query)
+		self.assertIn("exists (select 1 from `tabItem Price` p where", query)
+		self.assertIn("p.price_list_rate > 0", query)
+
+	def test_show_all_items_asks_nothing_about_the_price(self):
+		query, _values = self.ask(show="All Items")
+		self.assertNotIn("from `tabItem Price` p where p.item_code = it.name and p.price_list = %(price_list)s", query)
+
+	def test_show_without_price_is_the_same_as_leaving_it_blank(self):
+		self.assertEqual(self.ask(show="Without Price")[0], self.ask()[0])
+
+	def test_a_status_decides_over_show(self):
+		query, _values = self.ask(show="With Price", status=report.STATUS_NONE)
+		self.assertEqual(query.count("not exists (select 1 from `tabItem Price` p where"), 2)
+		query, _values = self.ask(show="Without Price", status=report.STATUS_PRICED)
+		self.assertNotIn("not exists (select 1 from `tabItem Price` p where", query)
+
 	def test_status_no_item_price_wants_no_row_at_all(self):
 		query, _values = self.ask(status=report.STATUS_NONE)
 		self.assertEqual(query.count("not exists (select 1 from `tabItem Price` p where"), 2)
@@ -145,6 +180,35 @@ class TestTheItemQuery(FrappeTestCase):
 	def test_status_expired_wants_a_real_rate_somewhere(self):
 		query, _values = self.ask(status=report.STATUS_EXPIRED)
 		self.assertIn("exists (select 1 from `tabItem Price` p where p.item_code = it.name and p.price_list = %(price_list)s", query)
+
+	def test_a_branch_counts_only_the_prices_it_can_use(self):
+		with patch.object(report.item_price_branch, "table_ready", return_value=True):
+			query, values = self.ask(branch="Dock")
+		self.assertIn("from `tabItem Price Branch` pb where pb.parent = p.name", query)
+		self.assertIn("pb.branch = %(branch)s", query)
+		self.assertEqual(values["branch"], "Dock")
+
+	def test_without_a_branch_every_price_counts(self):
+		with patch.object(report.item_price_branch, "table_ready", return_value=True):
+			query, _values = self.ask()
+		self.assertNotIn("tabItem Price Branch", query)
+
+	def test_before_the_branch_table_exists_the_branch_is_not_asked(self):
+		with patch.object(report.item_price_branch, "table_ready", return_value=False):
+			query, _values = self.ask(branch="Dock")
+		self.assertNotIn("tabItem Price Branch", query)
+
+	def test_a_company_keeps_its_own_items(self):
+		query, values = self.ask(company="Steel Force Trading WLL")
+		self.assertIn("`tabItem Default` idf where idf.parent = it.name", query)
+		self.assertIn("idf.company = %(company)s", query)
+		self.assertEqual(values["company"], "Steel Force Trading WLL")
+		self.assertNotIn("tabItem Default", self.ask()[0])
+
+	def test_sold_since_is_that_companys_invoices(self):
+		query, _values = self.ask(company="C1", moved_since="2026-09-01")
+		self.assertIn("mh.company = %(company)s", query)
+		self.assertNotIn("mh.company", self.ask(moved_since="2026-09-01")[0])
 
 	def test_priced_nowhere_checks_every_enabled_list_of_the_side(self):
 		query, _values = self.ask("selling", no_price_anywhere=1)
@@ -180,6 +244,27 @@ class TestTheItemQuery(FrappeTestCase):
 		self.assertNotIn("drop table", query)
 
 
+class TestCompanyWarehouses(FrappeTestCase):
+	def scope(self, company, branch, company_warehouses, branch_warehouses):
+		with patch.object(report, "branch_warehouses", return_value=branch_warehouses), patch.object(
+			frappe, "get_all", return_value=list(company_warehouses)
+		):
+			return report.scope_warehouses(company, branch)
+
+	def test_no_company_leaves_the_branchs_warehouses_as_they_are(self):
+		self.assertEqual(self.scope(None, "Dock", [], ("D1",)), ("D1",))
+		self.assertIsNone(self.scope(None, None, [], None))
+
+	def test_a_company_reads_stock_from_its_own_warehouses(self):
+		self.assertEqual(self.scope("C1", None, ["W2", "W1"], None), ("W1", "W2"))
+
+	def test_a_branch_narrows_the_companys_warehouses(self):
+		self.assertEqual(self.scope("C1", "Dock", ["W1", "W2", "W3"], ("W2", "W9")), ("W2",))
+
+	def test_a_company_with_no_warehouse_holds_nothing_rather_than_everything(self):
+		self.assertEqual(self.scope("C1", None, [], None), report.NO_WAREHOUSE)
+
+
 class TestBranchWarehouses(FrappeTestCase):
 	def test_no_branch_means_no_restriction(self):
 		self.assertIsNone(report.branch_warehouses(None))
@@ -201,17 +286,20 @@ class TestBranchWarehouses(FrappeTestCase):
 
 
 class TestTheRows(FrappeTestCase):
-	def build(self, items, kind="selling", own=None, current=None, stock=None, last=None):
+	def build(self, items, kind="selling", own=None, current=None, stock=None, last=None, branch=None, company=None, scopes=None):
 		with patch.object(report, "_own_list_rows", return_value=own or {}), patch.object(
 			report, "_current_lists", return_value=current or {}
 		), patch.object(report, "_stock", return_value=stock or {}), patch.object(
 			report, "_last_movement", return_value=last or {}
-		), patch.object(report, "_margin_for_group", return_value=8.0):
-			return report.build_rows(items, kind, "Standard Selling", ON, None)
+		), patch.object(report, "_margin_for_group", return_value=8.0), patch.object(
+			report.item_price_branch, "branches_by_price", return_value=scopes or {}
+		):
+			return report.build_rows(items, kind, "Standard Selling", ON, None, branch, company)
 
 	def test_an_item_priced_in_another_list_says_so(self):
 		rows = self.build([item("FILE")], current={"FILE": [("Offer Price", 8.8)]})
 		self.assertEqual(rows[0]["status"], report.STATUS_NONE)
+		self.assertEqual(rows[0]["price_in_list"], 0.0)
 		self.assertEqual(rows[0]["current_price_lists"], "Offer Price: 8.800")
 		self.assertEqual(rows[0]["price_list_count"], 1)
 
@@ -243,17 +331,38 @@ class TestTheRows(FrappeTestCase):
 		self.assertEqual((rows[0]["last_rate"], rows[0]["last_date"]), (1.364, dt.date(2026, 10, 5)))
 
 	def test_status_follows_the_rows_in_the_checked_list(self):
-		rows = self.build([item("A"), item("B"), item("C")], own={"B": [price_row(0)], "C": [price_row(3, valid_upto=dt.date(2026, 1, 1))]})
-		self.assertEqual([r["status"] for r in rows], [report.STATUS_NONE, report.STATUS_ZERO, report.STATUS_EXPIRED])
-		self.assertEqual(rows[2]["price_on_file"], 3.0)
+		rows = self.build(
+			[item("A"), item("B"), item("C"), item("D")],
+			own={"B": [price_row(0)], "C": [price_row(3, valid_upto=dt.date(2026, 1, 1))], "D": [price_row(4.5)]},
+		)
+		self.assertEqual(
+			[r["status"] for r in rows], [report.STATUS_NONE, report.STATUS_ZERO, report.STATUS_EXPIRED, report.STATUS_PRICED]
+		)
+		self.assertEqual(rows[2]["price_in_list"], 3.0)
+		self.assertEqual(rows[3]["price_in_list"], 4.5)
+
+	def test_a_priced_item_says_whom_the_price_serves(self):
+		own = {"A": [price_row(4.5, name="IP-A")], "B": [price_row(5.0, name="IP-B")]}
+		rows = self.build([item("A"), item("B")], own=own, scopes={"IP-B": {"Mall", "Dock"}})
+		self.assertEqual(rows[0]["price_branches"], "All Branches")
+		self.assertEqual(rows[1]["price_branches"], "Dock, Mall")
+
+	def test_an_unpriced_item_has_no_price_scope(self):
+		self.assertEqual(self.build([item("A")])[0]["price_branches"], "")
 
 	def test_the_summary_counts_each_kind_of_gap_and_the_priced_elsewhere(self):
-		rows = self.build([item("A"), item("B"), item("C")], own={"B": [price_row(0)]}, current={"A": [("Offer Price", 1.0)]})
+		rows = self.build(
+			[item("A"), item("B"), item("C"), item("D")],
+			own={"B": [price_row(0)], "D": [price_row(2.0)]},
+			current={"A": [("Offer Price", 1.0)], "D": [("Standard Selling", 2.0)]},
+		)
 		summary = {entry["label"]: entry["value"] for entry in report.get_summary(rows)}
-		self.assertEqual(summary["Items Without a Price"], 3)
+		self.assertEqual(summary["Items Listed"], 4)
+		self.assertEqual(summary[report.STATUS_PRICED], 1)
 		self.assertEqual(summary[report.STATUS_NONE], 2)
 		self.assertEqual(summary[report.STATUS_ZERO], 1)
-		self.assertEqual(summary["Priced in Another List"], 1)
+		# only unpriced items count as "priced elsewhere"; the priced one is simply priced
+		self.assertEqual(summary["Unpriced Here, Priced in Another List"], 1)
 		self.assertEqual(summary["Priced Nowhere"], 2)
 
 	def test_the_columns_follow_the_side(self):

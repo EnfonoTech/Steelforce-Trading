@@ -29,6 +29,8 @@
 				// warning would compare a foreign number against the row rate and label
 				// it with the transaction currency.
 				plc_conversion_rate: frm.doc.plc_conversion_rate || 1,
+				// an Item Price may be limited to some branches, so the floor is the branch's own
+				branch: frm.doc.branch || "",
 			},
 			callback: function (r) {
 				if (!r.message) return;

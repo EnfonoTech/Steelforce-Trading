@@ -386,6 +386,9 @@ override_doctype_class = {
 	# normally after its initial insert -- core's own Asset.validate_item() refuses any Asset
 	# whose Item isn't a Fixed Asset Item on every save, not only the first
 	"Asset": "sf_trading.overrides.asset_class.CustomAsset",
+	# two prices of one item, one list and one UOM may coexist when they serve different branches
+	# (Applicable Branches) -- see sf_trading/overrides/item_price_class.py
+	"Item Price": "sf_trading.overrides.item_price_class.CustomItemPrice",
 }
 
 # Document Events
@@ -451,10 +454,9 @@ doc_events = {
 	"SF Trading Settings": {
 		"on_update": "sf_trading.purchase_receipt_gate.clear_boot_cache",
 	},
-	# the branches a price list is limited to (Applicable Branches): none twice, none left out that
-	# its own Branch Configuration names -- see sf_trading/branch_price_list.py
-	"Price List": {
-		"validate": "sf_trading.branch_price_list.validate_price_list_branches",
+	# the branches an Item Price is limited to (Applicable Branches): none twice -- see sf_trading/item_price_branch.py
+	"Item Price": {
+		"validate": "sf_trading.item_price_branch.validate_item_price_branches",
 	},
 	"Stock Entry": {
 		# before_validate, so the header account faces ERPNext's own account checks
@@ -925,11 +927,14 @@ before_request = [
 	"sf_trading.api.query_report_columns.install",
 	# Balance Sheet / Profit and Loss / Cash Flow read the ledger by account, not by walking the year
 	"sf_trading.report_speed.install",
+	# a price limited to some branches is priced only for those -- see sf_trading/item_price_branch.py
+	"sf_trading.item_price_branch.install",
 ]
 # a Prepared Report runs in a background job, which has no request
 before_job = [
 	"sf_trading.api.query_report_columns.install",
 	"sf_trading.report_speed.install",
+	"sf_trading.item_price_branch.install",
 ]
 # after_request = ["sf_trading.utils.after_request"]
 
@@ -1050,7 +1055,8 @@ fixtures = [
 					"Sales Invoice Item-custom_price_list",
 					"Item Group-custom_min_margin_pct",
 					"Price List-custom_enforce_min_price",
-					"Price List-custom_applicable_branches",
+					"Item Price-custom_branches_section",
+					"Item Price-custom_applicable_branches",
 					"Material Request Item-custom_source_mr",
 					"Activity Log-custom_impersonation_reason",
 				)

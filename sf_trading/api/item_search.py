@@ -163,6 +163,7 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 	# return zero rows).
 	company = filters.pop("company", None)
 	price_list = filters.pop("price_list", None)
+	branch = filters.pop("branch", None)
 
 	# Pre-filter to this company's items BEFORE calling item_query, so ERPNext's
 	# pagination operates on the already-restricted item set. Doing this
@@ -263,9 +264,14 @@ def search_items_with_stock_and_rate(doctype, txt, searchfield, start, page_len,
 				"price_list": price_list,
 				"selling": 1,
 			},
-			fields=["item_code", "price_list_rate", "currency"],
+			fields=["name", "item_code", "price_list_rate", "currency"],
+			order_by="valid_from desc, creation desc",
 		)
-		price_map = {p.item_code: (p.price_list_rate, p.currency) for p in prices}
+		# an Item Price may be limited to some branches: the branch's own price, else the general one
+		from sf_trading import item_price_branch
+
+		for p in item_price_branch.visible(prices, branch, name_of=lambda row: row.name):
+			price_map.setdefault(p.item_code, (p.price_list_rate, p.currency))
 
 	def _fmt_qty(q):
 		return ("{0:.2f}".format(float(q))).rstrip("0").rstrip(".") or "0"

@@ -1,20 +1,31 @@
 # apps/sf_trading/sf_trading/report/items_without_price_list/items_without_price_list.py
-"""Items Without Price List - the items a price list does not price, and where else they are priced.
+"""Items Without Price List - which items a price list prices, which it does not, and where else they are priced.
 
-An item is **without a price** in a list when that list holds no Item Price for it that is
+An item is **priced** in a list when that list holds an Item Price for it that is
 
   * general -- not one made for a single customer (selling) or supplier (buying),
-  * above zero, and
-  * valid on the "As On Date": inside its Valid From / Valid Upto, when it has them.
+  * above zero,
+  * valid on the "As On Date": inside its Valid From / Valid Upto, when it has them, and
+  * for the branch chosen, when one is: an Item Price may name the branches it serves
+    (Applicable Branches, sf_trading/item_price_branch.py); with no Branch filter any such price counts
+    and the Applicable Branches column says whom it serves.
 
-The Status column says why, because the fixes differ:
+"Show" picks the side: Without Price (the default), With Price, or All Items. The Status column says
+why an item is unpriced, because the fixes differ:
 
+  Priced                   a valid price exists (what With Price and All Items add)
   No Item Price            the list has no row for the item at all
   Zero Rate                rows exist, every one of them at zero
   Expired / Not Yet Valid  a row above zero exists, but the date is outside its validity
 
+The Status filter, when set, wins over "Show".
+
+The Company filter keeps the company's items (an Item Default row for it, see company_items.py) and
+reads stock from, and last sold / purchased rates and "Sold / Purchased Since" against, that company's
+warehouses and invoices only.
+
 The price list checked is, in order: the Price List filter; the branch's default list when a Branch
-is chosen; the site default (Selling Settings / Buying Settings). The title line says which.
+is chosen; the site default (Selling Settings / Buying Settings). The message line says which.
 
 **Current Price Lists** is the other half of the ask: every enabled list that DOES price the item
 today, with the rate -- so a gap in one list that another list fills reads at a glance, and an item
@@ -25,8 +36,8 @@ while nothing is in stock), Last Purchase Rate, the minimum selling price the co
 the item to (last purchase or valuation, whichever is higher, plus its Item Group's margin), and the
 last rate it actually sold or was bought at.
 
-Branch limits two things only: the default list above, and the stock figures, which then count only
-that branch's warehouses (Branch Configuration). Items are not branch-bound.
+Branch decides which prices count (above), the default list, and the stock figures, which then count
+only that branch's warehouses (Branch Configuration). Items themselves are not branch-bound.
 
 Every by-name lookup is fetched in slices of BATCH codes. One `IN` list of thousands of codes trips
 the query parser's token cap ("Maximum number of tokens exceeded") on exactly the widest selections.
@@ -36,13 +47,14 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, getdate, nowdate
 
-from sf_trading import branch_price_list
+from sf_trading import branch_price_list, item_price_branch
 
 # Most of the catalogue can be unpriced (16,748 items against 2,926 priced on the first run), so the
 # cap is generous -- and the order puts what is in stock first, so a cut-off loses the dead items.
 ROW_CAP = 10000
 BATCH = 500
 
+STATUS_PRICED = "Priced"
 STATUS_NONE = "No Item Price"
 STATUS_ZERO = "Zero Rate"
 STATUS_EXPIRED = "Expired / Not Yet Valid"
@@ -56,7 +68,20 @@ VALID_PRICE = (
 	"p.price_list_rate > 0 and (p.valid_from is null or p.valid_from <= %(on_date)s) "
 	"and (p.valid_upto is null or p.valid_upto >= %(on_date)s)"
 )
-ITEM_PRICE_ROWS = "select 1 from `tabItem Price` p where " + GENERAL_PRICE
+# a price that names no branch serves every branch; one that names branches serves only those
+BRANCH_SCOPE = (
+	" and (not exists (select 1 from `tabItem Price Branch` pb where pb.parent = p.name and pb.parenttype = 'Item Price')"
+	" or exists (select 1 from `tabItem Price Branch` pb where pb.parent = p.name and pb.parenttype = 'Item Price'"
+	" and pb.branch = %(branch)s))"
+)
+
+
+def price_rows(branch) -> str:
+	"""The Item Price rows of the checked list, as a branch sees them (every row when no branch is chosen)."""
+	sql = "select 1 from `tabItem Price` p where " + GENERAL_PRICE
+	if branch and item_price_branch.table_ready():
+		sql += BRANCH_SCOPE
+	return sql
 
 
 def execute(filters=None):
@@ -65,15 +90,19 @@ def execute(filters=None):
 	on_date = getdate(filters.as_on_date or nowdate())
 
 	price_list = resolve_price_list(filters, kind)
-	warehouses = branch_warehouses(filters.branch)
+	warehouses = scope_warehouses(filters.company, filters.branch)
 
 	items = fetch_items(filters, kind, price_list, on_date, warehouses)
 	truncated = len(items) > ROW_CAP
 	items = items[:ROW_CAP]
 
-	data = build_rows(items, kind, price_list, on_date, warehouses)
+	data = build_rows(items, kind, price_list, on_date, warehouses, filters.branch, filters.company)
 
 	message = _("Checked against price list %s as on %s.") % (frappe.bold(price_list), on_date)
+	if filters.company:
+		message += " " + _("Company %s.") % frappe.bold(filters.company)
+	if filters.branch:
+		message += " " + _("Branch %s.") % frappe.bold(filters.branch)
 	if truncated:
 		message += " " + _("Showing the first %s items; narrow the filters to see the rest.") % ROW_CAP
 
@@ -137,10 +166,31 @@ def branch_warehouses(branch):
 	return tuple(sorted(names)) or None
 
 
+NO_WAREHOUSE = ("-",)
+
+
+def scope_warehouses(company, branch):
+	"""The warehouses stock is read from: the company's, narrowed to the branch's when a branch is chosen.
+
+	None means no restriction. A company with no warehouse of its own is not "unrestricted" but "holds
+	nothing", which NO_WAREHOUSE says (an empty IN list is not valid SQL).
+	"""
+	of_branch = branch_warehouses(branch)
+	if not company:
+		return of_branch
+
+	of_company = set(
+		frappe.get_all("Warehouse", filters={"company": company, "is_group": 0}, pluck="name", ignore_permissions=True)
+	)
+	if of_branch:
+		of_company &= set(of_branch)
+	return tuple(sorted(of_company)) or NO_WAREHOUSE
+
+
 # ─── Finding the items ───────────────────────────────────────────────────────
 
 def fetch_items(filters, kind: str, price_list: str, on_date, warehouses) -> list:
-	values = {"price_list": price_list, "on_date": on_date, "cap": ROW_CAP + 1}
+	values = {"price_list": price_list, "on_date": on_date, "cap": ROW_CAP + 1, "branch": filters.branch or ""}
 	conditions = ["it.is_fixed_asset = 0", "it.has_variants = 0"]
 
 	if not cint(filters.include_disabled):
@@ -153,6 +203,11 @@ def fetch_items(filters, kind: str, price_list: str, on_date, warehouses) -> lis
 	elif item_type == "Services / Non-Stock":
 		conditions.append("it.is_stock_item = 0")
 
+	if filters.company:
+		conditions.append(
+			"exists (select 1 from `tabItem Default` idf where idf.parent = it.name and idf.parenttype = 'Item' and idf.company = %(company)s)"
+		)
+		values["company"] = filters.company
 	if filters.item_code:
 		conditions.append("it.name = %(item_code)s")
 		values["item_code"] = filters.item_code
@@ -168,16 +223,25 @@ def fetch_items(filters, kind: str, price_list: str, on_date, warehouses) -> lis
 		)
 		values.update({"lft": bounds.lft, "rgt": bounds.rgt})
 
-	# the gap itself, and which kind of gap
-	conditions.append("not exists (" + ITEM_PRICE_ROWS + " and " + VALID_PRICE + ")")
-	if filters.status == STATUS_NONE:
-		conditions.append("not exists (" + ITEM_PRICE_ROWS + ")")
+	# priced or not, and which kind of gap. A Status, when chosen, decides; otherwise "Show" does.
+	rows = price_rows(filters.branch)
+	priced = "exists (" + rows + " and " + VALID_PRICE + ")"
+	unpriced = "not exists (" + rows + " and " + VALID_PRICE + ")"
+	if filters.status == STATUS_PRICED:
+		conditions.append(priced)
+	elif filters.status == STATUS_NONE:
+		conditions.append(unpriced)
+		conditions.append("not exists (" + rows + ")")
 	elif filters.status == STATUS_ZERO:
-		conditions.append(
-			"exists (" + ITEM_PRICE_ROWS + ") and not exists (" + ITEM_PRICE_ROWS + " and p.price_list_rate > 0)"
-		)
+		conditions.append(unpriced)
+		conditions.append("exists (" + rows + ") and not exists (" + rows + " and p.price_list_rate > 0)")
 	elif filters.status == STATUS_EXPIRED:
-		conditions.append("exists (" + ITEM_PRICE_ROWS + " and p.price_list_rate > 0)")
+		conditions.append(unpriced)
+		conditions.append("exists (" + rows + " and p.price_list_rate > 0)")
+	elif filters.show == "With Price":
+		conditions.append(priced)
+	elif filters.show != "All Items":
+		conditions.append(unpriced)
 
 	if cint(filters.no_price_anywhere):
 		conditions.append(
@@ -190,21 +254,22 @@ def fetch_items(filters, kind: str, price_list: str, on_date, warehouses) -> lis
 		bin_check = "exists (select 1 from `tabBin` b where b.item_code = it.name and b.actual_qty > 0"
 		if warehouses:
 			bin_check += " and b.warehouse in %(warehouses)s"
-			values["warehouses"] = warehouses
 		conditions.append(bin_check + ")")
 
 	if filters.moved_since:
 		if kind == "selling":
 			moved = (
 				"exists (select 1 from `tabSales Invoice Item` mi join `tabSales Invoice` mh on mh.name = mi.parent "
-				"where mi.item_code = it.name and mh.docstatus = 1 and mh.posting_date >= %(moved_since)s)"
+				"where mi.item_code = it.name and mh.docstatus = 1 and mh.posting_date >= %(moved_since)s"
 			)
 		else:
 			moved = (
 				"exists (select 1 from `tabPurchase Invoice Item` mi join `tabPurchase Invoice` mh on mh.name = mi.parent "
-				"where mi.item_code = it.name and mh.docstatus = 1 and mh.posting_date >= %(moved_since)s)"
+				"where mi.item_code = it.name and mh.docstatus = 1 and mh.posting_date >= %(moved_since)s"
 			)
-		conditions.append(moved)
+		if filters.company:
+			moved += " and mh.company = %(company)s"
+		conditions.append(moved + ")")
 		values["moved_since"] = getdate(filters.moved_since)
 
 	# what is in stock first, then by group: a cut-off then loses the items nobody holds
@@ -231,22 +296,41 @@ def _batches(seq: list):
 		yield seq[start : start + BATCH]
 
 
-def status_for(rows: list) -> str:
-	"""Why an item with these rows in the checked list still counts as unpriced."""
+def is_valid(row, on_date) -> bool:
+	"""A price above zero whose dates (when it has them) take in `on_date`."""
+	if flt(row.price_list_rate) <= 0:
+		return False
+	if row.valid_from and getdate(row.valid_from) > on_date:
+		return False
+	if row.valid_upto and getdate(row.valid_upto) < on_date:
+		return False
+	return True
+
+
+def status_for(rows: list, on_date) -> str:
+	"""Where an item stands in the checked list, from its rows there."""
 	if not rows:
 		return STATUS_NONE
+	if any(is_valid(row, on_date) for row in rows):
+		return STATUS_PRICED
 	if not any(flt(row.price_list_rate) > 0 for row in rows):
 		return STATUS_ZERO
 	return STATUS_EXPIRED
 
 
-def price_on_file(rows: list) -> float:
-	"""The rate of the row that lapsed last, for an item whose price has expired."""
-	dated = [row for row in rows if flt(row.price_list_rate) > 0]
-	if not dated:
-		return 0.0
-	latest = max(dated, key=lambda row: str(row.valid_upto or row.valid_from or ""))
-	return flt(latest.price_list_rate)
+def chosen_price(rows: list, on_date):
+	"""The row an item is priced from in this list (what ERPNext would use), else the one that lapsed last.
+
+	`rows` arrive in the order ERPNext prefers them (newest valid-from first, the branch's own ahead of the
+	general price when a branch was chosen), so the first valid row is the answer.
+	"""
+	for row in rows:
+		if is_valid(row, on_date):
+			return row
+	lapsed = [row for row in rows if flt(row.price_list_rate) > 0]
+	if not lapsed:
+		return None
+	return max(lapsed, key=lambda row: str(row.valid_upto or row.valid_from or ""))
 
 
 def current_lists_text(entries: list) -> str:
@@ -278,13 +362,16 @@ def _margin_for_group(item_group, memo: dict) -> float:
 	return margin
 
 
-def build_rows(items: list, kind: str, price_list: str, on_date, warehouses) -> list:
+def build_rows(items: list, kind: str, price_list: str, on_date, warehouses, branch=None, company=None) -> list:
 	codes = [item.item_code for item in items]
-	own_rows = _own_list_rows(codes, price_list)
-	current = _current_lists(codes, kind, on_date)
+	own_rows = _own_list_rows(codes, price_list, branch)
+	current = _current_lists(codes, kind, on_date, branch)
 	stock = _stock(codes, warehouses)
-	last = _last_movement(codes, kind)
+	last = _last_movement(codes, kind, company)
 	margins = {}
+	scopes = item_price_branch.branches_by_price(
+		[row.get("name") for rows in own_rows.values() for row in rows if row.get("name")]
+	)
 
 	data = []
 	for item in items:
@@ -302,6 +389,9 @@ def build_rows(items: list, kind: str, price_list: str, on_date, warehouses) -> 
 			if cost:
 				floor = cost * (1 + _margin_for_group(item.item_group, margins) / 100.0)
 
+		price = chosen_price(rows, on_date)
+		status = status_for(rows, on_date)
+		served = sorted(scopes.get(price.get("name"), ())) if price else []
 		lists = current.get(item.item_code, [])
 		moved = last.get(item.item_code) or {}
 		data.append(
@@ -312,8 +402,9 @@ def build_rows(items: list, kind: str, price_list: str, on_date, warehouses) -> 
 				"brand": item.brand,
 				"stock_uom": item.stock_uom,
 				"disabled": cint(item.disabled),
-				"status": status_for(rows),
-				"price_on_file": price_on_file(rows),
+				"status": status,
+				"price_in_list": flt(price.price_list_rate) if price else 0.0,
+				"price_branches": (", ".join(served) if served else _("All Branches")) if price else "",
 				"stock_qty": qty,
 				"valuation_rate": valuation,
 				"last_purchase_rate": flt(item.last_purchase_rate),
@@ -327,25 +418,31 @@ def build_rows(items: list, kind: str, price_list: str, on_date, warehouses) -> 
 	return data
 
 
-def _own_list_rows(codes: list, price_list: str) -> dict:
+def _own_list_rows(codes: list, price_list: str, branch=None) -> dict:
+	"""The general rows each item has in the checked list, in ERPNext's order (and as `branch` sees them)."""
 	found = {}
 	for chunk in _batches(codes):
 		for row in frappe.db.sql(
-			"select item_code, price_list_rate, valid_from, valid_upto from `tabItem Price` "
+			"select name, item_code, price_list_rate, valid_from, valid_upto from `tabItem Price` "
 			"where price_list = %(price_list)s and item_code in %(codes)s "
-			"and ifnull(customer, '') = '' and ifnull(supplier, '') = ''",
+			"and ifnull(customer, '') = '' and ifnull(supplier, '') = '' "
+			"order by item_code, valid_from desc, creation desc",
 			{"price_list": price_list, "codes": tuple(chunk)},
 			as_dict=True,
 		):
 			found.setdefault(row.item_code, []).append(row)
+
+	if branch and item_price_branch.table_ready():
+		for code, rows in list(found.items()):
+			found[code] = item_price_branch.visible(rows, branch, name_of=lambda row: row.name)
 	return found
 
 
-def _current_lists(codes: list, kind: str, on_date) -> dict:
+def _current_lists(codes: list, kind: str, on_date, branch=None) -> dict:
 	found = {}
 	for chunk in _batches(codes):
-		for row in frappe.db.sql(
-			"select p.item_code, p.price_list, p.price_list_rate from `tabItem Price` p "
+		rows = frappe.db.sql(
+			"select p.name, p.item_code, p.price_list, p.price_list_rate from `tabItem Price` p "
 			"join `tabPrice List` pl on pl.name = p.price_list "
 			"where p.item_code in %(codes)s and pl.enabled = 1 and pl." + kind + " = 1 "
 			"and ifnull(p.customer, '') = '' and ifnull(p.supplier, '') = '' "
@@ -354,7 +451,10 @@ def _current_lists(codes: list, kind: str, on_date) -> dict:
 			"order by p.item_code, p.price_list",
 			{"codes": tuple(chunk), "on_date": on_date},
 			as_dict=True,
-		):
+		)
+		if branch and item_price_branch.table_ready():
+			rows = item_price_branch.visible(rows, branch, name_of=lambda row: row.name)
+		for row in rows:
 			found.setdefault(row.item_code, []).append((row.price_list, row.price_list_rate))
 	return found
 
@@ -378,24 +478,29 @@ def _stock(codes: list, warehouses) -> dict:
 	return found
 
 
-def _last_movement(codes: list, kind: str) -> dict:
-	"""Latest date and rate each item sold (or was bought) at. Returns are left out."""
+def _last_movement(codes: list, kind: str, company=None) -> dict:
+	"""Latest date and rate each item sold (or was bought) at, in this company's invoices. Returns are left out."""
 	if kind == "selling":
 		line, head = "`tabSales Invoice Item`", "`tabSales Invoice`"
 	else:
 		line, head = "`tabPurchase Invoice Item`", "`tabPurchase Invoice`"
 
+	query = (
+		"select li.item_code, max(hd.posting_date) as last_date, "
+		"substring_index(group_concat(li.base_net_rate order by hd.posting_date desc, hd.creation desc separator ','), ',', 1) as last_rate "
+		"from " + line + " li join " + head + " hd on hd.name = li.parent "
+		"where li.item_code in %(codes)s and hd.docstatus = 1 and hd.is_return = 0"
+	)
+	if company:
+		query += " and hd.company = %(company)s"
+	query += " group by li.item_code"
+
 	found = {}
 	for chunk in _batches(codes):
-		for row in frappe.db.sql(
-			"select li.item_code, max(hd.posting_date) as last_date, "
-			"substring_index(group_concat(li.base_net_rate order by hd.posting_date desc, hd.creation desc separator ','), ',', 1) as last_rate "
-			"from " + line + " li join " + head + " hd on hd.name = li.parent "
-			"where li.item_code in %(codes)s and hd.docstatus = 1 and hd.is_return = 0 "
-			"group by li.item_code",
-			{"codes": tuple(chunk)},
-			as_dict=True,
-		):
+		values = {"codes": tuple(chunk)}
+		if company:
+			values["company"] = company
+		for row in frappe.db.sql(query, values, as_dict=True):
 			found[row.item_code] = {"date": row.last_date, "rate": flt(row.last_rate)}
 	return found
 
@@ -411,7 +516,8 @@ def get_columns(kind: str) -> list:
 		{"label": _("Brand"), "fieldname": "brand", "fieldtype": "Link", "options": "Brand", "width": 100},
 		{"label": _("UOM"), "fieldname": "stock_uom", "fieldtype": "Link", "options": "UOM", "width": 60},
 		{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 150},
-		{"label": _("Price on File"), "fieldname": "price_on_file", "fieldtype": "Float", "precision": 3, "width": 95},
+		{"label": _("Price in List"), "fieldname": "price_in_list", "fieldtype": "Float", "precision": 3, "width": 95},
+		{"label": _("Price Serves"), "fieldname": "price_branches", "fieldtype": "Data", "width": 130},
 		{"label": _("Current Price Lists"), "fieldname": "current_price_lists", "fieldtype": "Data", "width": 300},
 		{"label": _("No. of Lists"), "fieldname": "price_list_count", "fieldtype": "Int", "width": 70},
 		{"label": _("Stock Qty"), "fieldname": "stock_qty", "fieldtype": "Float", "precision": 3, "width": 90},
@@ -430,18 +536,22 @@ def get_columns(kind: str) -> list:
 
 
 def get_summary(data: list) -> list:
-	by_status = {STATUS_NONE: 0, STATUS_ZERO: 0, STATUS_EXPIRED: 0}
+	by_status = {STATUS_PRICED: 0, STATUS_NONE: 0, STATUS_ZERO: 0, STATUS_EXPIRED: 0}
 	elsewhere = 0
+	nowhere = 0
 	for row in data:
 		by_status[row["status"]] = by_status.get(row["status"], 0) + 1
-		if row["price_list_count"]:
+		if not row["price_list_count"]:
+			nowhere += 1
+		elif row["status"] != STATUS_PRICED:
 			elsewhere += 1
 
 	return [
-		{"value": len(data), "label": _("Items Without a Price"), "datatype": "Int"},
+		{"value": len(data), "label": _("Items Listed"), "datatype": "Int"},
+		{"value": by_status[STATUS_PRICED], "label": _(STATUS_PRICED), "datatype": "Int", "indicator": "Green"},
 		{"value": by_status[STATUS_NONE], "label": _(STATUS_NONE), "datatype": "Int", "indicator": "Red"},
 		{"value": by_status[STATUS_ZERO], "label": _(STATUS_ZERO), "datatype": "Int", "indicator": "Orange"},
 		{"value": by_status[STATUS_EXPIRED], "label": _(STATUS_EXPIRED), "datatype": "Int", "indicator": "Orange"},
-		{"value": elsewhere, "label": _("Priced in Another List"), "datatype": "Int", "indicator": "Blue"},
-		{"value": len(data) - elsewhere, "label": _("Priced Nowhere"), "datatype": "Int", "indicator": "Red"},
+		{"value": elsewhere, "label": _("Unpriced Here, Priced in Another List"), "datatype": "Int", "indicator": "Blue"},
+		{"value": nowhere, "label": _("Priced Nowhere"), "datatype": "Int", "indicator": "Red"},
 	]

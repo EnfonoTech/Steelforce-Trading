@@ -5,7 +5,7 @@ from frappe.utils import flt, nowdate
 @frappe.whitelist()
 def get_row_price_list_rate(item_code, price_list, doctype="Sales Invoice", uom=None,
                              stock_uom=None, qty=1, transaction_date=None,
-                             customer=None, company=None, conversion_rate=1):
+                             customer=None, company=None, conversion_rate=1, branch=None):
 	"""Resolve the selling rate for one item row against a price list that may
 	differ from the parent document's own selling_price_list.
 
@@ -30,6 +30,8 @@ def get_row_price_list_rate(item_code, price_list, doctype="Sales Invoice", uom=
 		"stock_uom": stock_uom or uom,
 		"qty": flt(qty) or 1,
 		"transaction_date": transaction_date or nowdate(),
+		# an Item Price may be limited to some branches (sf_trading/item_price_branch.py)
+		"branch": branch,
 		"price_list_currency": None,
 		"plc_conversion_rate": None,
 	})

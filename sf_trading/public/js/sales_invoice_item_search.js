@@ -21,6 +21,8 @@
 			has_variants: 0,
 			disabled: 0,
 			company: frm.doc.company || frappe.defaults.get_default("company"),
+			// an Item Price may be limited to some branches; the quoted rate is the branch's own
+			branch: frm.doc.branch || "",
 		};
 		if (is_buying) {
 			filters.is_purchase_item = 1;

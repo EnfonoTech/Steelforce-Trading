@@ -424,6 +424,7 @@ function sf_apply_row_price_list(frm, cdt, cdn) {
 			customer: frm.doc.customer,
 			company: frm.doc.company,
 			conversion_rate: frm.doc.conversion_rate || 1,
+			branch: frm.doc.branch || "",
 		},
 		callback: function (r) {
 			if (!r.message || !flt(r.message.rate)) return;

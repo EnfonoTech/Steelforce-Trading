@@ -24,7 +24,7 @@ def _natural_sort_key(row):
 
 
 @frappe.whitelist()
-def get_items_with_stock(company=None, price_list=None, warehouse=None, item_code=None, limit=500):
+def get_items_with_stock(company=None, price_list=None, warehouse=None, item_code=None, limit=500, branch=None):
 	"""
 	Return all sales items for the company, with their stock qty for the given
 	warehouse (0 when no Bin entry exists). Items are always shown regardless of
@@ -56,13 +56,28 @@ def get_items_with_stock(company=None, price_list=None, warehouse=None, item_cod
 	price_select = "NULL AS selling_rate, NULL AS price_currency"
 	if price_list:
 		params["price_list"] = price_list
-		price_join = (
-			"LEFT JOIN `tabItem Price` ip "
-			"ON ip.item_code = item.name "
-			"AND ip.price_list = %(price_list)s "
-			"AND ip.selling = 1"
+		params["branch"] = branch or ""
+		# One price per item. An Item Price may be limited to some branches (item_price_branch.py), so
+		# there can be several: skip the ones limited to other branches, and take the branch's own
+		# ahead of the general one.
+		pick = (
+			"SELECT {column} FROM `tabItem Price` ip "
+			"WHERE ip.item_code = item.name AND ip.price_list = %(price_list)s AND ip.selling = 1 "
+			"AND (NOT EXISTS (SELECT 1 FROM `tabItem Price Branch` ipb WHERE ipb.parent = ip.name AND ipb.parenttype = 'Item Price') "
+			"OR EXISTS (SELECT 1 FROM `tabItem Price Branch` ipb WHERE ipb.parent = ip.name AND ipb.parenttype = 'Item Price' "
+			"AND ipb.branch = %(branch)s)) "
+			"ORDER BY EXISTS (SELECT 1 FROM `tabItem Price Branch` ipb WHERE ipb.parent = ip.name AND ipb.parenttype = 'Item Price') DESC, "
+			"ip.valid_from DESC, ip.creation DESC LIMIT 1"
 		)
-		price_select = "ip.price_list_rate AS selling_rate, ip.currency AS price_currency"
+		if not frappe.db.table_exists("Item Price Branch"):
+			pick = (
+				"SELECT {column} FROM `tabItem Price` ip WHERE ip.item_code = item.name "
+				"AND ip.price_list = %(price_list)s AND ip.selling = 1 ORDER BY ip.valid_from DESC, ip.creation DESC LIMIT 1"
+			)
+		price_select = (
+			"(" + pick.replace("{column}", "ip.price_list_rate") + ") AS selling_rate, "
+			"(" + pick.replace("{column}", "ip.currency") + ") AS price_currency"
+		)
 
 	rows = frappe.db.sql(
 		"""

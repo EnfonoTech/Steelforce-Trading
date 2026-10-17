@@ -78,6 +78,8 @@ sf_trading.open_quick_entry_dialog = function (frm) {
 	d._frm = frm;
 	d._company = company;
 	d._price_list = price_list;
+	// an Item Price may be limited to some branches; the grid quotes the branch's own price
+	d._branch = frm.doc.branch || '';
 	d._warehouse = warehouse;
 
 	d.show();
@@ -165,6 +167,7 @@ sf_trading.fetch_quick_entry_items = function (dialog) {
 		args: {
 			company: dialog._company,
 			price_list: dialog._price_list,
+			branch: dialog._branch || '',
 			warehouse: dialog._warehouse || '',
 			limit: 500,
 		},
