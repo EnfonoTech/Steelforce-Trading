@@ -26,6 +26,13 @@ A supplier whose Supplier Group is "Other Supplier" holds no document at all (cl
 the document rules above -- the new-master row, the Company-supplier document -- stand aside for it
 (`documents_exempt`). Payment Terms and the rest still apply.
 
+A supplier in the **Govt** or **W/O VAT** Supplier Group is held to none of the three rules a ministry or a
+supplier without VAT cannot meet (client, 2026-10-18; "Customs Declaration- Ministry Of Interior" was refused a
+payment for want of Payment Terms and a document): no Payment Terms, no supporting document (new master or
+Company supplier), no Tax ID (`completeness_exempt`). Its Mobile and Email, and an expired document that
+carries a Financial Implication, are still asked for like any supplier's. The groups are made by the patch
+seed_exempt_supplier_groups; a supplier is moved into one by choosing the group on its form.
+
 Every supplier, old or new, carries Payment Terms (2026-10-13, client: block purchases and payments for
 a supplier without them, as for the document): buying from or paying one with none is refused
 (`missing_payment_terms`). The master itself is still saved without them -- an old supplier's other
@@ -178,7 +185,7 @@ def missing_details(doc, after_insert: bool) -> list:
 	"""What a governed new master still lacks. `after_insert` adds what only an existing master can
 	carry (an attached supporting document, a supplier's mobile)."""
 	missing = []
-	if not doc.get("payment_terms"):
+	if not doc.get("payment_terms") and not completeness_exempt(doc):
 		missing.append(_("Payment Terms"))
 	if after_insert:
 		if not attached_rows(doc) and not documents_exempt(doc):
@@ -194,9 +201,27 @@ def missing_details(doc, after_insert: bool) -> list:
 #: public/js/party_quick_entry.js, which has no server round trip to read it from)
 DOCUMENT_EXEMPT_SUPPLIER_GROUPS = ("Other Supplier",)
 
+#: Supplier Groups whose suppliers are not asked for Payment Terms, a supporting document or a Tax ID: a
+#: government body, and a supplier that is not VAT registered. Mirrored in public/js/party_quick_entry.js.
+COMPLETENESS_EXEMPT_SUPPLIER_GROUPS = ("Govt", "W/O VAT")
+
+
+def _group_in(group, names) -> bool:
+	return cstr(group).strip().lower() in {name.lower() for name in names}
+
+
+def completeness_exempt_group(group) -> bool:
+	"""Payment Terms, a document and a Tax ID are not asked of a supplier in this Supplier Group."""
+	return _group_in(group, COMPLETENESS_EXEMPT_SUPPLIER_GROUPS)
+
+
+def completeness_exempt(doc) -> bool:
+	return doc.doctype == "Supplier" and completeness_exempt_group(doc.get("supplier_group"))
+
 
 def document_exempt_group(group) -> bool:
-	return cstr(group).strip().lower() in {g.lower() for g in DOCUMENT_EXEMPT_SUPPLIER_GROUPS}
+	"""No supporting document is asked of a supplier in this Supplier Group (either list above)."""
+	return _group_in(group, DOCUMENT_EXEMPT_SUPPLIER_GROUPS + COMPLETENESS_EXEMPT_SUPPLIER_GROUPS)
 
 
 def documents_exempt(doc) -> bool:
@@ -240,7 +265,7 @@ def payment_terms_required(doctype) -> bool:
 
 def missing_payment_terms(doc) -> list:
 	"""What the always-on Payment Terms rule still wants of this supplier (old or new)."""
-	if not payment_terms_required(doc.doctype) or cstr(doc.get("payment_terms")).strip():
+	if not payment_terms_required(doc.doctype) or cstr(doc.get("payment_terms")).strip() or completeness_exempt(doc):
 		return []
 	return [_("Payment Terms")]
 
@@ -347,6 +372,8 @@ def ensure_vat_row(doc):
 
 def validate_supplier_tax_id(doc):
 	"""A Company supplier carries a Tax ID (the server side of the Company-only required mark)."""
+	if completeness_exempt(doc):
+		return
 	if doc.doctype == "Supplier" and doc.get("supplier_type") == "Company" and not cstr(doc.get("tax_id")).strip():
 		frappe.throw(_("Tax ID is mandatory for Supplier {0} (Supplier Type: Company).").format(
 			frappe.bold(doc.get("supplier_name") or doc.name)), title=_("Mandatory Fields Missing"))
@@ -396,9 +423,10 @@ def set_onload(doc, _method=None):
 	doc.set_onload("sf_master_rules", {
 		"applies": applies,
 		"needs_document": bool(document),
-		"payment_terms_required": payment_terms_required(doc.doctype),
+		"payment_terms_required": payment_terms_required(doc.doctype) and not completeness_exempt(doc),
 		"rules_from": str(rules_from() or ""),
-		"exempt_groups": list(DOCUMENT_EXEMPT_SUPPLIER_GROUPS),
+		"exempt_groups": list(DOCUMENT_EXEMPT_SUPPLIER_GROUPS + COMPLETENESS_EXEMPT_SUPPLIER_GROUPS),
+		"completeness_exempt_groups": list(COMPLETENESS_EXEMPT_SUPPLIER_GROUPS),
 		"missing": missing + terms + ([] if any("Supporting Document" in m for m in missing) else document),
 		"expired": [r.document_type for r in expired_financial_rows(doc.doctype, doc.name)] if not doc.is_new() else [],
 	})
@@ -424,12 +452,14 @@ def get_master_rules(doctype: str, name: str = None, customer_vat: str = None, i
 		frappe.has_permission(doctype, "read", doc=name, throw=True)
 		doc = frappe.get_doc(doctype, name)
 		return {"applies": is_governed(doc) and is_new_master(doc), "rules_from": str(start or ""),
-			"payment_terms_required": payment_terms_required(doctype),
-			"exempt_groups": list(DOCUMENT_EXEMPT_SUPPLIER_GROUPS)}
+			"payment_terms_required": payment_terms_required(doctype) and not completeness_exempt(doc),
+			"exempt_groups": list(DOCUMENT_EXEMPT_SUPPLIER_GROUPS + COMPLETENESS_EXEMPT_SUPPLIER_GROUPS),
+			"completeness_exempt_groups": list(COMPLETENESS_EXEMPT_SUPPLIER_GROUPS)}
 	governed = doctype == "Supplier" or bool(cint(is_credit))
 	return {"applies": bool(start) and governed, "rules_from": str(start or ""),
 		"payment_terms_required": payment_terms_required(doctype),
-		"exempt_groups": list(DOCUMENT_EXEMPT_SUPPLIER_GROUPS)}
+		"exempt_groups": list(DOCUMENT_EXEMPT_SUPPLIER_GROUPS + COMPLETENESS_EXEMPT_SUPPLIER_GROUPS),
+		"completeness_exempt_groups": list(COMPLETENESS_EXEMPT_SUPPLIER_GROUPS)}
 
 
 def dialog_document_row(party_type, document_type=None, document_number=None, expiry_date=None, attachment=None):

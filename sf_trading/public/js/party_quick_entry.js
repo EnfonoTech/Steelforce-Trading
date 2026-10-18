@@ -28,7 +28,11 @@ frappe.provide("frappe.ui.form");
 // the number (sf_trading/party_documents.py ensure_vat_row). `cfg` names the dialog's own fields:
 // {vat, type, number}; `source` says which of them just changed.
 // Supplier Groups whose suppliers hold no document: mirror of party_documents.DOCUMENT_EXEMPT_SUPPLIER_GROUPS
-window.SF_DOCUMENT_EXEMPT_SUPPLIER_GROUPS = ["other supplier"];
+// plus COMPLETENESS_EXEMPT_SUPPLIER_GROUPS (Govt, W/O VAT: no Payment Terms, document or Tax ID either)
+window.SF_DOCUMENT_EXEMPT_SUPPLIER_GROUPS = ["other supplier", "govt", "w/o vat"];
+window.SF_COMPLETENESS_EXEMPT_SUPPLIER_GROUPS = ["govt", "w/o vat"];
+window.SF_NOT_COMPLETENESS_EXEMPT =
+	"!(window.SF_COMPLETENESS_EXEMPT_SUPPLIER_GROUPS || []).includes(String(doc.supplier_group || '').trim().toLowerCase())";
 
 window.sf_vat_document_sync = function (d, cfg, source) {
 	const VAT_TYPE = "VAT Certificate";
@@ -93,8 +97,8 @@ window.sf_vat_document_sync = function (d, cfg, source) {
 				if (dialog.fields_dict[fieldname]) dialog.set_df_property(fieldname, prop, value);
 			};
 			if (is_supplier) {
-				mark("payment_terms", "reqd", 1);
-				mark("tax_id", "mandatory_depends_on", "eval:doc.supplier_type=='Company'");
+				mark("payment_terms", "mandatory_depends_on", "eval:" + SF_NOT_COMPLETENESS_EXEMPT);
+				mark("tax_id", "mandatory_depends_on", "eval:doc.supplier_type=='Company' && " + SF_NOT_COMPLETENESS_EXEMPT);
 				mark("country", "reqd", 1);
 			} else {
 				// Payment Terms follow credit status (party_documents.is_governed), which the quick entry
@@ -129,7 +133,7 @@ window.sf_vat_document_sync = function (d, cfg, source) {
 						? "eval:doc.supplier_type=='Company' && !(window.SF_DOCUMENT_EXEMPT_SUPPLIER_GROUPS || []).includes(String(doc.supplier_group || '').trim().toLowerCase())"
 						: "eval:doc.custom_vat_registration_number",
 					description: is_supplier
-						? __("Required for a Company supplier, except in the Other Supplier group.")
+						? __("Required for a Company supplier, except in the Other Supplier, Govt and W/O VAT groups.")
 						: __("Required when a VAT Registration Number is entered."),
 				},
 				{ fieldtype: "Column Break" },

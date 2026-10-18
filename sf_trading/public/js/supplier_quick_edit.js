@@ -81,7 +81,8 @@ function sf_render_supplier_quick_edit(supplier, data, on_saved) {
 			fieldtype: "Data",
 			label: __("Tax ID"),
 			default: data.tax_id,
-			reqd: data.is_company ? 1 : 0,
+			// not for a Govt / W/O VAT supplier (party_documents.COMPLETENESS_EXEMPT_SUPPLIER_GROUPS)
+			reqd: data.tax_id_required ? 1 : 0,
 			// the number is also the document below (party_quick_entry.js)
 			onchange: () => window.sf_vat_document_sync(d, SF_SQE_VAT_DOCUMENT, "vat"),
 		},
@@ -94,7 +95,7 @@ function sf_render_supplier_quick_edit(supplier, data, on_saved) {
 			default: data.payment_terms,
 			// every supplier must carry them, old or new: purchases and payments are refused without
 			// (sf_trading/party_documents.py)
-			reqd: data.payment_terms_required || data.rules_apply ? 1 : 0,
+			reqd: !data.completeness_exempt && (data.payment_terms_required || data.rules_apply) ? 1 : 0,
 		},
 	];
 

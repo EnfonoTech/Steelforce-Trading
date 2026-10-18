@@ -190,13 +190,15 @@ def build(party_type, masters, invoice_doctype, party_field) -> list:
 		missing = []
 		# a supplier in an exempt Supplier Group holds no document (party_documents)
 		exempt = party_type == "Supplier" and pd.document_exempt_group(m.get("supplier_group"))
+		# a Govt / W/O VAT supplier is not asked for Payment Terms or a Tax ID either
+		no_terms_rule = party_type == "Supplier" and pd.completeness_exempt_group(m.get("supplier_group"))
 		if not d.rows and not exempt:
 			missing.append("Supporting Document")
 		# a new master is held to the gate's own test (a grid row with its file); an older one is
 		# credited for any file attached to it
 		if not d.attached and (new_master or m.name not in attached_files) and not exempt:
 			missing.append("Document Attachment")
-		if not m.payment_terms:
+		if not m.payment_terms and not no_terms_rule:
 			missing.append("Payment Terms")
 		if not has_mobile:
 			missing.append("Mobile")
@@ -204,7 +206,7 @@ def build(party_type, masters, invoice_doctype, party_field) -> list:
 			missing.append("Email")
 		if not has_address:
 			missing.append("Address")
-		if party_type == "Supplier" and m.get("supplier_type") == "Company" and not cstr(m.tax_id).strip():
+		if party_type == "Supplier" and m.get("supplier_type") == "Company" and not cstr(m.tax_id).strip() and not no_terms_rule:
 			missing.append("Tax ID")
 		if party_type == "Customer" and cstr(m.tax_id).strip() and not cstr(m.cr).strip():
 			# a VAT-registered customer carries its CR (party_completeness); an individual has none

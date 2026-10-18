@@ -2471,13 +2471,13 @@
   "doctype_or_field": "DocField",
   "field_name": "tax_id",
   "is_system_generated": 0,
-  "modified": "2026-10-11 10:00:00.000000",
+  "modified": "2026-10-18 10:00:00.000000",
   "module": null,
   "name": "Supplier-tax_id-mandatory_depends_on",
   "property": "mandatory_depends_on",
   "property_type": "Code",
   "row_name": null,
-  "value": "eval:doc.supplier_type=='Company'"
+  "value": "eval:doc.supplier_type=='Company' && !['govt','w/o vat'].includes(String(doc.supplier_group || '').trim().toLowerCase())"
  },
  {
   "default_value": null,

@@ -31,7 +31,7 @@ from frappe.utils import cint, cstr
 
 from sf_trading.party_completeness import only_status_fields_changed
 from sf_trading.party_contact_cache import party_email_addresses, party_phone_numbers
-from sf_trading.party_documents import document_exempt_group
+from sf_trading.party_documents import completeness_exempt_group, document_exempt_group
 
 SETTINGS = "SF Trading Settings"
 ENFORCE_FIELD = "enforce_supplier_completeness"
@@ -60,7 +60,8 @@ def validate(doc, _method=None):
 		return
 
 	doc.tax_id = cstr(doc.tax_id).strip() or None
-	if not doc.tax_id and needs_tax_id(doc.supplier_type):
+	# a Supplier Group that holds no Tax ID (party_documents.COMPLETENESS_EXEMPT_SUPPLIER_GROUPS)
+	if not doc.tax_id and needs_tax_id(doc.supplier_type) and not completeness_exempt_group(doc.get("supplier_group")):
 		frappe.throw(
 			_("Tax ID is mandatory for Supplier {0} (Supplier Type: Company).").format(
 				frappe.bold(doc.supplier_name or doc.name)
@@ -142,7 +143,7 @@ def missing_supplier_details(supplier: str) -> list[str]:
 	) or (None, None, None, None, None)
 
 	missing = []
-	if needs_tax_id(supplier_type) and not cstr(tax_id).strip():
+	if needs_tax_id(supplier_type) and not cstr(tax_id).strip() and not completeness_exempt_group(group):
 		missing.append(_("Tax ID"))
 	if not cstr(mobile_no).strip() and not party_phone_numbers("Supplier", supplier):
 		missing.append(_("Phone Number"))

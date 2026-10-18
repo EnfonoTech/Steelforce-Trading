@@ -57,7 +57,7 @@ def blocking(doc) -> frappe._dict:
 	items += pd.missing_payment_terms(doc)
 	if not any("Supporting Document" in i for i in items):
 		items += pd.missing_document(doc)
-	if doc.get("supplier_type") == "Company" and not cstr(doc.get("tax_id")).strip():
+	if doc.get("supplier_type") == "Company" and not cstr(doc.get("tax_id")).strip() and not pd.completeness_exempt(doc):
 		items.append(_("Tax ID"))
 	if enforced:
 		items += sv.missing_supplier_details(doc.name)
@@ -103,6 +103,9 @@ def get_quick_edit_data(supplier: str) -> dict:
 		"supplier_name": doc.supplier_name,
 		"supplier_type": doc.supplier_type,
 		"is_company": doc.supplier_type == "Company",
+		# Govt and W/O VAT suppliers are not asked for a Tax ID, Payment Terms or a document (party_documents)
+		"completeness_exempt": pd.completeness_exempt(doc),
+		"tax_id_required": doc.supplier_type == "Company" and not pd.completeness_exempt(doc),
 		"tax_id": doc.get("tax_id"),
 		"payment_terms": doc.get("payment_terms"),
 		"mobile": mobile,
@@ -112,7 +115,7 @@ def get_quick_edit_data(supplier: str) -> dict:
 		"address_city": frappe.db.get_value("Address", address, "city") if address else "",
 		"rules_apply": state.applies,
 		# the dialog marks Payment Terms with the asterisk exactly when a rule asks for it
-		"payment_terms_required": pd.payment_terms_required(PARTY),
+		"payment_terms_required": pd.payment_terms_required(PARTY) and not pd.completeness_exempt(doc),
 		"has_document_row": state.has_document_row,
 		"enforced": state.enforced,
 		"needs_document": state.needs_document,

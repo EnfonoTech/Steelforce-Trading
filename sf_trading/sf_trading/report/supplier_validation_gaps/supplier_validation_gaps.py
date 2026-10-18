@@ -13,6 +13,7 @@ from frappe import _
 from frappe.utils import cstr
 
 from sf_trading.party_contact_cache import party_email_addresses, party_phone_numbers
+from sf_trading.party_documents import completeness_exempt_group, document_exempt_group
 from sf_trading.supplier_validation import has_attachment, needs_tax_id
 
 
@@ -35,13 +36,17 @@ def execute(filters=None):
 	for supplier in frappe.get_all(
 		"Supplier",
 		filters=supplier_filters,
-		fields=["name", "supplier_name", "supplier_type", "tax_id", "mobile_no", "email_id", "disabled"],
+		fields=["name", "supplier_name", "supplier_type", "supplier_group", "tax_id", "mobile_no", "email_id", "disabled"],
 		order_by="supplier_name",
 	):
-		no_tax_id = needs_tax_id(supplier.supplier_type) and not cstr(supplier.tax_id).strip()
+		no_tax_id = (
+			needs_tax_id(supplier.supplier_type)
+			and not cstr(supplier.tax_id).strip()
+			and not completeness_exempt_group(supplier.supplier_group)
+		)
 		no_phone = not cstr(supplier.mobile_no).strip() and not party_phone_numbers("Supplier", supplier.name)
 		no_email = not cstr(supplier.email_id).strip() and not party_email_addresses("Supplier", supplier.name)
-		no_document = not has_attachment(supplier.name)
+		no_document = not has_attachment(supplier.name) and not document_exempt_group(supplier.supplier_group)
 		gaps = [
 			label
 			for label, missing in (

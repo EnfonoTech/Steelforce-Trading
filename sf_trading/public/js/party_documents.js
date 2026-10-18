@@ -35,7 +35,12 @@ function sf_party_mark_required(frm, quiet) {
 		// or new (the server says so: party_documents.payment_terms_required), as well as a governed
 		// new master
 		const credit = frm.doctype === "Customer" && (frm.doc.credit_limits || []).some((row) => flt(row.credit_limit) > 0);
-		frm.toggle_reqd("payment_terms", required || credit || rules.payment_terms_required ? 1 : 0);
+		// a Govt / W/O VAT supplier is asked for none of Payment Terms, a document or a Tax ID
+		// (party_documents.COMPLETENESS_EXEMPT_SUPPLIER_GROUPS)
+		const group = String(frm.doc.supplier_group || "").trim().toLowerCase();
+		const fully_exempt = frm.doctype === "Supplier"
+			&& (rules.completeness_exempt_groups || []).some((g) => g.toLowerCase() === group);
+		frm.toggle_reqd("payment_terms", !fully_exempt && (required || credit || rules.payment_terms_required) ? 1 : 0);
 		if (frm.fields_dict.custom_supporting_documents) {
 			// a Company supplier / a VAT-registered customer needs one whatever its age -- unless its
 			// Supplier Group is one that holds none (party_documents.DOCUMENT_EXEMPT_SUPPLIER_GROUPS)
