@@ -18,6 +18,10 @@ invoice is still a draft, goes for approval with it, and is submitted by the sam
   refuses unless a draft voucher is there and everything its own submit would refuse has been checked
   (`preflight`, nothing written). `before_submit` repeats the check for a document submitted without a
   workflow. A refusal there stops, it never changes the voucher behind anyone's back.
+* **Draft expense entries.** The voucher may name a freight bill (Purchase Invoice) or journal that is itself
+  still a draft -- landed_cost.booked_by_draft reads what it is going to book. The gate to approval allows
+  it and says the entry must be submitted first; the FINAL check (`strict`) refuses until it is, and the
+  voucher's own submit then holds the entry to what the ledger really booked.
 * **Submit.** The invoice's own `on_submit` runs first and posts its stock and ledger entries; then
   `submit_vouchers` submits every draft voucher of the invoice, in the same transaction. If one cannot
   be submitted the whole approval is rolled back with that voucher's own message.
@@ -41,6 +45,8 @@ import frappe
 from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.utils import cint, cstr, flt, get_link_to_form
+
+from sf_trading import landed_cost
 
 INVOICE = "Purchase Invoice"
 VOUCHER = "Landed Cost Voucher"
@@ -218,8 +224,23 @@ def differences(voucher, invoice) -> list:
 	return out
 
 
-def preflight(voucher_name, invoice) -> list:
-	"""Everything the voucher's own submit would refuse, found now and without writing anything."""
+def pending_entries(voucher_name) -> list:
+	"""[(doctype, name)] the voucher's charges name that are still drafts. A draft voucher may name them; it
+	cannot be submitted until they are submitted."""
+	return landed_cost.draft_expense_entries(frappe.get_doc(VOUCHER, voucher_name))
+
+
+def _entries_text(entries) -> str:
+	return ", ".join("%s %s" % (_(dt), name) for dt, name in entries)
+
+
+def preflight(voucher_name, invoice, strict=False) -> list:
+	"""Everything the voucher's own submit would refuse, found now and without writing anything.
+
+	`strict` is the check made when the invoice is about to be submitted: the voucher's own submit needs every
+	expense entry it names to be submitted, which a draft voucher's save does not (it may name drafts), so
+	strict adds that. The earlier check, when the invoice goes for approval, is not strict: the bill that
+	booked the cost may be approved in the meantime."""
 	voucher = frappe.get_doc(VOUCHER, voucher_name)
 	diff = differences(voucher, invoice)
 	if diff:
@@ -233,6 +254,11 @@ def preflight(voucher_name, invoice) -> list:
 		return [frappe.utils.strip_html(cstr(e)).strip()]
 	if flt(voucher.total_taxes_and_charges) <= 0:
 		return [_("it carries no charges")]
+	if strict:
+		waiting = landed_cost.draft_expense_entries(voucher)
+		if waiting:
+			return [_("the cost it takes was booked by %s, which is still a draft: submit that first, then approve this invoice")
+				% _entries_text(waiting)]
 	return []
 
 
@@ -306,6 +332,18 @@ def validate_invoice(doc, method=None):
 			problems = preflight(voucher.name, doc)
 			if problems:
 				_refuse_voucher(voucher.name, problems)
+			waiting = pending_entries(voucher.name)
+			if waiting:
+				# allowed: the bill may be approved with the import. The final approval is what insists on it
+				frappe.msgprint(
+					_(
+						"Landed Cost Voucher %s takes its cost from %s, still a draft. That must be submitted before this "
+						"invoice is given its final approval, or the approval will be refused."
+					)
+					% (_link(VOUCHER, voucher.name), _entries_text(waiting)),
+					title=_("Expense Entry Still A Draft"),
+					indicator="orange",
+				)
 
 
 def follow_invoice(doc, method=None):
@@ -385,7 +423,7 @@ def require_voucher_at_submit(doc, method=None):
 	if must_have_voucher(doc) and not drafts:
 		frappe.throw(_require_voucher_message(), title=_("Landed Cost Voucher Required"))
 	for voucher in drafts:
-		problems = preflight(voucher.name, doc)
+		problems = preflight(voucher.name, doc, strict=True)
 		if problems:
 			_refuse_voucher(voucher.name, problems)
 
@@ -593,19 +631,24 @@ def invoice_status(invoice: str) -> dict:
 	frappe.has_permission(INVOICE, "read", doc=invoice, throw=True)
 	doc = frappe.get_doc(INVOICE, invoice)
 	vouchers = vouchers_of(invoice)
-	stale = {}
+	stale, waiting = {}, {}
 	if cint(doc.docstatus) == 0:
 		for row in vouchers:
 			if row.docstatus == 0:
-				diff = differences(frappe.get_doc(VOUCHER, row.name), doc)
+				voucher = frappe.get_doc(VOUCHER, row.name)
+				diff = differences(voucher, doc)
 				if diff:
 					stale[row.name] = diff
+				entries = landed_cost.draft_expense_entries(voucher)
+				if entries:
+					waiting[row.name] = ["%s %s" % (_(dt), name) for dt, name in entries]
 	return {
 		"required": must_have_voucher(doc),
 		"is_import": is_import(doc),
 		"locked": is_locked(state_of(doc)),
 		"vouchers": [{"name": v.name, "docstatus": v.docstatus, "total": flt(v.total_taxes_and_charges)} for v in vouchers],
 		"stale": stale,
+		"waiting": waiting,
 	}
 
 

@@ -85,9 +85,11 @@ class TestLandedCostControls(FrappeTestCase):
 			doc.taxes.append(row)
 		return doc
 
-	def _validate(self, doc, booked=None, taken=None, expense=None):
+	def _validate(self, doc, booked=None, taken=None, expense=None, expected=None):
+		"""`booked` is what the ledger holds for a submitted expense entry, `expected` what a draft one is going to book."""
 		expense = expense or frappe._dict(docstatus=1, company="SF")
 		booked = booked if booked is not None else {FREIGHT: 100}
+		expected = expected if expected is not None else {FREIGHT: 100}
 		real = frappe.db.get_value
 
 		def get_value(doctype, *args, **kwargs):
@@ -97,6 +99,8 @@ class TestLandedCostControls(FrappeTestCase):
 
 		with patch.object(lc.frappe.db, "get_value", side_effect=get_value), patch.object(
 			lc, "booked", side_effect=lambda dt, name, account=None: {a: v for a, v in booked.items() if not account or a == account}
+		), patch.object(
+			lc, "booked_by_draft", side_effect=lambda dt, name, account=None: {a: v for a, v in expected.items() if not account or a == account}
 		), patch.object(lc, "absorbed", return_value=taken or frappe._dict(submitted=0.0, draft=0.0, documents=[])):
 			lc.validate_charges(doc)
 
@@ -116,11 +120,62 @@ class TestLandedCostControls(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			self._validate(self._doc((FREIGHT, 60, "Journal Entry", "JV-1"), (FREIGHT, 50, "Journal Entry", "JV-1")))
 
-	def test_the_expense_must_be_submitted_and_of_the_company(self):
-		with self.assertRaises(frappe.ValidationError):
-			self._validate(self._doc((FREIGHT, 10, "Journal Entry", "JV-1")), expense=frappe._dict(docstatus=0, company="SF"))
+	def test_the_expense_must_be_of_the_company(self):
 		with self.assertRaises(frappe.ValidationError):
 			self._validate(self._doc((FREIGHT, 10, "Journal Entry", "JV-1")), expense=frappe._dict(docstatus=1, company="X"))
+		with self.assertRaises(frappe.ValidationError):
+			self._validate(self._doc((FREIGHT, 10, "Journal Entry", "JV-1")), expense=frappe._dict(docstatus=0, company="X"))
+
+	def test_a_voucher_being_submitted_needs_the_expense_submitted(self):
+		doc = self._doc((FREIGHT, 10, "Journal Entry", "JV-1"))
+		doc.docstatus = 1
+		with self.assertRaises(frappe.ValidationError):
+			self._validate(doc, expense=frappe._dict(docstatus=0, company="SF"))
+
+	def test_a_draft_voucher_may_name_a_draft_journal_or_invoice(self):
+		for expense_dt in ("Journal Entry", "Purchase Invoice"):
+			doc = self._doc((FREIGHT, 60, expense_dt, "X-1"))
+			doc.docstatus = 0
+			self._validate(doc, expense=frappe._dict(docstatus=0, company="SF"))
+
+	def test_a_draft_expense_is_held_to_what_it_will_book(self):
+		def draft(*row, **kw):
+			doc = self._doc(*row)
+			doc.docstatus = 0
+			return lambda: self._validate(doc, expense=frappe._dict(docstatus=0, company="SF"), **kw)
+		# the wrong account
+		with self.assertRaises(frappe.ValidationError):
+			draft(("Customs - SF", 60, "Purchase Invoice", "PI-F"), expected={FREIGHT: 100})()
+		# more than it will book
+		with self.assertRaises(frappe.ValidationError):
+			draft((FREIGHT, 60, "Purchase Invoice", "PI-F"), expected={FREIGHT: 50})()
+		# a draft that will book nothing at all
+		with self.assertRaises(frappe.ValidationError):
+			draft((FREIGHT, 60, "Purchase Invoice", "PI-F"), expected={})()
+		# the other drafts count too: two vouchers cannot both take the same draft's money
+		with self.assertRaises(frappe.ValidationError):
+			draft((FREIGHT, 60, "Purchase Invoice", "PI-F"), expected={FREIGHT: 100},
+				taken=frappe._dict(submitted=0.0, draft=50.0, documents=[("Landed Cost Voucher", "LCV-OTHER")]))()
+
+	def test_a_draft_payment_entry_or_a_cancelled_entry_is_refused(self):
+		doc = self._doc((FREIGHT, 10, "Payment Entry", "PE-1"))
+		doc.docstatus = 0
+		with self.assertRaises(frappe.ValidationError):
+			self._validate(doc, expense=frappe._dict(docstatus=0, company="SF"))
+		for expense_dt in ("Journal Entry", "Purchase Invoice", "Payment Entry"):
+			doc = self._doc((FREIGHT, 10, expense_dt, "X-1"))
+			doc.docstatus = 0
+			with self.assertRaises(frappe.ValidationError):
+				self._validate(doc, expense=frappe._dict(docstatus=2, company="SF"))
+
+	def test_only_a_draft_voucher_reads_a_draft_entry_ahead(self):
+		draft_voucher = frappe._dict(doctype="Landed Cost Voucher", docstatus=0)
+		self.assertTrue(lc.may_read_ahead(draft_voucher, "Journal Entry"))
+		self.assertTrue(lc.may_read_ahead(draft_voucher, "Purchase Invoice"))
+		self.assertFalse(lc.may_read_ahead(draft_voucher, "Payment Entry"))
+		self.assertFalse(lc.may_read_ahead(frappe._dict(doctype="Landed Cost Voucher", docstatus=1), "Journal Entry"))
+		self.assertFalse(lc.may_read_ahead(frappe._dict(doctype="Purchase Invoice", docstatus=0), "Journal Entry"))
+		self.assertFalse(lc.may_read_ahead(frappe._dict(doctype="Purchase Receipt", docstatus=0), "Purchase Invoice"))
 
 	def test_the_goods_bill_is_not_its_own_expense(self):
 		with self.assertRaises(frappe.ValidationError):
@@ -243,13 +298,38 @@ class TestLandedCostStockDocuments(FrappeTestCase):
 	def test_the_picker_keeps_a_receipts_charge_for_the_invoice_repeating_it(self):
 		ties = frappe._dict(repeats=set(), carried={("Journal Entry", "JV-1", FREIGHT)}, receipts={"PR-1"})
 		with patch.object(lc.frappe, "has_permission", return_value=True), \
+				patch.object(lc.frappe.db, "get_value", return_value=1), \
 				patch.object(lc, "booked", return_value={FREIGHT: 100}), \
 				patch.object(lc, "_receipt_links", return_value=ties), \
 				patch.object(lc, "absorbed", return_value=frappe._dict(submitted=0.0, draft=0.0, documents=[])) as absorbed:
 			lines = lc.get_expense_entry_lines("Journal Entry", "JV-1", "Purchase Invoice", None, 0,
 				[{"purchase_receipt": "PR-1"}])
 		self.assertEqual(lines[0]["available"], 100)
+		self.assertEqual(lines[0]["draft"], 0)
 		self.assertIn(("Purchase Receipt", "PR-1"), absorbed.call_args.kwargs["skip_parents"])
+
+	def _lines(self, docstatus, expense_doctype="Journal Entry", parenttype="Landed Cost Voucher"):
+		with patch.object(lc.frappe, "has_permission", return_value=True), \
+				patch.object(lc.frappe.db, "get_value", return_value=docstatus), \
+				patch.object(lc, "booked", return_value={FREIGHT: 100}), \
+				patch.object(lc, "booked_by_draft", return_value={FREIGHT: 80}), \
+				patch.object(lc, "absorbed", return_value=frappe._dict(submitted=0.0, draft=20.0, documents=[("Landed Cost Voucher", "LCV-2")])):
+			return lc.get_expense_entry_lines(expense_doctype, "X-1", parenttype, None)
+
+	def test_the_picker_offers_a_draft_entry_to_a_draft_voucher_marked_as_draft(self):
+		for expense_dt in ("Journal Entry", "Purchase Invoice"):
+			lines = self._lines(0, expense_dt)
+			self.assertEqual([(l["booked"], l["available"], l["draft"]) for l in lines], [(80, 60, 1)])
+		submitted = self._lines(1)
+		self.assertEqual([(l["booked"], l["draft"]) for l in submitted], [(100, 0)])
+
+	def test_the_picker_refuses_what_cannot_be_read_ahead(self):
+		with self.assertRaises(frappe.ValidationError):
+			self._lines(0, "Payment Entry")  # a draft payment books nothing readable
+		with self.assertRaises(frappe.ValidationError):
+			self._lines(0, "Journal Entry", parenttype="Purchase Invoice")  # a bill's own charge row needs it submitted
+		with self.assertRaises(frappe.ValidationError):
+			self._lines(2)  # cancelled
 
 	def test_an_invoice_that_updates_stock_absorbs_itself(self):
 		self.assertEqual(self._classify([self._row("Purchase Invoice", "PI-4")], stocked=["PI-4"]), [lc.STOCK])

@@ -69,7 +69,7 @@ class Seams:
 
 	def __init__(self, **overrides):
 		self.values = dict(require=True, currency="BHD", drafts=[], submitted=[], problems=[], one_document=True,
-			stock=True, info=None)
+			stock=True, info=None, strict_problems=None, pending=[], calls=[])
 		self.values.update(overrides)
 		self.patches = []
 
@@ -80,7 +80,10 @@ class Seams:
 			"require_with_import": lambda: v["require"],
 			"company_currency": lambda company: v["currency"],
 			"vouchers_of": lambda name, docstatus=None: v["drafts"] if docstatus == 0 else (v["submitted"] if docstatus == 1 else v["drafts"] + v["submitted"]),
-			"preflight": lambda name, doc: v["problems"],
+			# strict is the final check, made when the invoice is about to be submitted; it may know more
+			"preflight": lambda name, doc, strict=False: (v["calls"].append(strict),
+				v["strict_problems"] if strict and v["strict_problems"] is not None else v["problems"])[1],
+			"pending_entries": lambda name: v["pending"],
 			"names_one_document": lambda name: v["one_document"],
 			"invoice_info": lambda name: v["info"],
 		}
@@ -254,6 +257,20 @@ class TestTheGateToApproval(FrappeTestCase):
 		with Seams(drafts=[]):
 			refused(self, lcv.validate_invoice, doc, text="needs a Landed Cost Voucher")
 
+	def test_a_draft_expense_entry_is_allowed_at_the_gate_with_a_warning(self):
+		with Seams(drafts=[draft()], problems=[], pending=[("Purchase Invoice", "PI-FREIGHT")]) as s:
+			lcv.validate_invoice(self.sent())
+			s.frappe.msgprint.assert_called_once()
+			text = s.frappe.msgprint.call_args.args[0]
+			self.assertIn("still a draft", text)
+			self.assertIn("PI-FREIGHT", text)
+			self.assertEqual(s.values["calls"], [False])
+
+	def test_no_warning_when_every_expense_entry_is_submitted(self):
+		with Seams(drafts=[draft()], problems=[], pending=[]) as s:
+			lcv.validate_invoice(self.sent())
+			s.frappe.msgprint.assert_not_called()
+
 	def test_a_plain_draft_save_is_not_gated(self):
 		doc = invoice(workflow_state="Draft", _before=Doc(update_stock=1, workflow_state="Draft"))
 		with Seams(drafts=[]):
@@ -307,6 +324,17 @@ class TestTheFinalCheck(FrappeTestCase):
 		with Seams(drafts=[draft()], problems=["it does not match this invoice yet: row 1"]):
 			refused(self, lcv.require_voucher_at_submit, invoice(), text="does not match this invoice")
 
+	def test_the_final_check_is_strict_and_refuses_while_an_expense_entry_is_a_draft(self):
+		reason = "the cost it takes was booked by Purchase Invoice PI-F, which is still a draft: submit that first"
+		with Seams(drafts=[draft()], problems=[], strict_problems=[reason]) as s:
+			refused(self, lcv.require_voucher_at_submit, invoice(), text="still a draft")
+			self.assertEqual(s.values["calls"], [True])
+
+	def test_the_final_check_passes_once_the_entries_are_submitted(self):
+		with Seams(drafts=[draft()], problems=[], strict_problems=[]) as s:
+			lcv.require_voucher_at_submit(invoice())
+			self.assertEqual(s.values["calls"], [True])
+
 	def test_a_return_is_not_asked(self):
 		with Seams(drafts=[]):
 			lcv.require_voucher_at_submit(invoice(is_return=1))
@@ -314,6 +342,125 @@ class TestTheFinalCheck(FrappeTestCase):
 	def test_an_opted_out_import_passes(self):
 		with Seams(drafts=[]):
 			lcv.require_voucher_at_submit(invoice(custom_import_without_lcv=1))
+
+
+class TestPreflight(FrappeTestCase):
+	"""The real dry run, with the voucher it loads and the draft expense entries it finds faked."""
+
+	def run_it(self, strict, waiting=(), total=50.0, validate_error=None, diff=()):
+		doc = voucher(total_taxes_and_charges=total)
+		doc["run_method"] = MagicMock(side_effect=validate_error)
+		doc["validate_applicable_charges_for_item"] = MagicMock()
+		with patch.object(lcv.frappe, "get_doc", return_value=doc, create=True), \
+				patch.object(lcv, "differences", return_value=list(diff)), \
+				patch.object(lcv.landed_cost, "draft_expense_entries", return_value=list(waiting)):
+			return lcv.preflight("MAT-LCV-1", invoice(), strict=strict)
+
+	def test_a_ready_voucher_has_no_problems(self):
+		self.assertEqual(self.run_it(False), [])
+		self.assertEqual(self.run_it(True), [])
+
+	def test_a_draft_expense_entry_is_no_problem_until_the_final_check(self):
+		waiting = [("Purchase Invoice", "PI-F")]
+		self.assertEqual(self.run_it(False, waiting), [])
+		problems = self.run_it(True, waiting)
+		self.assertEqual(len(problems), 1)
+		self.assertIn("PI-F", problems[0])
+		self.assertIn("still a draft", problems[0])
+
+	def test_a_mismatch_is_reported_first(self):
+		problems = self.run_it(True, [("Purchase Invoice", "PI-F")], diff=["row 1 changed"])
+		self.assertEqual(len(problems), 1)
+		self.assertIn("does not match", problems[0])
+
+	def test_a_voucher_with_no_charges_is_a_problem(self):
+		self.assertEqual(len(self.run_it(False, total=0)), 1)
+
+	def test_a_refusal_by_the_vouchers_own_checks_is_reported_with_its_words(self):
+		problems = self.run_it(True, validate_error=frappe.ValidationError("<b>JV-1</b> booked less than that"))
+		self.assertEqual(problems, ["JV-1 booked less than that"])
+
+
+class TestWhatADraftWillBook(FrappeTestCase):
+	"""landed_cost.booked_by_draft: what a draft expense entry is going to post, read from the document."""
+
+	def read(self, tables, account=None, doctype="Journal Entry", stock=("STOCK-1",)):
+		from sf_trading import landed_cost as lc
+
+		def get_all(dt, filters=None, fields=None, **kwargs):
+			return [frappe._dict(r) for r in tables.get(dt, [])]
+
+		with patch.object(lc.frappe, "get_all", side_effect=get_all, create=True), \
+				patch.object(lc.frappe, "get_cached_value", side_effect=lambda dt, name, field: 1 if name in stock else 0, create=True):
+			return lc.booked_by_draft(doctype, "X-1", account)
+
+	def test_a_journal_books_its_net_debits(self):
+		tables = {"Journal Entry Account": [
+			{"account": "Freight - SF", "debit": 100, "credit": 0},
+			{"account": "Freight - SF", "debit": 0, "credit": 10},
+			{"account": "Bank - SF", "debit": 0, "credit": 90}]}
+		self.assertEqual(self.read(tables), {"Freight - SF": 90.0, "Bank - SF": -90.0})
+		self.assertEqual(self.read(tables, account="Freight - SF"), {"Freight - SF": 90.0})
+
+	def test_a_bill_books_its_non_stock_rows_and_its_total_taxes(self):
+		tables = {
+			"Purchase Invoice Item": [
+				{"item_code": "SVC-1", "expense_account": "Freight - SF", "base_net_amount": 80},
+				{"item_code": "SVC-2", "expense_account": "Freight - SF", "base_net_amount": 20},
+				{"item_code": "STOCK-1", "expense_account": "Inventory - SF", "base_net_amount": 200},
+				{"item_code": "SVC-3", "expense_account": None, "base_net_amount": 5},
+			],
+			"Purchase Taxes and Charges": [
+				{"account_head": "VAT - SF", "base_tax_amount": 10, "add_deduct_tax": "Add", "category": "Total"},
+				{"account_head": "Freight - SF", "base_tax_amount": 5, "add_deduct_tax": "Deduct", "category": "Total"},
+				{"account_head": "Duty - SF", "base_tax_amount": 7, "add_deduct_tax": "Add", "category": "Valuation"},
+				{"account_head": "Port - SF", "base_tax_amount": 3, "add_deduct_tax": "Add", "category": "Valuation and Total"},
+			],
+		}
+		self.assertEqual(self.read(tables, doctype="Purchase Invoice"), {"Freight - SF": 95.0, "VAT - SF": 10.0, "Port - SF": 3.0})
+
+	def test_a_payment_is_not_read_ahead(self):
+		self.assertEqual(self.read({"Journal Entry Account": [{"account": "Freight - SF", "debit": 5, "credit": 0}]}, doctype="Payment Entry"), {})
+
+	def test_an_empty_draft_books_nothing(self):
+		self.assertEqual(self.read({}), {})
+		self.assertEqual(self.read({}, doctype="Purchase Invoice"), {})
+
+
+class TestTheExpenseEntryList(FrappeTestCase):
+	def query(self, doctype, filters, rows):
+		from sf_trading import landed_cost as lc
+
+		seen = {}
+
+		def get_list(dt, filters=None, fields=None, **kwargs):
+			seen["filters"], seen["fields"] = filters, fields
+			return [frappe._dict(r) for r in rows]
+
+		with patch.object(lc.frappe, "get_list", side_effect=get_list, create=True):
+			return lc.expense_entry_query(doctype, "", "name", 0, 20, filters), seen
+
+	ROWS = [
+		{"name": "PI-SUB", "posting_date": "2026-10-10", "supplier_name": "Agent", "base_grand_total": 80.0, "docstatus": 1},
+		{"name": "PI-DRAFT", "posting_date": "2026-10-17", "supplier_name": "Agent", "base_grand_total": 10.0, "docstatus": 0},
+	]
+
+	def test_submitted_entries_only_by_default(self):
+		_out, seen = self.query("Purchase Invoice", {"company": "SF"}, self.ROWS[:1])
+		self.assertEqual(seen["filters"]["docstatus"], 1)
+
+	def test_a_draft_voucher_is_offered_drafts_of_a_bill_or_journal_marked_as_draft(self):
+		out, seen = self.query("Purchase Invoice", {"company": "SF", "allow_draft": 1}, self.ROWS)
+		self.assertEqual(seen["filters"]["docstatus"], ["in", [0, 1]])
+		self.assertEqual(out[0][0], "PI-SUB")
+		self.assertNotIn("Draft", out[0])
+		self.assertEqual(out[1][:2], ["PI-DRAFT", "Draft"])
+		out, seen = self.query("Journal Entry", {"company": "SF", "allow_draft": 1}, [])
+		self.assertEqual(seen["filters"]["docstatus"], ["in", [0, 1]])
+
+	def test_a_payment_is_never_offered_as_a_draft(self):
+		_out, seen = self.query("Payment Entry", {"company": "SF", "allow_draft": 1}, [])
+		self.assertEqual(seen["filters"]["docstatus"], 1)
 
 
 class TestSubmittedWithTheInvoice(FrappeTestCase):

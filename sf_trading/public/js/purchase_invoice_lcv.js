@@ -20,13 +20,21 @@ function sf_lcv_headline(frm, status) {
 			);
 		} else if (live.length) {
 			const total = live.reduce((sum, v) => sum + flt(v.total), 0);
-			frm.dashboard.set_headline_alert(
-				__("Landed Cost Voucher {0} ({1} of charges) is submitted with this invoice when it is approved.", [
-					live.map((v) => link(v.name)).join(", "),
-					format_currency(total, erpnext.get_currency(frm.doc.company)),
-				]),
-				"green"
-			);
+			const waiting = Object.keys(status.waiting || {});
+			const text = __("Landed Cost Voucher {0} ({1} of charges) is submitted with this invoice when it is approved.", [
+				live.map((v) => link(v.name)).join(", "),
+				format_currency(total, erpnext.get_currency(frm.doc.company)),
+			]);
+			if (waiting.length) {
+				// the voucher may name a freight bill that is still a draft; the final approval insists it is submitted
+				const entries = waiting.map((n) => status.waiting[n].join(", ")).join("; ");
+				frm.dashboard.set_headline_alert(
+					text + " " + __("Its cost is booked by {0}, still a draft: submit that before this invoice's final approval.", [frappe.utils.escape_html(entries)]),
+					"orange"
+				);
+			} else {
+				frm.dashboard.set_headline_alert(text, "green");
+			}
 		} else if (status.required) {
 			frm.dashboard.set_headline_alert(
 				__("This import purchase needs a Landed Cost Voucher before it goes for approval: Create > Landed Cost Voucher. If no landed cost applies, tick Import Without Landed Cost."),
