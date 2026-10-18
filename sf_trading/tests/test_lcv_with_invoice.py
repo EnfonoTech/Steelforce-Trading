@@ -149,12 +149,16 @@ class TestWhatIsAnImport(FrappeTestCase):
 			self.assertFalse(lcv.must_have_voucher(invoice()))
 
 	def test_the_switch_defaults_to_on_when_it_was_never_saved(self):
-		with patch.object(lcv.frappe.db, "get_single_value", return_value=None, create=True):
-			self.assertTrue(lcv.require_with_import())
-		with patch.object(lcv.frappe.db, "get_single_value", return_value="0", create=True):
-			self.assertFalse(lcv.require_with_import())
-		with patch.object(lcv.frappe.db, "get_single_value", return_value=1, create=True):
-			self.assertTrue(lcv.require_with_import())
+		# a Check that was never saved has no row: reading it with get_single_value gives 0, which is "off"
+		for row, expected in (({}, True), ({lcv.SWITCH: None}, True), ({lcv.SWITCH: ""}, True),
+				({lcv.SWITCH: "0"}, False), ({lcv.SWITCH: "1"}, True), ({lcv.SWITCH: 0}, False)):
+			with patch.object(lcv.frappe.db, "get_singles_dict", return_value=row, create=True):
+				self.assertEqual(lcv.require_with_import(), expected, row)
+
+	def test_the_switch_is_not_read_through_get_single_value(self):
+		with patch.object(lcv.frappe.db, "get_single_value", side_effect=AssertionError("get_single_value reads a missing Check as 0"), create=True):
+			with patch.object(lcv.frappe.db, "get_singles_dict", return_value={}, create=True):
+				self.assertTrue(lcv.require_with_import())
 
 
 class TestDoesTheVoucherMatch(FrappeTestCase):

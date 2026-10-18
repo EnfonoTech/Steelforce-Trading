@@ -93,7 +93,10 @@ def ensure_custom_fields():
 
 
 def require_with_import() -> bool:
-	value = frappe.db.get_single_value(SETTINGS, SWITCH)
+	"""The switch is on until someone saves it off. Read from the raw rows: `get_single_value` turns a Check
+	that was never saved into 0, which would read as "switched off" on every site that has not saved the
+	settings since this field was added."""
+	value = (frappe.db.get_singles_dict(SETTINGS) or {}).get(SWITCH)
 	return True if value in (None, "") else bool(cint(value))
 
 
