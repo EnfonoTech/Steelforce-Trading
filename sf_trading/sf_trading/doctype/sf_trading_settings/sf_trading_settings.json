@@ -32,6 +32,7 @@
   "landed_cost_require_on_lcv",
   "landed_cost_column_break",
   "landed_cost_require_on_purchase",
+  "landed_cost_require_with_import",
   "master_rules_section",
   "master_rules_from",
   "names_and_numbers_section",
@@ -227,6 +228,13 @@
    "fieldname": "landed_cost_require_on_purchase",
    "fieldtype": "Check",
    "label": "Valuation Charges on Purchase Invoice / Receipt Must Name Their Expense Entry"
+  },
+  {
+   "default": "1",
+   "fieldname": "landed_cost_require_with_import",
+   "fieldtype": "Check",
+   "label": "Import Purchase Invoice Must Carry a Landed Cost Voucher",
+   "description": "A Purchase Invoice that updates stock and is in a foreign currency, or carries a Bayan number, cannot be sent for approval without a draft Landed Cost Voucher drawn up against it. The voucher is submitted by the invoice's approval. An import with no landed cost ticks Import Without Landed Cost and says why."
   },
   {
    "fieldname": "master_rules_section",

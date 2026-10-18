@@ -81,6 +81,74 @@ function sf_lc_fill(frm, cdt, cdn, account_field, amount_field) {
 }
 
 frappe.ui.form.on("Landed Cost Voucher", { setup: sf_lc_setup });
+
+// A draft voucher may name a draft stock invoice (sf_trading/landed_cost_with_invoice.py): the voucher of
+// an import purchase is drawn up with the invoice and submitted by its approval. Core's query only offers
+// submitted documents, and it is set in the controller's own setup(), which runs after this file's
+// handlers -- so the query is replaced on refresh.
+function sf_lcv_receipt_query(frm) {
+	const grid = frm.fields_dict.purchase_receipts && frm.fields_dict.purchase_receipts.grid;
+	if (!grid) return;
+	grid.get_field("receipt_document").get_query = function (doc, cdt, cdn) {
+		const d = locals[cdt][cdn];
+		const filters = [[d.receipt_document_type, "company", "=", frm.doc.company]];
+		if (d.receipt_document_type === "Purchase Invoice") {
+			filters.push(["Purchase Invoice", "docstatus", "<", 2], ["Purchase Invoice", "update_stock", "=", 1]);
+		} else {
+			filters.push([d.receipt_document_type, "docstatus", "=", 1]);
+		}
+		return { filters: filters };
+	};
+}
+
+function sf_lcv_banner(frm) {
+	if (frm.is_new() || frm.doc.docstatus !== 0) return;
+	const asked = frm.doc.name;
+	frappe.call({
+		method: "sf_trading.landed_cost_with_invoice.voucher_status",
+		args: { voucher: asked },
+		callback(r) {
+			const s = r && r.message;
+			if (frm.doc.name !== asked || !s || !s.invoice || s.invoice_docstatus !== 0) return;
+			const link = `<a href="/app/purchase-invoice/${encodeURIComponent(s.invoice)}">${frappe.utils.escape_html(s.invoice)}</a>`;
+			frm.dashboard.clear_headline();
+			if (s.stale && s.stale.length) {
+				frm.dashboard.set_headline_alert(
+					__("This voucher does not match Purchase Invoice {0}: {1}.", [link, frappe.utils.escape_html(s.stale.join("; "))]),
+					"orange"
+				);
+				frm.add_custom_button(__("Refresh from Invoice"), () =>
+					frappe.call({
+						method: "sf_trading.landed_cost_with_invoice.refresh_from_invoice",
+						args: { voucher: frm.doc.name },
+						freeze: true,
+						callback() {
+							frm.reload_doc();
+						},
+					})
+				);
+			} else {
+				frm.dashboard.set_headline_alert(
+					__("Drawn up for draft Purchase Invoice {0}: this voucher is submitted when that invoice is approved.{1}", [
+						link,
+						s.locked ? " " + __("The invoice is out for approval ({0}): the charges are locked.", [frappe.utils.escape_html(s.state)]) : "",
+					]),
+					s.locked ? "blue" : "green"
+				);
+			}
+			// nothing to submit by hand: the server refuses it anyway, so do not offer it
+			const primary = frm.page.btn_primary;
+			if (primary && primary.text().trim() === __("Submit")) frm.page.clear_primary_action();
+		},
+	});
+}
+
+frappe.ui.form.on("Landed Cost Voucher", {
+	refresh(frm) {
+		sf_lcv_receipt_query(frm);
+		sf_lcv_banner(frm);
+	},
+});
 frappe.ui.form.on("Purchase Invoice", { setup: sf_lc_setup });
 frappe.ui.form.on("Purchase Receipt", { setup: sf_lc_setup });
 

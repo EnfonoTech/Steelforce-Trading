@@ -174,6 +174,8 @@ doctype_js = {
 		"public/js/document_trail.js",
 		# a Valuation charge names the expense entry that booked it
 		"public/js/landed_cost.js",
+		# Create > Landed Cost Voucher on a draft stock invoice, and what the import still needs
+		"public/js/purchase_invoice_lcv.js",
 		# fix the supplier's billing-blocking details from inside the draft
 		"public/js/supplier_quick_edit.js",
 		# a popup when the customer / supplier picked on a new voucher would be refused -- see party_alert.py
@@ -297,6 +299,8 @@ after_migrate = [
 	"sf_trading.ticket.setup",
 	# landed cost charge rows name the expense entry that booked them
 	"sf_trading.landed_cost.ensure_custom_fields",
+	# "Import Without Landed Cost" and its reason, on the Purchase Invoice
+	"sf_trading.landed_cost_with_invoice.ensure_custom_fields",
 	# the cancellation reason picked from a list, on Sales Order and Purchase Order
 	"sf_trading.order_cancellation.ensure_custom_fields",
 	"sf_trading.order_cancellation.seed_reasons",
@@ -389,6 +393,9 @@ override_doctype_class = {
 	# two prices of one item, one list and one UOM may coexist when they serve different branches
 	# (Applicable Branches) -- see sf_trading/overrides/item_price_class.py
 	"Item Price": "sf_trading.overrides.item_price_class.CustomItemPrice",
+	# a draft voucher may name a draft stock invoice: the voucher of an import purchase is drawn up with it
+	# and submitted by its approval (landed_cost_with_invoice.py)
+	"Landed Cost Voucher": "sf_trading.overrides.landed_cost_voucher_class.CustomLandedCostVoucher",
 }
 
 # Document Events
@@ -764,16 +771,31 @@ doc_events = {
 			_GOODS_IN_GATE,
 			# a term-allocated template with a schedule that names no term could never be paid -- see payment_term_split.py
 			"sf_trading.payment_term_split.repair_term_less_schedule",
+			# an import needs its Landed Cost Voucher before it goes for approval; last, so the
+			# other refusals come first -- see landed_cost_with_invoice.py
+			"sf_trading.landed_cost_with_invoice.validate_invoice",
 		],
 		"on_save": "sf_trading.overrides.purchase_invoice.on_save",
+		# a draft invoice that was changed pulls its draft voucher along
+		"on_update": "sf_trading.landed_cost_with_invoice.follow_invoice",
 		"on_submit": [
+			# first: the draft Landed Cost Vouchers are submitted by the invoice's own approval, as
+			# soon as core has posted the invoice's stock and ledger entries
+			"sf_trading.landed_cost_with_invoice.submit_vouchers",
 			"sf_trading.api.purchase_return.auto_create_pr_return",
 			"sf_trading.goods_in.update_invoiced_qty",
 			_ASSET_TRACKING_HOOK,
 		],
 		"on_cancel": "sf_trading.goods_in.update_invoiced_qty",
+		# the invoice's submitted vouchers go first, so one cancellation is enough; and a deleted
+		# draft takes its draft vouchers with it
+		"before_cancel": "sf_trading.landed_cost_with_invoice.cancel_vouchers",
+		"on_trash": "sf_trading.landed_cost_with_invoice.delete_vouchers",
 		# Valuation charges are landed costs: held to the expense entry they name
-		"before_submit": "sf_trading.landed_cost.require_links",
+		"before_submit": [
+			"sf_trading.landed_cost_with_invoice.require_voucher_at_submit",
+			"sf_trading.landed_cost.require_links",
+		],
 	},
 	"Purchase Order": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
@@ -789,8 +811,14 @@ doc_events = {
 	},
 	# every charge names the expense entry it absorbs, and may not take more than it booked
 	"Landed Cost Voucher": {
-		"validate": "sf_trading.landed_cost.validate_charges",
+		"validate": [
+			"sf_trading.landed_cost.validate_charges",
+			# a voucher for a draft invoice names that invoice alone and is locked once it is out for approval
+			"sf_trading.landed_cost_with_invoice.validate_voucher",
+		],
 		"before_submit": "sf_trading.landed_cost.require_links",
+		"on_trash": "sf_trading.landed_cost_with_invoice.guard_voucher_trash",
+		"on_cancel": "sf_trading.landed_cost_with_invoice.remind_after_cancel",
 	},
 	# any entry the supporting-document rules cover, posted with nothing attached, says it is now
 	# on the Pending Supporting Documents report (rule check first, so other doctypes cost nothing)
