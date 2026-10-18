@@ -308,13 +308,31 @@ class TestLandedCostStockDocuments(FrappeTestCase):
 		self.assertEqual(lines[0]["draft"], 0)
 		self.assertIn(("Purchase Receipt", "PR-1"), absorbed.call_args.kwargs["skip_parents"])
 
-	def _lines(self, docstatus, expense_doctype="Journal Entry", parenttype="Landed Cost Voucher"):
+	def _lines(self, docstatus, expense_doctype="Journal Entry", parenttype="Landed Cost Voucher", goods=None, expected=None, parent=None):
+		expected = {FREIGHT: 80} if expected is None else expected
 		with patch.object(lc.frappe, "has_permission", return_value=True), \
 				patch.object(lc.frappe.db, "get_value", return_value=docstatus), \
 				patch.object(lc, "booked", return_value={FREIGHT: 100}), \
-				patch.object(lc, "booked_by_draft", return_value={FREIGHT: 80}), \
+				patch.object(lc, "booked_by_draft", return_value=expected), \
 				patch.object(lc, "absorbed", return_value=frappe._dict(submitted=0.0, draft=20.0, documents=[("Landed Cost Voucher", "LCV-2")])):
-			return lc.get_expense_entry_lines(expense_doctype, "X-1", parenttype, None)
+			return lc.get_expense_entry_lines(expense_doctype, "X-1", parenttype, parent, 0, None, None, goods)
+
+	def test_the_goods_bill_is_never_offered_as_its_own_expense(self):
+		# the invoice a voucher spreads its cost over cannot also be the expense that booked it, draft or submitted
+		for docstatus in (0, 1):
+			with self.assertRaises(frappe.ValidationError):
+				self._lines(docstatus, "Purchase Invoice", goods=[["Purchase Invoice", "X-1"]])
+		with self.assertRaises(frappe.ValidationError):
+			self._lines(1, "Purchase Invoice", parenttype="Purchase Invoice", parent="X-1")
+		# a different bill is fine
+		self.assertEqual(len(self._lines(0, "Purchase Invoice", goods=[["Purchase Invoice", "OTHER-1"]])), 1)
+		# and so is the same name under another doctype
+		self.assertEqual(len(self._lines(1, "Journal Entry", goods=[["Purchase Invoice", "X-1"]])), 1)
+
+	def test_a_draft_that_books_no_expense_is_refused_with_the_reason(self):
+		with self.assertRaises(frappe.ValidationError) as caught:
+			self._lines(0, "Purchase Invoice", expected={})
+		self.assertIn("draft", str(caught.exception))
 
 	def test_the_picker_offers_a_draft_entry_to_a_draft_voucher_marked_as_draft(self):
 		for expense_dt in ("Journal Entry", "Purchase Invoice"):

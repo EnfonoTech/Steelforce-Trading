@@ -30,6 +30,8 @@ function sf_lc_fill(frm, cdt, cdn, account_field, amount_field) {
 			// the form's own receipt / invoice ties: a charge copied from the receipt stays its own
 			update_stock: frm.doc.update_stock ? 1 : 0,
 			return_against: frm.doc.is_return ? frm.doc.return_against || null : null,
+			// the documents this voucher spreads its cost over: none of them is also the expense that booked it
+			goods: frm.doctype === "Landed Cost Voucher" ? (frm.doc.purchase_receipts || []).map((r) => [r.receipt_document_type, r.receipt_document]) : null,
 			items: (frm.doc.items || []).map((i) => ({
 				purchase_receipt: i.purchase_receipt || null,
 				purchase_invoice: i.purchase_invoice || null,

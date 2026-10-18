@@ -413,7 +413,7 @@ def absorbed(doctype, name, account, exclude_parent=None, skip_parents=()) -> fr
 
 @frappe.whitelist()
 def get_expense_entry_lines(expense_doctype: str, expense_entry: str, parenttype: str = None, parent: str = None,
-		update_stock: int = 0, items=None, return_against: str = None) -> list:
+		update_stock: int = 0, items=None, return_against: str = None, goods=None) -> list:
 	"""The landed-cost lines an expense entry can still give: for the charge-row picker. The form
 	sends its own receipt / invoice ties (`items`), so a charge an invoice repeats from its receipt
 	shows what the receipt took as still its own, not as gone."""
@@ -428,6 +428,14 @@ def get_expense_entry_lines(expense_doctype: str, expense_entry: str, parenttype
 			frappe.throw(_("A draft Payment Entry has booked nothing and cannot be read ahead. Submit it first, or name the "
 				"invoice or journal that booked the cost."))
 		frappe.throw(_("%s %s is not submitted, so it has booked nothing yet.") % (_(expense_doctype), expense_entry))
+	# the purchase the cost is spread over is not the expense that booked it (validate_charges refuses it too)
+	own = {(parenttype, parent)} if parenttype in CHARGE_PARENTS and parent else set()
+	for pair in (frappe.parse_json(goods) if isinstance(goods, str) else goods) or []:
+		if isinstance(pair, (list, tuple)) and len(pair) == 2:
+			own.add((pair[0], pair[1]))
+	if (expense_doctype, expense_entry) in own:
+		frappe.throw(_("%s %s is the purchase this cost is spread over, not the expense that booked it. Name the freight or "
+			"customs bill, journal or payment that booked the cost.") % (_(expense_doctype), expense_entry))
 	exclude = (parenttype, parent) if parenttype and parent else None
 	ties = frappe._dict(repeats=set(), carried=set(), receipts=set())
 	if parenttype in CHARGE_PARENTS:
@@ -447,6 +455,10 @@ def get_expense_entry_lines(expense_doctype: str, expense_entry: str, parenttype
 		lines.append({"account": account, "booked": amount, "absorbed": flt(taken.submitted + taken.draft, 3),
 			"available": flt(amount - taken.submitted - taken.draft, 3),
 			"documents": [d[1] for d in taken.documents], "draft": 1 if status == 0 else 0})
+	if status == 0 and not lines:
+		frappe.throw(_("%s %s is a draft and is not going to book an expense a landed cost can absorb: only its non-stock rows "
+			"(Purchase Invoice) or its debits (Journal Entry) count, and stock rows go to the stock account.")
+			% (_(expense_doctype), expense_entry))
 	return lines
 
 
