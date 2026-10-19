@@ -11,8 +11,7 @@ function sf_lc_setup(frm) {
 		}
 		return {
 			query: "sf_trading.landed_cost.expense_entry_query",
-			// a draft voucher may name a bill or journal that is itself still a draft (marked "Draft" in the list)
-			filters: { company: frm.doc.company, allow_draft: frm.doctype === "Landed Cost Voucher" && frm.doc.docstatus === 0 ? 1 : 0 },
+			filters: { company: frm.doc.company },
 		};
 	});
 }
@@ -70,20 +69,14 @@ function sf_lc_fill(frm, cdt, cdn, account_field, amount_field) {
 			}
 			frappe.show_alert(
 				{
-					message: pick.draft
-						? __("{0} is still a draft: it is expected to book {1}, {2} left. It must be submitted before this voucher can be.", [
-								row.custom_expense_entry,
-								format_currency(pick.booked),
-								format_currency(pick.available),
-						  ])
-						: __("{0}: {1} booked, {2} left", [
-								row.custom_expense_entry,
-								format_currency(pick.booked),
-								format_currency(pick.available),
-						  ]),
-					indicator: flt(pick.available) > 0 ? (pick.draft ? "orange" : "green") : "red",
+					message: __("{0}: {1} booked, {2} left", [
+						row.custom_expense_entry,
+						format_currency(pick.booked),
+						format_currency(pick.available),
+					]),
+					indicator: flt(pick.available) > 0 ? "green" : "red",
 				},
-				8
+				6
 			);
 		},
 	});

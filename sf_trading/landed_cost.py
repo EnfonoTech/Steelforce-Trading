@@ -17,13 +17,6 @@ Every such charge row now names its Expense Entry (`custom_expense_doctype` /
 * the transaction -- the expense entry is submitted, in the same company, and is not one of the
   very documents the charge is spread over.
 
-A Landed Cost Voucher that is itself still a draft may name an expense entry that is still a draft too -- the
-freight bill and the import it belongs to are often approved together. Its booking is then READ from the
-document (`booked_by_draft`: a Journal Entry's debits, a Purchase Invoice's non-stock rows and Total taxes; a
-draft Payment Entry is refused), the same ledger, amount and company checks apply to that expected booking, and
-the draft is marked as such. The voucher cannot be submitted until every entry it names is submitted and has
-booked what was expected (`booked`): the ledger, not the draft, has the last word.
-
 Whether a charge row MUST name one is SF Trading Settings > Landed Costs. The Landed Cost
 Reconciliation report lists what is still unallocated, pending or unmatched on either side. An
 expense entry that debits a landed-cost account for something else (outward freight, say) can be
@@ -47,9 +40,6 @@ from frappe.utils import cint, flt
 
 SETTINGS = "SF Trading Settings"
 EXPENSE_DOCTYPES = ("Purchase Invoice", "Journal Entry", "Payment Entry")
-#: expense entries a DRAFT Landed Cost Voucher may name while they are themselves still drafts: what they are
-#: going to book can be read from the document. A Payment Entry cannot (see booked_by_draft)
-DRAFT_EXPENSE_DOCTYPES = ("Purchase Invoice", "Journal Entry")
 DOCTYPE_FIELD = "custom_expense_doctype"
 ENTRY_FIELD = "custom_expense_entry"
 EXCLUDE_FIELD = "custom_not_landed_cost"
@@ -297,61 +287,11 @@ def booked(doctype, name, account=None) -> dict:
 	return out
 
 
-def booked_by_draft(doctype, name, account=None) -> dict:
-	"""{account: net debit} a DRAFT expense entry is going to post, read from the document: nothing is in the
-	ledger yet, so `booked` would say it booked nothing.
-
-	A Journal Entry debits its rows' accounts. A Purchase Invoice debits each non-stock row's expense account by
-	the row's net amount, and each tax row of category Total / Valuation and Total on its account (Add debits,
-	Deduct credits). A Payment Entry is not read ahead: what it books depends on the party and the references it
-	settles, so a draft one is refused (see may_read_ahead) -- submit it first.
-
-	This is what the entry is EXPECTED to book. The voucher is held to the ledger itself when it is submitted
-	(`booked`), so an entry that changes before it is submitted is caught then, not trusted now.
-	"""
-	out = {}
-
-	def add(acct, amount):
-		if acct and (not account or acct == account) and abs(flt(amount)) > 0:
-			out[acct] = flt(out.get(acct, 0) + flt(amount), 3)
-
-	if doctype == "Journal Entry":
-		for r in frappe.get_all("Journal Entry Account", filters={"parent": name, "parenttype": doctype},
-				fields=["account", "debit", "credit"]):
-			add(r.account, flt(r.debit) - flt(r.credit))
-	elif doctype == "Purchase Invoice":
-		for r in frappe.get_all("Purchase Invoice Item", filters={"parent": name, "parenttype": doctype},
-				fields=["item_code", "expense_account", "base_net_amount"]):
-			if r.item_code and cint(frappe.get_cached_value("Item", r.item_code, "is_stock_item")):
-				continue  # a stock row debits the stock account, not an expense
-			add(r.expense_account, r.base_net_amount)
-		for t in frappe.get_all("Purchase Taxes and Charges", filters={"parent": name, "parenttype": doctype},
-				fields=["account_head", "base_tax_amount", "add_deduct_tax", "category"]):
-			if t.category in ("Total", "Valuation and Total"):
-				add(t.account_head, flt(t.base_tax_amount) * (-1 if t.add_deduct_tax == "Deduct" else 1))
-	return out
-
-
-def expense_booking(doctype, name, docstatus, account=None) -> dict:
-	"""What the expense entry booked (submitted) or is going to book (draft), {account: net debit}."""
-	return booked_by_draft(doctype, name, account) if cint(docstatus) == 0 else booked(doctype, name, account)
-
-
-def may_read_ahead(doc, expense_doctype) -> bool:
-	"""Only a Landed Cost Voucher that is itself still a draft may name a draft expense entry, and only a
-	kind whose booking can be read from the document. A voucher being submitted, or a charge row on a
-	Purchase Invoice / Receipt, needs the entry submitted."""
-	return doc.doctype == "Landed Cost Voucher" and cint(doc.get("docstatus")) == 0 and expense_doctype in DRAFT_EXPENSE_DOCTYPES
-
-
-def draft_expense_entries(doc) -> list:
-	"""[(doctype, name)] the document's charge rows name that are still drafts, each once."""
-	out = []
-	for row, _account, _amount in charge_rows(doc):
-		dt, name = row.get(DOCTYPE_FIELD), row.get(ENTRY_FIELD)
-		if dt in EXPENSE_DOCTYPES and name and (dt, name) not in out and cint(frappe.db.get_value(dt, name, "docstatus")) == 0:
-			out.append((dt, name))
-	return out
+def not_booked_reason(doctype, name, docstatus) -> str:
+	"""Why an expense entry that is not submitted cannot be named: it has booked nothing."""
+	if cint(docstatus) == 2:
+		return _("%s %s is cancelled, so it has booked nothing.") % (_(doctype), name)
+	return _("%s %s is still a draft, so it has booked nothing yet. Submit it first, then name it.") % (_(doctype), name)
 
 
 def absorbed(doctype, name, account, exclude_parent=None, skip_parents=()) -> frappe._dict:
@@ -421,13 +361,8 @@ def get_expense_entry_lines(expense_doctype: str, expense_entry: str, parenttype
 		frappe.throw(_("An expense entry is a Purchase Invoice, Journal Entry or Payment Entry."))
 	frappe.has_permission(expense_doctype, "read", doc=expense_entry, throw=True)
 	status = cint(frappe.db.get_value(expense_doctype, expense_entry, "docstatus"))
-	if status == 2:
-		frappe.throw(_("%s %s is cancelled, so it has booked nothing.") % (_(expense_doctype), expense_entry))
-	if status == 0 and not (parenttype == "Landed Cost Voucher" and expense_doctype in DRAFT_EXPENSE_DOCTYPES):
-		if parenttype == "Landed Cost Voucher":
-			frappe.throw(_("A draft Payment Entry has booked nothing and cannot be read ahead. Submit it first, or name the "
-				"invoice or journal that booked the cost."))
-		frappe.throw(_("%s %s is not submitted, so it has booked nothing yet.") % (_(expense_doctype), expense_entry))
+	if status != 1:
+		frappe.throw(not_booked_reason(expense_doctype, expense_entry, status))
 	# the purchase the cost is spread over is not the expense that booked it (validate_charges refuses it too)
 	own = {(parenttype, parent)} if parenttype in CHARGE_PARENTS and parent else set()
 	for pair in (frappe.parse_json(goods) if isinstance(goods, str) else goods) or []:
@@ -445,7 +380,7 @@ def get_expense_entry_lines(expense_doctype: str, expense_entry: str, parenttype
 			items=[frappe._dict(r) for r in rows if isinstance(r, dict)])
 		ties = _receipt_links(stub)
 	lines = []
-	for account, amount in expense_booking(expense_doctype, expense_entry, status).items():
+	for account, amount in booked(expense_doctype, expense_entry).items():
 		if amount <= TOLERANCE:
 			continue
 		skip = set(ties.repeats)
@@ -454,25 +389,18 @@ def get_expense_entry_lines(expense_doctype: str, expense_entry: str, parenttype
 		taken = absorbed(expense_doctype, expense_entry, account, exclude, skip_parents=skip)
 		lines.append({"account": account, "booked": amount, "absorbed": flt(taken.submitted + taken.draft, 3),
 			"available": flt(amount - taken.submitted - taken.draft, 3),
-			"documents": [d[1] for d in taken.documents], "draft": 1 if status == 0 else 0})
-	if status == 0 and not lines:
-		frappe.throw(_("%s %s is a draft and is not going to book an expense a landed cost can absorb: only its non-stock rows "
-			"(Purchase Invoice) or its debits (Journal Entry) count, and stock rows go to the stock account.")
-			% (_(expense_doctype), expense_entry))
+			"documents": [d[1] for d in taken.documents]})
 	return lines
 
 
 @frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
 def expense_entry_query(doctype, txt, searchfield, start, page_len, filters):
-	"""Link query for the Expense Entry field: submitted entries of the company, newest first. A draft
-	Landed Cost Voucher (allow_draft) is also offered the invoices and journals still in draft, marked as
-	such: it may be drawn up before the bill that booked its cost has been approved."""
+	"""Link query for the Expense Entry field: submitted entries of the company, newest first."""
 	if doctype not in EXPENSE_DOCTYPES:
 		return []
 	filters = frappe._dict(filters or {})
-	drafts = cint(filters.get("allow_draft")) and doctype in DRAFT_EXPENSE_DOCTYPES
-	conditions = {"docstatus": ["in", [0, 1]] if drafts else 1}
+	conditions = {"docstatus": 1}
 	if filters.get("company"):
 		conditions["company"] = filters.company
 	if txt:
@@ -484,13 +412,9 @@ def expense_entry_query(doctype, txt, searchfield, start, page_len, filters):
 		fields += ["party_name", "base_paid_amount"]
 	else:
 		fields += ["user_remark", "total_debit"]
-	rows = frappe.get_list(doctype, filters=conditions, fields=fields + ["docstatus"], order_by="posting_date desc",
+	rows = frappe.get_list(doctype, filters=conditions, fields=fields, order_by="posting_date desc",
 		limit_start=start, limit_page_length=page_len)
-	out = []
-	for r in rows:
-		values = [str(r.get(f) or "")[:60] for f in fields]
-		out.append(values[:1] + [_("Draft")] + values[1:] if cint(r.get("docstatus")) == 0 else values)
-	return out
+	return [[str(r.get(f) or "")[:60] for f in fields] for r in rows]
 
 
 # ─── the controls ────────────────────────────────────────────────────────────────────────────────
@@ -581,14 +505,8 @@ def validate_charges(doc, method=None):
 		values = frappe.db.get_value(expense_dt, expense, ["docstatus", "company"], as_dict=True)
 		if not values:
 			frappe.throw(label + ": " + _("{0} {1} does not exist.").format(_(expense_dt), frappe.bold(expense)))
-		status = cint(values.docstatus)
-		if status == 2:
-			frappe.throw(label + ": " + _("%s %s is cancelled, so it has booked nothing.") % (_(expense_dt), frappe.bold(expense)))
-		if status != 1 and not (status == 0 and may_read_ahead(doc, expense_dt)):
-			if status == 0 and doc.doctype == "Landed Cost Voucher" and cint(doc.get("docstatus")) == 0:
-				frappe.throw(label + ": " + _("A draft Payment Entry has booked nothing and cannot be read ahead. Submit %s "
-					"first, or name the invoice or journal that booked the cost.") % frappe.bold(expense))
-			frappe.throw(label + ": " + _("%s %s is not submitted, so it has booked nothing yet.") % (_(expense_dt), frappe.bold(expense)))
+		if cint(values.docstatus) != 1:
+			frappe.throw(label + ": " + not_booked_reason(expense_dt, frappe.bold(expense), values.docstatus))
 		if values.company != doc.company:
 			frappe.throw(label + ": " + _("{0} belongs to {1}, not {2}.").format(frappe.bold(expense), values.company,
 				doc.company))
@@ -597,17 +515,12 @@ def validate_charges(doc, method=None):
 				.format(frappe.bold(expense)))
 
 		# the ledger: the expense entry must have debited this very account
-		# (a draft expense entry has no ledger yet: what it is going to book is read from the document)
-		on_account = expense_booking(expense_dt, expense, status, account).get(account, 0.0)
+		on_account = booked(expense_dt, expense, account).get(account, 0.0)
 		if on_account <= TOLERANCE:
-			elsewhere = [a for a, v in expense_booking(expense_dt, expense, status).items() if v > TOLERANCE]
-			if status == 0:
-				message = _("%s is still a draft and would book nothing to %s. It would debit: %s. Use the account the expense is "
-					"going to be booked on.")
-			else:
-				message = _("%s booked nothing to %s. It debited: %s. Use the account the expense was booked on.")
+			elsewhere = [a for a, v in booked(expense_dt, expense).items() if v > TOLERANCE]
 			frappe.throw(
-				label + ": " + message % (frappe.bold(expense), frappe.bold(account), ", ".join(elsewhere) or _("no expense account")),
+				label + ": " + _("%s booked nothing to %s. It debited: %s. Use the account the expense was booked on.")
+				% (frappe.bold(expense), frappe.bold(account), ", ".join(elsewhere) or _("no expense account")),
 				title=_("Expense Ledger Mismatch"),
 			)
 
