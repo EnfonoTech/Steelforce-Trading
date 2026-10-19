@@ -389,6 +389,8 @@ has_permission = {
 # the desk drops Purchase Receipt for a user GRN is disabled for -- see purchase_receipt_gate.py
 boot_session = [
 	"sf_trading.purchase_receipt_gate.boot_session",
+	# which forms carry the Alternative Cost Center field, so the desk filters its picker on every one of them
+	"sf_trading.alternative_cost_center.boot_carriers",
 	# each report the user may open carries its number, so the search bar finds it by RPT-0042
 	"sf_trading.report_numbering.boot_numbers",
 ]

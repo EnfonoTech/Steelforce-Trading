@@ -40,9 +40,13 @@ def cc(name, company, is_group=0, disabled=0):
 class Fields:
 	"""Which doctypes have the alternative cost centre field, and which tables they have."""
 
-	def __init__(self, header=("Journal Entry", "Purchase Invoice"), tables=None):
+	def __init__(self, header=("Purchase Invoice", "POS Invoice"), tables=None):
 		self.header = set(header)
-		self.tables = tables if tables is not None else {"Journal Entry": [("accounts", "Journal Entry Account", "Accounting Entries")], "Purchase Invoice": [("items", "Purchase Invoice Item", "Items")]}
+		self.tables = tables if tables is not None else {
+			"Journal Entry": [("accounts", "Journal Entry Account", "Accounting Entries")],
+			"Purchase Invoice": [("items", "Purchase Invoice Item", "Items")],
+			"POS Invoice": [("items", "POS Invoice Item", "Items")],
+		}
 
 	def meta(self, doctype):
 		tables = self.tables.get(doctype, [])
@@ -54,13 +58,15 @@ class Fields:
 
 
 class Seams:
-	def __init__(self, mirrors=(), fields=None):
+	def __init__(self, mirrors=(), fields=None, carriers=("Journal Entry", "Purchase Invoice", "POS Invoice")):
 		self.mirrors = {m["name"]: m for m in mirrors}
 		self.fields = fields or Fields()
+		self.carriers = list(carriers)
 		self.patches = []
 
 	def __enter__(self):
 		for target, attr, value in [
+			(acc, "carriers", MagicMock(return_value=self.carriers)),
 			(acc.frappe, "get_meta", MagicMock(side_effect=self.fields.meta)),
 			(acc.frappe, "get_all", MagicMock(side_effect=lambda doctype, **k: [frappe._dict(m) for n, m in self.mirrors.items() if n in k["filters"]["name"][1]])),
 		]:
@@ -118,12 +124,12 @@ class TestWhatAVoucherMaySay(FrappeTestCase):
 		self.refused(voucher(accounts=[row(1, "Nothing - XX")]), "is not an Alternative Cost Center", [])
 
 	def test_a_voucher_naming_none_costs_nothing(self):
-		with Seams([]) as s:
+		with Seams([]), patch.object(acc.frappe, "get_all", MagicMock(side_effect=AssertionError("names none: nothing to look up")), create=True):
 			acc.validate_voucher(voucher(accounts=[row(1, ""), row(2, None)]))
-			self.assertEqual(s.patches[1].new.call_count if hasattr(s.patches[1], "new") else 0, 0)
 
 	def test_a_document_that_is_not_a_voucher_is_left_alone_without_a_query(self):
-		with patch.object(acc.frappe, "get_meta", MagicMock(side_effect=AssertionError("not a voucher")), create=True):
+		with patch.object(acc, "carriers", return_value=["Journal Entry"]), \
+				patch.object(acc.frappe, "get_meta", MagicMock(side_effect=AssertionError("not a carrier")), create=True):
 			acc.validate_voucher(Doc(doctype="Customer", company=OWN))
 			acc.validate_voucher(Doc(doctype="Journal Entry", company=None))
 
@@ -131,10 +137,24 @@ class TestWhatAVoucherMaySay(FrappeTestCase):
 		with Seams([], Fields(header=(), tables={})):
 			acc.validate_voucher(voucher("Sales Invoice"))
 
-	def test_every_voucher_the_server_checks_is_one_the_form_script_offers_the_field_on(self):
-		js = read("public", "js", "alternative_cost_center.js")
-		for doctype in acc.VOUCHERS:
-			self.assertIn('"%s"' % doctype, js)
+	def test_a_document_type_that_carries_the_field_is_checked_whatever_it_is(self):
+		# not only the first eight vouchers: a POS Invoice is refused its own company's cost centre too
+		doc = Doc(doctype="POS Invoice", company=OWN, items=[row(1, "Main - SFB")])
+		with Seams([mirror("Main - SFB", OWN)]), self.assertRaises(frappe.ValidationError) as caught:
+			acc.validate_voucher(doc)
+		self.assertIn("Row 1 of Items", str(caught.exception))
+		ok = Doc(doctype="POS Invoice", company=OWN, items=[row(1, "Main - SFTO")])
+		with Seams([mirror("Main - SFTO", OTHER)]):
+			acc.validate_voucher(ok)
+
+	def test_a_document_type_that_does_not_carry_the_field_costs_nothing(self):
+		with Seams(carriers=("Journal Entry",)), patch.object(acc.frappe, "get_all", MagicMock(side_effect=AssertionError("not a carrier")), create=True):
+			acc.validate_voucher(Doc(doctype="Customer", company=OWN))
+			acc.validate_voucher(Doc(doctype="Purchase Invoice", company=OWN, items=[row(1, "Main - SFB")]))
+
+	def test_a_document_with_no_company_is_not_checked_there_is_nothing_to_compare_with(self):
+		with Seams(), patch.object(acc.frappe, "get_all", MagicMock(side_effect=AssertionError("no company")), create=True):
+			acc.validate_voucher(Doc(doctype="POS Invoice", company=None, items=[row(1, "Main - SFB")]))
 
 
 class TestTheMirror(FrappeTestCase):
@@ -237,6 +257,7 @@ class TestTheMirror(FrappeTestCase):
 
 class TestTheDimension(FrappeTestCase):
 	def run_ensure(self, existing_dimension):
+		self.cache = MagicMock()
 		made = []
 		module = types.ModuleType("erpnext.accounts.doctype.accounting_dimension.accounting_dimension")
 		module.make_dimension_in_accounting_doctypes = lambda doc: made.append(doc)
@@ -252,7 +273,8 @@ class TestTheDimension(FrappeTestCase):
 		doc = MagicMock()
 		try:
 			with patch.object(acc.frappe, "db", db, create=True), patch.object(acc, "backfill", return_value=0) as backfill, \
-					patch.object(acc.frappe, "get_doc", MagicMock(return_value=doc), create=True) as get_doc, patch.object(acc.frappe, "flags", types.SimpleNamespace(), create=True):
+					patch.object(acc.frappe, "get_doc", MagicMock(return_value=doc), create=True) as get_doc, patch.object(acc.frappe, "flags", types.SimpleNamespace(), create=True), \
+					patch.object(acc.frappe, "cache", self.cache, create=True), patch.object(acc.frappe, "local", types.SimpleNamespace(), create=True):
 				acc.ensure_dimension()
 		finally:
 			for name, old in saved.items():
@@ -269,6 +291,10 @@ class TestTheDimension(FrappeTestCase):
 		doc.insert.assert_called_once()
 		self.assertEqual(made, [doc], "ERPNext's own field maker runs now, not in a worker after the commit")
 		db.add_index.assert_called_once_with("GL Entry", ["alternative_cost_center"])
+
+	def test_making_the_dimension_forgets_the_old_list_of_carriers(self):
+		self.run_ensure(False)
+		self.cache.delete_value.assert_called_with(acc.CARRIERS_KEY)
 
 	def test_a_site_that_has_it_makes_nothing_twice_but_still_makes_sure_of_the_fields(self):
 		made, db, doc, _b, get_doc = self.run_ensure(True)
@@ -294,7 +320,9 @@ class TestTheDimension(FrappeTestCase):
 		db.table_exists.return_value = True
 		db.get_value.return_value = "Alternative Cost Center"
 		try:
-			with patch.object(acc.frappe, "db", db, create=True), patch.object(acc, "backfill", return_value=0), 					patch.object(acc.frappe, "get_doc", MagicMock(return_value=MagicMock()), create=True), patch.object(acc.frappe, "flags", types.SimpleNamespace(), create=True):
+			with patch.object(acc.frappe, "db", db, create=True), patch.object(acc, "backfill", return_value=0), \
+					patch.object(acc.frappe, "get_doc", MagicMock(return_value=MagicMock()), create=True), patch.object(acc.frappe, "flags", types.SimpleNamespace(), create=True), \
+					patch.object(acc.frappe, "cache", MagicMock(), create=True), patch.object(acc.frappe, "local", types.SimpleNamespace(), create=True):
 				acc.ensure_dimension()
 		finally:
 			for name, old in saved.items():
@@ -321,36 +349,122 @@ sandbox.frappe = {
 	ui: { form: { on: (dt, handlers) => (registered[dt] = handlers) } },
 	get_meta: (dt) => ({ fields: [{ fieldname: "alternative_cost_center" }] }),
 };
+const boot = JSON.parse(process.argv[3]);
+if (boot !== null) sandbox.frappe.boot = { sf_alt_cc_doctypes: boot };
+else sandbox.frappe.boot = {};
 sandbox.sf_trading = {};
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), sandbox);
-const frm = {
-	doc: { company: "Steel Force Trading WLL" },
-	meta: { fields: [{ fieldname: "alternative_cost_center" }, { fieldname: "accounts", fieldtype: "Table", options: "Journal Entry Account" }, { fieldname: "remarks", fieldtype: "Text" }] },
+const make = (company, fields) => ({
+	doc: { company },
+	meta: { fields },
 	set_query(...args) { queries.push(args.length === 3 ? { field: args[0], table: args[1], filters: args[2]().filters } : { field: args[0], filters: args[1]().filters }); },
-};
-registered["Journal Entry"].setup(frm);
-const noField = { doc: { company: "X" }, meta: { fields: [{ fieldname: "remarks" }] }, set_query() { throw new Error("no field, no query"); } };
-registered["Sales Invoice"].setup(noField);
-console.log(JSON.stringify({ doctypes: Object.keys(registered), queries }));
+});
+const header_and_table = make("Steel Force Trading WLL", [{ fieldname: "alternative_cost_center" }, { fieldname: "accounts", fieldtype: "Table", options: "Journal Entry Account" }, { fieldname: "remarks", fieldtype: "Text" }]);
+const taxes = make("Steel Force Trading WLL", [{ fieldname: "taxes", fieldtype: "Table", options: "Sales Taxes and Charges" }]);
+const no_company = make("", [{ fieldname: "alternative_cost_center" }]);
+const nothing = { doc: { company: "X" }, meta: { fields: [{ fieldname: "remarks" }] }, set_query() { throw new Error("no field, no query"); } };
+const first = Object.keys(registered)[0];
+registered[first].setup(header_and_table);
+const afterFirst = queries.splice(0);
+registered[first].setup(taxes);
+const afterTaxes = queries.splice(0);
+registered[first].setup(no_company);
+const afterNoCompany = queries.splice(0);
+registered[first].setup(nothing);
+console.log(JSON.stringify({ doctypes: Object.keys(registered), header_and_table: afterFirst, taxes: afterTaxes, no_company: afterNoCompany }));
 """
 
 
 class TestTheForm(FrappeTestCase):
-	def run_js(self):
+	def run_js(self, boot):
 		node = shutil.which("node")
 		if not node:
 			self.skipTest("node is not installed")
-		done = subprocess.run([node, "-e", JS_RUNNER, "x", os.path.join(ROOT, "public", "js", "alternative_cost_center.js")], capture_output=True, text=True, encoding="utf-8", timeout=60)
+		done = subprocess.run([node, "-e", JS_RUNNER, "x", os.path.join(ROOT, "public", "js", "alternative_cost_center.js"), json.dumps(boot)],
+			capture_output=True, text=True, encoding="utf-8", timeout=60)
 		self.assertEqual(done.returncode, 0, done.stderr)
 		return json.loads(done.stdout)
 
+	def test_the_forms_are_the_ones_the_boot_names_every_one_of_them(self):
+		boot = ["Journal Entry", "POS Invoice", "Landed Cost Voucher", "Sales Order", "Sales Taxes and Charges Template", "Asset Repair"]
+		self.assertEqual(self.run_js(boot)["doctypes"], boot)
+
+	def test_a_stale_boot_falls_back_to_the_first_eight_vouchers(self):
+		for stale in (None, []):
+			out = self.run_js(stale)
+			self.assertEqual(sorted(out["doctypes"]), sorted(["Journal Entry", "Sales Invoice", "Purchase Invoice", "Payment Entry", "Expense Claim", "Stock Entry", "Purchase Receipt", "Delivery Note"]))
+
 	def test_the_field_is_offered_only_cost_centres_of_other_enabled_companies_on_the_header_and_the_rows(self):
-		out = self.run_js()
-		self.assertEqual(sorted(out["doctypes"]), sorted(acc.VOUCHERS))
+		out = self.run_js(["Journal Entry"])
 		expected = {"cc_company": ["!=", "Steel Force Trading WLL"], "disabled": 0}
-		self.assertEqual(out["queries"], [{"field": "alternative_cost_center", "filters": expected},
+		self.assertEqual(out["header_and_table"], [{"field": "alternative_cost_center", "filters": expected},
 			{"field": "alternative_cost_center", "table": "accounts", "filters": expected}])
+
+	def test_a_tax_table_of_a_document_is_filtered_too(self):
+		out = self.run_js(["Sales Invoice"])
+		self.assertEqual(out["taxes"], [{"field": "alternative_cost_center", "table": "taxes", "filters": {"cc_company": ["!=", "Steel Force Trading WLL"], "disabled": 0}}])
+
+	def test_a_form_with_no_company_yet_is_offered_every_enabled_cost_centre(self):
+		out = self.run_js(["Journal Entry"])
+		self.assertEqual(out["no_company"][0]["filters"], {"cc_company": ["!=", ""], "disabled": 0})
+
+
+class TestWhichDocumentTypesCarryIt(FrappeTestCase):
+	def run_carriers(self, have, istable, parents_by_doctype):
+		"""have: Custom Field dts; istable: {dt: 0/1}; parents_by_doctype: {"DocField": [parent...], "Custom Field": [dt...]}."""
+		def get_all(doctype, filters=None, fields=None, pluck=None, **k):
+			if doctype == "Custom Field" and pluck:
+				return list(have)
+			if doctype == "DocType":
+				return [frappe._dict(name=n, istable=istable[n]) for n in filters["name"][1] if n in istable]
+			if doctype in parents_by_doctype:
+				return [frappe._dict({fields[0]: p}) for p in parents_by_doctype[doctype]]
+			return []
+		with patch.object(acc.frappe, "get_all", side_effect=get_all, create=True):
+			return acc._carriers()
+
+	def test_headers_and_the_parents_of_carrying_tables_are_in_and_the_ledgers_are_out(self):
+		have = ["Sales Invoice", "Sales Invoice Item", "Journal Entry Account", "GL Entry", "Payment Ledger Entry", "Account Closing Balance", "Budget", "Sales Taxes and Charges"]
+		istable = {"Sales Invoice": 0, "Sales Invoice Item": 1, "Journal Entry Account": 1, "GL Entry": 0, "Payment Ledger Entry": 0, "Account Closing Balance": 0, "Budget": 0, "Sales Taxes and Charges": 1}
+		parents = {"DocField": ["Sales Invoice", "Journal Entry", "Quotation", "Sales Taxes and Charges Template"], "Custom Field": ["Sales Invoice"]}
+		self.assertEqual(self.run_carriers(have, istable, parents),
+			["Budget", "Journal Entry", "Quotation", "Sales Invoice", "Sales Taxes and Charges Template"])
+
+	def test_a_site_with_no_field_has_no_carriers_and_asks_nothing_more(self):
+		with patch.object(acc.frappe, "get_all", MagicMock(return_value=[]), create=True) as get_all:
+			self.assertEqual(acc._carriers(), [])
+		self.assertEqual(get_all.call_count, 1)
+
+	def test_the_list_is_cached_in_redis_and_in_the_request(self):
+		cache = MagicMock()
+		cache.get_value.return_value = None
+		local = types.SimpleNamespace()
+		with patch.object(acc.frappe, "cache", cache, create=True), patch.object(acc.frappe, "local", local, create=True), patch.object(acc, "_carriers", return_value=["A", "B"]) as compute:
+			self.assertEqual(acc.carriers(), ["A", "B"])
+			self.assertEqual(acc.carriers(), ["A", "B"])
+		self.assertEqual(compute.call_count, 1)
+		cache.set_value.assert_called_once_with(acc.CARRIERS_KEY, ["A", "B"])
+
+	def test_a_list_already_in_redis_is_used_without_looking_at_the_tables(self):
+		cache = MagicMock()
+		cache.get_value.return_value = ["X"]
+		with patch.object(acc.frappe, "cache", cache, create=True), patch.object(acc.frappe, "local", types.SimpleNamespace(), create=True), \
+				patch.object(acc, "_carriers", side_effect=AssertionError("cached")):
+			self.assertEqual(acc.carriers(), ["X"])
+
+	def test_the_boot_names_the_carriers_and_a_site_without_the_master_names_none(self):
+		boot = {}
+		db = MagicMock()
+		db.table_exists.return_value = True
+		with patch.object(acc.frappe, "db", db, create=True), patch.object(acc, "carriers", return_value=["A", "B"]):
+			acc.boot_carriers(boot)
+		self.assertEqual(boot, {"sf_alt_cc_doctypes": ["A", "B"]})
+		db.table_exists.return_value = False
+		empty = {}
+		with patch.object(acc.frappe, "db", db, create=True), patch.object(acc, "carriers", side_effect=AssertionError("no master")):
+			acc.boot_carriers(empty)
+		self.assertEqual(empty, {})
 
 
 class TestWhatTheSystemShips(FrappeTestCase):
@@ -360,6 +474,7 @@ class TestWhatTheSystemShips(FrappeTestCase):
 		for hook in ("sync_cost_center", "drop_cost_center", "follow_rename", "ensure_dimension"):
 			self.assertIn("sf_trading.alternative_cost_center." + hook, text)
 		self.assertIn("/assets/sf_trading/js/alternative_cost_center.js", text)
+		self.assertIn("sf_trading.alternative_cost_center.boot_carriers", text[text.index("boot_session"):])
 
 	def test_the_wildcard_entry_of_doc_events_exists_once_and_holds_the_validation(self):
 		# a second "*" key in the same dict literal silently replaces the first: the validation was lost that way on sft-uat

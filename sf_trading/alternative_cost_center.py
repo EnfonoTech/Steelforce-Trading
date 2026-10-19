@@ -17,9 +17,13 @@ The mirror's company is held in `cc_company`, never `company`: ERPNext refuses a
 belongs to a different company than the voucher (`validate_company_in_accounting_dimension` checks every dimension
 whose doctype has a field called `company`), which is exactly what this dimension exists to allow.
 
-What is checked on a voucher. The alternative cost centre must belong to a company other than the voucher's
+What is checked, and where. The alternative cost centre must belong to a company other than the document's
 own, be enabled and not be a group: charging a cost centre of the same company is what the ordinary cost
-centre is for, and a group cannot be a place costs land.
+centre is for, and a group cannot be a place costs land. This is checked on EVERY document type that carries
+the field in its header or in a table (`carriers`: the vouchers, the orders and quotations that flow into them,
+the tax tables and their templates, the POS profile and the other defaults), not on a list kept by hand, so a
+document type ERPNext adds later is covered at the next migrate. The ledger tables themselves (GL Entry and the
+like) are filled by posting and are not checked again row by row.
 
 What it does to the books. Nothing: the voucher posts exactly as before. The dimension is an extra column on
 the ledger entry; only the MIS reports read it.
@@ -34,17 +38,9 @@ LABEL = "Alternative Cost Center"
 FIELD = "alternative_cost_center"
 COST_CENTER = "Cost Center"
 
-#: the vouchers that post profit and loss lines and so can carry the choice; its rows are checked with it
-VOUCHERS = (
-	"Journal Entry",
-	"Sales Invoice",
-	"Purchase Invoice",
-	"Payment Entry",
-	"Expense Claim",
-	"Stock Entry",
-	"Purchase Receipt",
-	"Delivery Note",
-)
+#: the ledgers: ERPNext writes the value into them when a voucher posts; they are not entered, so not checked
+LEDGERS = ("GL Entry", "Payment Ledger Entry", "Account Closing Balance")
+CARRIERS_KEY = "sf_alternative_cost_center_carriers"
 
 
 # ─── the mirror master ──────────────────────────────────────────────────────────────────────────
@@ -133,6 +129,8 @@ def ensure_dimension():
 	make_dimension_in_accounting_doctypes(doc=dimension)
 	frappe.flags.accounting_dimensions = None
 	frappe.flags.accounting_dimensions_details = None
+	frappe.cache.delete_value(CARRIERS_KEY)
+	frappe.local.sf_alternative_cost_center_carriers = None
 	if frappe.db.has_column("GL Entry", FIELD):
 		frappe.db.add_index("GL Entry", [FIELD])
 	# the mirror's first version called its company column "company"; the field is gone, the column is not
@@ -140,7 +138,56 @@ def ensure_dimension():
 		frappe.db.sql_ddl("alter table `tab" + DOCTYPE + "` drop column `company`")
 
 
-# ─── what a voucher may say ─────────────────────────────────────────────────────────────────────
+# ─── which document types carry it ─────────────────────────────────────────────────────────────
+
+
+def _parents_of(children) -> set:
+	"""The document types that hold one of these child doctypes in a table (standard and custom table fields)."""
+	if not children:
+		return set()
+	found = set()
+	for doctype, parent_field in (("DocField", "parent"), ("Custom Field", "dt")):
+		rows = frappe.get_all(
+			doctype,
+			filters={"fieldtype": ["in", ["Table", "Table MultiSelect"]], "options": ["in", sorted(children)]},
+			fields=[parent_field],
+			limit_page_length=0,
+		)
+		found |= {r.get(parent_field) for r in rows}
+	return found
+
+
+def _carriers() -> list:
+	"""Every entered document type that has the field in its header or in a row of a table, ledgers left out."""
+	have = set(frappe.get_all("Custom Field", filters={"fieldname": FIELD}, pluck="dt", limit_page_length=0))
+	if not have:
+		return []
+	info = {r.name: cint(r.istable) for r in frappe.get_all("DocType", filters={"name": ["in", sorted(have)]}, fields=["name", "istable"], limit_page_length=0)}
+	children = {dt for dt in have if info.get(dt)}
+	headers = {dt for dt in have if dt in info and not info[dt]}
+	return sorted((headers | _parents_of(children)) - set(LEDGERS))
+
+
+def carriers() -> list:
+	"""The document types the field is checked on and offered on, cached until the next clear-cache."""
+	known = getattr(frappe.local, "sf_alternative_cost_center_carriers", None)
+	if known is not None:
+		return known
+	value = frappe.cache.get_value(CARRIERS_KEY)
+	if value is None:
+		value = _carriers()
+		frappe.cache.set_value(CARRIERS_KEY, value)
+	frappe.local.sf_alternative_cost_center_carriers = value
+	return value
+
+
+def boot_carriers(bootinfo):
+	"""boot_session: tell the desk which forms carry the field, so its picker is filtered on every one of them."""
+	if frappe.db.table_exists(DOCTYPE):
+		bootinfo["sf_alt_cc_doctypes"] = carriers()
+
+
+# ─── what a document may say ────────────────────────────────────────────────────────────────────
 
 
 def places(doc) -> list:
@@ -159,8 +206,9 @@ def places(doc) -> list:
 
 
 def validate_voucher(doc, method=None):
-	"""validate (every document, cheaply): an alternative cost centre is an enabled leaf of ANOTHER company."""
-	if doc.doctype not in VOUCHERS or not doc.get("company"):
+	"""validate (every document, cheaply): an alternative cost centre is an enabled leaf of ANOTHER company.
+	A document type that does not carry the field costs one lookup in a cached list and nothing else."""
+	if doc.doctype not in carriers() or not doc.get("company"):
 		return
 	named = places(doc)
 	if not named:
