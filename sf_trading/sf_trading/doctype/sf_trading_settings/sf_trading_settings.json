@@ -33,6 +33,8 @@
   "landed_cost_column_break",
   "landed_cost_require_on_purchase",
   "landed_cost_require_with_import",
+  "small_import_section",
+  "small_import_limits",
   "master_rules_section",
   "master_rules_from",
   "names_and_numbers_section",
@@ -237,6 +239,18 @@
    "description": "A Purchase Invoice that updates stock and is in a foreign currency, or carries a Bayan number, cannot be sent for approval without a draft Landed Cost Voucher drawn up against it. The voucher is submitted by the invoice's approval. An import with no landed cost ticks Import Without Landed Cost and says why."
   },
   {
+   "fieldname": "small_import_section",
+   "fieldtype": "Section Break",
+   "label": "Small Imports",
+   "description": "A small import is let through without a Bayan document: an import Purchase Invoice whose total, in the company's currency, is below the amount set for its company needs no Landed Cost Voucher. A company with no row, or a row of 0, has no such allowance."
+  },
+  {
+   "fieldname": "small_import_limits",
+   "fieldtype": "Table",
+   "label": "Imports Below This Amount Need No Voucher or Bayan, by Company",
+   "options": "SF Small Import Limit"
+  },
+  {
    "fieldname": "master_rules_section",
    "fieldtype": "Section Break",
    "label": "Customer and Supplier Masters",
@@ -344,7 +358,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-15 03:30:00.000000",
+ "modified": "2026-10-19 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",

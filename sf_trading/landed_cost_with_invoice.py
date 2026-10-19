@@ -11,6 +11,10 @@ invoice is still a draft, goes for approval with it, and is submitted by the sam
   go for approval (SF Trading Settings > Landed Costs switches that on and off). A bill with no landed
   cost ticks "Import Without Landed Cost" and says why. Any other stock invoice may carry a voucher too;
   it is simply not required.
+* **Small imports.** A small import needs no voucher and no Bayan document: an import whose total
+  (`base_grand_total`, company currency) is below the amount set for its company on SF Trading Settings >
+  Small Imports. A company with no row, or a row of 0, has no allowance. A voucher drawn up for a small
+  import anyway is still checked and submitted with it; it is just not demanded.
 * **Core says no, so one rule is relaxed.** ERPNext refuses a voucher against a document that is not
   yet submitted. `overrides/landed_cost_voucher_class.py` relaxes exactly that, for a voucher that is
   itself a draft, names one draft stock invoice and nothing else; every other case goes to core.
@@ -47,6 +51,8 @@ VOUCHER = "Landed Cost Voucher"
 VOUCHER_RECEIPT = "Landed Cost Purchase Receipt"
 SETTINGS = "SF Trading Settings"
 SWITCH = "landed_cost_require_with_import"
+LIMIT_TABLE = "SF Small Import Limit"
+LIMIT_FIELD = "small_import_limits"
 ESCAPE_FIELD = "custom_import_without_lcv"
 REASON_FIELD = "custom_import_without_lcv_reason"
 #: workflow states in which the invoice is still its author's to change
@@ -113,8 +119,30 @@ def is_import(doc) -> bool:
 	return foreign or bool(cstr(doc.get("custom_bayan_value")).strip())
 
 
+def small_import_limit(company) -> float:
+	"""What an import may total, in the company's currency, and still go without a voucher. 0 means the company
+	has no allowance (no row, a row of 0, or a site that has not migrated the table yet)."""
+	if not company or not frappe.db.table_exists(LIMIT_TABLE):
+		return 0.0
+	rows = frappe.get_all(
+		LIMIT_TABLE,
+		filters={"parent": SETTINGS, "parenttype": SETTINGS, "parentfield": LIMIT_FIELD, "company": company},
+		fields=["limit_amount"],
+		limit=1,
+	)
+	return flt(rows[0].limit_amount) if rows else 0.0
+
+
+def is_small_import(doc) -> bool:
+	"""An import whose total is below its company's allowance for small imports."""
+	if not is_import(doc):
+		return False
+	limit = small_import_limit(doc.get("company"))
+	return limit > 0 and flt(doc.get("base_grand_total")) < limit
+
+
 def must_have_voucher(doc) -> bool:
-	return require_with_import() and is_import(doc) and not cint(doc.get(ESCAPE_FIELD))
+	return require_with_import() and is_import(doc) and not cint(doc.get(ESCAPE_FIELD)) and not is_small_import(doc)
 
 
 def has_asset_rows(doc) -> bool:
@@ -603,6 +631,8 @@ def invoice_status(invoice: str) -> dict:
 	return {
 		"required": must_have_voucher(doc),
 		"is_import": is_import(doc),
+		"small_import": is_small_import(doc),
+		"small_limit": small_import_limit(doc.get("company")),
 		"locked": is_locked(state_of(doc)),
 		"vouchers": [{"name": v.name, "docstatus": v.docstatus, "total": flt(v.total_taxes_and_charges)} for v in vouchers],
 		"stale": stale,

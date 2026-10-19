@@ -33,10 +33,19 @@ function sf_lcv_headline(frm, status) {
 				"orange"
 			);
 		}
+		if (status.small_import && !live.length) {
+			frm.dashboard.add_comment(
+				__("A small import (below {0}): no Landed Cost Voucher or Bayan document is needed.", [
+					format_currency(status.small_limit, erpnext.get_currency(frm.doc.company)),
+				]),
+				"blue",
+				true
+			);
+		}
 		if (status.locked && live.length) {
 			frm.dashboard.add_comment(__("Out for approval: the voucher's charges are locked. Reject the invoice to change them."), "blue", true);
 		}
-	} else if (frm.doc.docstatus === 1 && status.is_import && !live.length) {
+	} else if (frm.doc.docstatus === 1 && status.is_import && !status.small_import && !live.length) {
 		frm.dashboard.set_headline_alert(
 			__("This import purchase has no Landed Cost Voucher: its stock is valued without freight and customs."),
 			"red"

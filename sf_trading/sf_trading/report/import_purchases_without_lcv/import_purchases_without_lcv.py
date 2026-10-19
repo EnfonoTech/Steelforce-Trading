@@ -11,7 +11,8 @@ this lists the ones the rule never saw or could not hold:
                                  submitted with it
   Voucher Out Of Step            a draft invoice whose draft voucher no longer matches it
 
-An import marked "Import Without Landed Cost" is left out: that was a decision, with a reason.
+An import marked "Import Without Landed Cost" is left out: that was a decision, with a reason. So is a small
+import, below the amount SF Trading Settings > Small Imports sets for its company: it needs no voucher.
 """
 
 import frappe
@@ -89,11 +90,15 @@ def get_data(filters):
 		lcv.INVOICE,
 		filters=conditions,
 		fields=["name", "company", "posting_date", "supplier", "currency", "docstatus", "workflow_state",
-			"custom_bayan_value", lcv.ESCAPE_FIELD],
+			"custom_bayan_value", "base_grand_total", lcv.ESCAPE_FIELD],
 		order_by="posting_date desc, name desc",
 	)
-	imports = [i for i in invoices if lcv.is_import(frappe._dict(i, doctype=lcv.INVOICE, update_stock=1, is_return=0))
-		and not cint(i.get(lcv.ESCAPE_FIELD))]
+	imports = []
+	for i in invoices:
+		as_doc = frappe._dict(i, doctype=lcv.INVOICE, update_stock=1, is_return=0)
+		# an import marked as carrying no landed cost, or one below its company's small-import amount, is no gap
+		if lcv.is_import(as_doc) and not cint(i.get(lcv.ESCAPE_FIELD)) and not lcv.is_small_import(as_doc):
+			imports.append(i)
 	vouchers = _vouchers_by_invoice([i.name for i in imports])
 	rows = []
 	for inv in imports:

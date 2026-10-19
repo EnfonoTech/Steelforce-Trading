@@ -24,6 +24,18 @@ class SFTradingSettings(Document):
 			if flt(self.si_return_approval_threshold) < 0:
 				frappe.throw(_("Approval Threshold cannot be negative."))
 
+		self.validate_small_import_limits()
+
+	def validate_small_import_limits(self):
+		"""One row per company, none negative: the allowance for small imports is read by company."""
+		seen = set()
+		for row in self.get("small_import_limits") or []:
+			if row.company in seen:
+				frappe.throw(_("Row %s: %s is already listed under Small Imports.") % (row.idx, row.company))
+			seen.add(row.company)
+			if flt(row.limit_amount) < 0:
+				frappe.throw(_("Row %s: the amount for small imports cannot be negative.") % row.idx)
+
 	def on_update(self):
 		# the approval gate decides whether a Sales Invoice workflow governs a document, and the
 		# desk learns that at boot — so a change here has to invalidate both caches

@@ -69,7 +69,7 @@ class Seams:
 
 	def __init__(self, **overrides):
 		self.values = dict(require=True, currency="BHD", drafts=[], submitted=[], problems=[], one_document=True,
-			stock=True, info=None)
+			stock=True, info=None, limit=0.0)
 		self.values.update(overrides)
 		self.patches = []
 
@@ -79,6 +79,7 @@ class Seams:
 		table = {
 			"require_with_import": lambda: v["require"],
 			"company_currency": lambda company: v["currency"],
+			"small_import_limit": lambda company: v["limit"],
 			"vouchers_of": lambda name, docstatus=None: v["drafts"] if docstatus == 0 else (v["submitted"] if docstatus == 1 else v["drafts"] + v["submitted"]),
 			"preflight": lambda name, doc: v["problems"],
 			"names_one_document": lambda name: v["one_document"],
@@ -159,6 +160,100 @@ class TestWhatIsAnImport(FrappeTestCase):
 		with patch.object(lcv.frappe.db, "get_single_value", side_effect=AssertionError("get_single_value reads a missing Check as 0"), create=True):
 			with patch.object(lcv.frappe.db, "get_singles_dict", return_value={}, create=True):
 				self.assertTrue(lcv.require_with_import())
+
+
+class TestSmallImports(FrappeTestCase):
+	"""An import below its company's allowance needs no voucher (SF Trading Settings > Small Imports)."""
+
+	def sent(self, **values):
+		return invoice(workflow_state="Pending", _before=Doc(update_stock=1, workflow_state="Draft"), **values)
+
+	def test_an_import_below_the_limit_is_small_and_needs_no_voucher(self):
+		with Seams(limit=150.0):
+			doc = invoice(base_grand_total=149.999)
+			self.assertTrue(lcv.is_import(doc))
+			self.assertTrue(lcv.is_small_import(doc))
+			self.assertFalse(lcv.must_have_voucher(doc))
+
+	def test_an_import_at_or_above_the_limit_still_needs_one(self):
+		with Seams(limit=150.0):
+			for total in (150.0, 150.001, 9000.0):
+				doc = invoice(base_grand_total=total)
+				self.assertFalse(lcv.is_small_import(doc), total)
+				self.assertTrue(lcv.must_have_voucher(doc), total)
+
+	def test_no_limit_for_the_company_means_no_allowance(self):
+		# no row for the company, or a row of 0: nothing is small
+		with Seams(limit=0.0):
+			doc = invoice(base_grand_total=1.0)
+			self.assertFalse(lcv.is_small_import(doc))
+			self.assertTrue(lcv.must_have_voucher(doc))
+			# an odd negative total is still no allowance when the company has set none
+			self.assertFalse(lcv.is_small_import(invoice(base_grand_total=-1.0)))
+
+	def test_the_limit_is_read_for_the_invoices_own_company(self):
+		asked = []
+		with Seams():
+			with patch.object(lcv, "small_import_limit", side_effect=lambda company: asked.append(company) or 150.0):
+				lcv.is_small_import(invoice(company="Other Co", base_grand_total=10.0))
+		self.assertEqual(asked, ["Other Co"])
+
+	def test_a_local_purchase_is_never_a_small_import(self):
+		with Seams(limit=150.0, currency="BHD"):
+			self.assertFalse(lcv.is_small_import(invoice(currency="BHD", base_grand_total=10.0)))
+
+	def test_a_small_import_with_a_bayan_number_is_still_small(self):
+		with Seams(limit=150.0, currency="BHD"):
+			doc = invoice(currency="BHD", custom_bayan_value="202623014102935", base_grand_total=40.0)
+			self.assertTrue(lcv.is_import(doc))
+			self.assertTrue(lcv.is_small_import(doc))
+			self.assertFalse(lcv.must_have_voucher(doc))
+
+	def test_a_small_import_goes_for_approval_with_no_voucher(self):
+		with Seams(drafts=[], limit=150.0):
+			lcv.validate_invoice(self.sent(base_grand_total=80.0))
+
+	def test_a_big_import_with_no_voucher_is_still_stopped(self):
+		with Seams(drafts=[], limit=150.0):
+			refused(self, lcv.validate_invoice, self.sent(base_grand_total=500.0), text="needs a Landed Cost Voucher")
+
+	def test_a_small_import_is_submitted_without_one(self):
+		with Seams(drafts=[], limit=150.0):
+			lcv.require_voucher_at_submit(invoice(base_grand_total=80.0))
+		with Seams(drafts=[], limit=150.0):
+			refused(self, lcv.require_voucher_at_submit, invoice(base_grand_total=500.0), text="needs a Landed Cost Voucher")
+
+	def test_a_voucher_on_a_small_import_is_still_checked(self):
+		with Seams(drafts=[draft()], problems=["it carries no charges"], limit=150.0):
+			refused(self, lcv.validate_invoice, self.sent(base_grand_total=80.0), text="no charges")
+
+	def test_the_limit_is_read_per_company_from_the_settings_table(self):
+		rows = [frappe._dict(limit_amount=150.0)]
+		get_all = MagicMock(return_value=rows)
+		with patch.object(lcv.frappe.db, "table_exists", return_value=True, create=True), \
+				patch.object(lcv.frappe, "get_all", get_all, create=True):
+			self.assertEqual(lcv.small_import_limit("Steel Force Trading WLL"), 150.0)
+		filters = get_all.call_args.kwargs["filters"]
+		self.assertEqual(filters["company"], "Steel Force Trading WLL")
+		self.assertEqual((filters["parent"], filters["parentfield"]), (lcv.SETTINGS, lcv.LIMIT_FIELD))
+		with patch.object(lcv.frappe.db, "table_exists", return_value=True, create=True), \
+				patch.object(lcv.frappe, "get_all", MagicMock(return_value=[]), create=True):
+			self.assertEqual(lcv.small_import_limit("No Row Co"), 0.0)
+
+	def test_a_site_that_has_not_migrated_the_table_has_no_allowance(self):
+		with patch.object(lcv.frappe.db, "table_exists", return_value=False, create=True), \
+				patch.object(lcv.frappe, "get_all", MagicMock(side_effect=AssertionError("table is not there")), create=True):
+			self.assertEqual(lcv.small_import_limit("Steel Force Trading WLL"), 0.0)
+			self.assertEqual(lcv.small_import_limit(None), 0.0)
+
+	def test_the_status_for_the_form_says_so(self):
+		with Seams(limit=150.0), patch.object(lcv.frappe, "has_permission", MagicMock(return_value=True), create=True):
+			lcv.frappe.get_doc.side_effect = lambda *a, **k: invoice(base_grand_total=80.0)
+			status = lcv.invoice_status("PINV-1")
+		self.assertTrue(status["is_import"])
+		self.assertTrue(status["small_import"])
+		self.assertFalse(status["required"])
+		self.assertEqual(status["small_limit"], 150.0)
 
 
 class TestDoesTheVoucherMatch(FrappeTestCase):
@@ -697,6 +792,32 @@ class TestWhatTheSystemShips(FrappeTestCase):
 
 	def test_the_switch_name_in_code_and_in_settings_agree(self):
 		self.assertEqual(lcv.SWITCH, "landed_cost_require_with_import")
+
+	def test_the_small_import_table_is_on_the_settings_and_its_child_holds_company_and_amount(self):
+		settings = json.loads(read("sf_trading", "doctype", "sf_trading_settings", "sf_trading_settings.json"))
+		fields = {f["fieldname"]: f for f in settings["fields"]}
+		table = fields[lcv.LIMIT_FIELD]
+		self.assertEqual((table["fieldtype"], table["options"]), ("Table", lcv.LIMIT_TABLE))
+		self.assertIn(lcv.LIMIT_FIELD, settings["field_order"])
+		self.assertEqual(settings["field_order"].index("small_import_section") + 1, settings["field_order"].index(lcv.LIMIT_FIELD))
+		child = json.loads(read("sf_trading", "doctype", "sf_small_import_limit", "sf_small_import_limit.json"))
+		self.assertEqual(child["istable"], 1)
+		self.assertEqual(child["name"], lcv.LIMIT_TABLE)
+		cols = {f["fieldname"]: f for f in child["fields"]}
+		self.assertEqual((cols["company"]["fieldtype"], cols["company"]["options"], cols["company"]["reqd"]), ("Link", "Company", 1))
+		self.assertEqual((cols["limit_amount"]["fieldtype"], cols["limit_amount"]["options"]), ("Currency", "currency"))
+		self.assertEqual(cols["currency"]["fetch_from"], "company.default_currency")
+
+	def test_the_form_and_the_report_honour_small_imports(self):
+		self.assertIn("status.small_import", read("public", "js", "purchase_invoice_lcv.js"))
+		report = read("sf_trading", "report", "import_purchases_without_lcv", "import_purchases_without_lcv.py")
+		self.assertIn("is_small_import", report)
+		self.assertIn('"base_grand_total"', report)
+
+	def test_the_settings_refuse_a_company_twice_and_a_negative_amount(self):
+		tree = ast.parse(read("sf_trading", "doctype", "sf_trading_settings", "sf_trading_settings.py"))
+		methods = {n.name for c in tree.body if isinstance(c, ast.ClassDef) for n in c.body if isinstance(n, ast.FunctionDef)}
+		self.assertIn("validate_small_import_limits", methods)
 
 	def test_the_report_exists(self):
 		for ext in ("py", "js", "json"):
