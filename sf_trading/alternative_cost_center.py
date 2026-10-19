@@ -13,6 +13,10 @@ different values are never merged into one ledger line). ERPNext does not let a 
 dimension, so every leaf cost centre of every company has a mirror master, `Alternative Cost Center`, kept in
 step here (insert, change, disable, rename, delete), and the dimension points at that.
 
+The mirror's company is held in `cc_company`, never `company`: ERPNext refuses a voucher whose dimension value
+belongs to a different company than the voucher (`validate_company_in_accounting_dimension` checks every dimension
+whose doctype has a field called `company`), which is exactly what this dimension exists to allow.
+
 What is checked on a voucher. The alternative cost centre must belong to a company other than the voucher's
 own, be enabled and not be a group: charging a cost centre of the same company is what the ordinary cost
 centre is for, and a group cannot be a place costs land.
@@ -51,7 +55,7 @@ def _wanted(cost_center) -> dict:
 	return {
 		"cost_center": cost_center.name,
 		"cost_center_name": cost_center.get("cost_center_name"),
-		"company": cost_center.get("company"),
+		"cc_company": cost_center.get("company"),
 		"disabled": 1 if cint(cost_center.get("is_group")) or cint(cost_center.get("disabled")) else 0,
 	}
 
@@ -95,7 +99,7 @@ def backfill() -> int:
 	"""Make the mirror of every cost centre that has none, and bring the others up to date. Returns how many it touched."""
 	if not frappe.db.table_exists(DOCTYPE):
 		return 0
-	have = {r.name: r for r in frappe.get_all(DOCTYPE, fields=["name", "cost_center_name", "company", "disabled"], limit_page_length=0)}
+	have = {r.name: r for r in frappe.get_all(DOCTYPE, fields=["name", "cost_center_name", "cc_company", "disabled"], limit_page_length=0)}
 	touched = 0
 	for cc in frappe.get_all(COST_CENTER, fields=["name", "cost_center_name", "company", "is_group", "disabled"], limit_page_length=0):
 		want = _wanted(cc)
@@ -103,7 +107,7 @@ def backfill() -> int:
 		if not row:
 			frappe.get_doc(dict(want, doctype=DOCTYPE)).insert(ignore_permissions=True)
 			touched += 1
-		elif (row.cost_center_name, row.company, cint(row.disabled)) != (want["cost_center_name"], want["company"], want["disabled"]):
+		elif (row.cost_center_name, row.cc_company, cint(row.disabled)) != (want["cost_center_name"], want["cc_company"], want["disabled"]):
 			frappe.db.set_value(DOCTYPE, cc.name, {k: v for k, v in want.items() if k != "cost_center"}, update_modified=False)
 			touched += 1
 	return touched
@@ -131,6 +135,9 @@ def ensure_dimension():
 	frappe.flags.accounting_dimensions_details = None
 	if frappe.db.has_column("GL Entry", FIELD):
 		frappe.db.add_index("GL Entry", [FIELD])
+	# the mirror's first version called its company column "company"; the field is gone, the column is not
+	if frappe.db.has_column(DOCTYPE, "company"):
+		frappe.db.sql_ddl("alter table `tab" + DOCTYPE + "` drop column `company`")
 
 
 # ─── what a voucher may say ─────────────────────────────────────────────────────────────────────
@@ -161,7 +168,7 @@ def validate_voucher(doc, method=None):
 	info = {
 		r.name: r
 		for r in frappe.get_all(
-			DOCTYPE, filters={"name": ["in", sorted({n for _l, n in named})]}, fields=["name", "company", "disabled"], limit_page_length=0
+			DOCTYPE, filters={"name": ["in", sorted({n for _l, n in named})]}, fields=["name", "cc_company", "disabled"], limit_page_length=0
 		)
 	}
 	for where, name in named:
@@ -169,7 +176,7 @@ def validate_voucher(doc, method=None):
 		row = info.get(name)
 		if not row:
 			frappe.throw(prefix + _("%s is not an Alternative Cost Center.") % name, title=_("Alternative Cost Center"))
-		if row.company == doc.company:
+		if row.cc_company == doc.company:
 			frappe.throw(
 				prefix + _("%s belongs to %s, the company of this voucher. An alternative cost centre is one of ANOTHER company: use the ordinary Cost Center for this one.") % (name, doc.company),
 				title=_("Alternative Cost Center"),

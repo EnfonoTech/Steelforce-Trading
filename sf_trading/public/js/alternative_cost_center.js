@@ -19,7 +19,7 @@ frappe.provide("sf_trading.alt_cost_center");
 	];
 
 	acc.query = (frm) => () => ({
-		filters: { company: ["!=", frm.doc.company || ""], disabled: 0 },
+		filters: { cc_company: ["!=", frm.doc.company || ""], disabled: 0 },
 	});
 
 	acc.setup = function (frm) {

@@ -9,7 +9,7 @@
  "field_order": [
   "cost_center",
   "cost_center_name",
-  "company",
+  "cc_company",
   "disabled"
  ],
  "fields": [
@@ -34,16 +34,17 @@
    "fetch_from": "cost_center.cost_center_name"
   },
   {
-   "fieldname": "company",
+   "fieldname": "cc_company",
    "fieldtype": "Link",
    "options": "Company",
-   "label": "Company",
+   "label": "Company of the Cost Center",
    "read_only": 1,
    "in_list_view": 1,
    "in_standard_filter": 1,
    "fetch_from": "cost_center.company",
    "ignore_user_permissions": 1,
-   "search_index": 1
+   "search_index": 1,
+   "description": "Not called Company on purpose: ERPNext would then refuse a voucher of another company naming this cost centre."
   },
   {
    "fieldname": "disabled",
@@ -56,7 +57,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-10-19 18:00:00.000000",
+ "modified": "2026-10-19 20:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "Alternative Cost Center",
@@ -150,7 +151,7 @@
    "role": "Auditor"
   }
  ],
- "search_fields": "company,cost_center_name",
+ "search_fields": "cc_company,cost_center_name",
  "show_title_field_in_link": 0,
  "sort_field": "modified",
  "sort_order": "DESC",

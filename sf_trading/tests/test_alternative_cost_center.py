@@ -75,7 +75,7 @@ class Seams:
 
 
 def mirror(name, company, disabled=0):
-	return {"name": name, "company": company, "disabled": disabled}
+	return {"name": name, "cc_company": company, "disabled": disabled}
 
 
 def voucher(doctype="Journal Entry", company=OWN, header=None, **tables):
@@ -155,7 +155,7 @@ class TestTheMirror(FrappeTestCase):
 		db, inserted, get_doc = self.seams()
 		with patch.object(acc.frappe, "db", db, create=True), patch.object(acc.frappe, "get_doc", side_effect=get_doc, create=True):
 			acc.sync_cost_center(cc("Main - SFTO", OTHER))
-		self.assertEqual(inserted, [{"doctype": "Alternative Cost Center", "cost_center": "Main - SFTO", "cost_center_name": "Main", "company": OTHER, "disabled": 0}])
+		self.assertEqual(inserted, [{"doctype": "Alternative Cost Center", "cost_center": "Main - SFTO", "cost_center_name": "Main", "cc_company": OTHER, "disabled": 0}])
 
 	def test_a_group_or_a_disabled_cost_centre_is_mirrored_as_disabled(self):
 		db, inserted, get_doc = self.seams()
@@ -215,7 +215,7 @@ class TestTheMirror(FrappeTestCase):
 	def test_the_backfill_makes_the_missing_and_brings_the_stale_up_to_date_and_counts_them(self):
 		inserted = []
 		costs = [cc("A - SFTO", OTHER), cc("B - SFTO", OTHER, is_group=1), cc("C - SFB", OWN)]
-		mirrors = [frappe._dict(name="A - SFTO", cost_center_name="A", company=OTHER, disabled=0), frappe._dict(name="B - SFTO", cost_center_name="B", company=OTHER, disabled=0)]
+		mirrors = [frappe._dict(name="A - SFTO", cost_center_name="A", cc_company=OTHER, disabled=0), frappe._dict(name="B - SFTO", cost_center_name="B", cc_company=OTHER, disabled=0)]
 		db = MagicMock()
 		db.table_exists.return_value = True
 
@@ -276,6 +276,34 @@ class TestTheDimension(FrappeTestCase):
 		self.assertEqual(get_doc.call_args.args[:2], ("Accounting Dimension", "Alternative Cost Center"))
 		self.assertEqual(made, [doc])
 
+	def test_the_first_versions_company_column_is_dropped_once_and_only_when_it_is_there(self):
+		_made, db, _doc, _b, _g = self.run_ensure(True)
+		db.has_column.side_effect = lambda doctype, column: column == "company"
+		_made, db2, _doc2, _b2, _g2 = self.run_ensure_with(db)
+		self.assertIn("drop column `company`", db2.sql_ddl.call_args.args[0])
+
+	def run_ensure_with(self, db):
+		made = []
+		module = types.ModuleType("erpnext.accounts.doctype.accounting_dimension.accounting_dimension")
+		module.make_dimension_in_accounting_doctypes = lambda doc: made.append(doc)
+		chain = ["erpnext", "erpnext.accounts", "erpnext.accounts.doctype", "erpnext.accounts.doctype.accounting_dimension"]
+		saved = {n: sys.modules.get(n) for n in chain + [module.__name__]}
+		for name in chain:
+			sys.modules.setdefault(name, types.ModuleType(name))
+		sys.modules[module.__name__] = module
+		db.table_exists.return_value = True
+		db.get_value.return_value = "Alternative Cost Center"
+		try:
+			with patch.object(acc.frappe, "db", db, create=True), patch.object(acc, "backfill", return_value=0), 					patch.object(acc.frappe, "get_doc", MagicMock(return_value=MagicMock()), create=True), patch.object(acc.frappe, "flags", types.SimpleNamespace(), create=True):
+				acc.ensure_dimension()
+		finally:
+			for name, old in saved.items():
+				if old is None:
+					sys.modules.pop(name, None)
+				else:
+					sys.modules[name] = old
+		return made, db, None, None, None
+
 	def test_a_site_without_the_mirror_table_does_nothing(self):
 		db = MagicMock()
 		db.table_exists.return_value = False
@@ -320,7 +348,7 @@ class TestTheForm(FrappeTestCase):
 	def test_the_field_is_offered_only_cost_centres_of_other_enabled_companies_on_the_header_and_the_rows(self):
 		out = self.run_js()
 		self.assertEqual(sorted(out["doctypes"]), sorted(acc.VOUCHERS))
-		expected = {"company": ["!=", "Steel Force Trading WLL"], "disabled": 0}
+		expected = {"cc_company": ["!=", "Steel Force Trading WLL"], "disabled": 0}
 		self.assertEqual(out["queries"], [{"field": "alternative_cost_center", "filters": expected},
 			{"field": "alternative_cost_center", "table": "accounts", "filters": expected}])
 
@@ -332,6 +360,15 @@ class TestWhatTheSystemShips(FrappeTestCase):
 		for hook in ("sync_cost_center", "drop_cost_center", "follow_rename", "ensure_dimension"):
 			self.assertIn("sf_trading.alternative_cost_center." + hook, text)
 		self.assertIn("/assets/sf_trading/js/alternative_cost_center.js", text)
+
+	def test_the_wildcard_entry_of_doc_events_exists_once_and_holds_the_validation(self):
+		# a second "*" key in the same dict literal silently replaces the first: the validation was lost that way on sft-uat
+		text = read("hooks.py")
+		self.assertEqual(text.count('	"*": {'), 1)
+		block = text[text.index('	"*": {'):]
+		block = block[: block.index("},")]
+		self.assertIn("sf_trading.alternative_cost_center.validate_voucher", block)
+		self.assertIn("sf_trading.supporting_documents.remind_on_submit", block)
 
 	def test_every_hook_named_exists(self):
 		import ast
@@ -346,7 +383,8 @@ class TestWhatTheSystemShips(FrappeTestCase):
 		self.assertEqual((doctype["name"], doctype["autoname"]), ("Alternative Cost Center", "field:cost_center"))
 		fields = {f["fieldname"]: f for f in doctype["fields"]}
 		self.assertEqual(fields["cost_center"]["unique"], 1)
-		self.assertEqual(fields["company"]["ignore_user_permissions"], 1)
+		self.assertEqual(fields["cc_company"]["ignore_user_permissions"], 1)
+		self.assertNotIn("company", fields, "ERPNext refuses a dimension value of another company when the dimension has a field called company")
 		self.assertEqual(fields["cost_center"]["ignore_user_permissions"], 1)
 		roles = {p["role"] for p in doctype["permissions"]}
 		self.assertTrue({"System Manager", "Accounts Manager", "Accounts User", "Purchase User", "Sales User"} <= roles)

@@ -472,10 +472,6 @@ _SDBNB_DN_HOOK = "sf_trading.sdbnb.set_delivery_note_expense_account"
 _SBND_DN_HOOK = "sf_trading.sbnd.set_delivery_note_expense_account"
 
 doc_events = {
-	# an alternative cost centre on a voucher is an enabled leaf of ANOTHER company -- see alternative_cost_center.py
-	"*": {
-		"validate": "sf_trading.alternative_cost_center.validate_voucher",
-	},
 	# every cost centre has a mirror master that the Alternative Cost Center dimension points at
 	"Cost Center": {
 		"after_insert": "sf_trading.alternative_cost_center.sync_cost_center",
@@ -861,6 +857,8 @@ doc_events = {
 	# on the Pending Supporting Documents report (rule check first, so other doctypes cost nothing)
 	"*": {
 		"on_submit": "sf_trading.supporting_documents.remind_on_submit",
+		# an alternative cost centre on a voucher is an enabled leaf of ANOTHER company -- see alternative_cost_center.py
+		"validate": "sf_trading.alternative_cost_center.validate_voucher",
 	},
 	"Supplier Quotation": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],

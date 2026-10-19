@@ -159,7 +159,7 @@ def alternatives() -> dict:
 	"""{alternative cost centre: (company, cost centre)} for every mirror."""
 	if not frappe.db.table_exists(ALT_DOCTYPE):
 		return {}
-	return {r.name: (r.company, r.cost_center) for r in frappe.get_all(ALT_DOCTYPE, fields=["name", "company", "cost_center"], limit_page_length=0)}
+	return {r.name: (r.cc_company, r.cost_center) for r in frappe.get_all(ALT_DOCTYPE, fields=["name", "cc_company", "cost_center"], limit_page_length=0)}
 
 
 def has_dimension() -> bool:
