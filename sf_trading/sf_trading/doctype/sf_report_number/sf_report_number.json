@@ -1,0 +1,51 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "autoname": "field:report",
+ "creation": "2026-10-19 12:30:00.000000",
+ "description": "The number each Report was given. Kept here so a report that is re-synced from its app, or comes back under the same name, keeps its number.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "report",
+  "report_no"
+ ],
+ "fields": [
+  {
+   "fieldname": "report",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Report",
+   "reqd": 1,
+   "unique": 1
+  },
+  {
+   "fieldname": "report_no",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Report No",
+   "read_only": 1,
+   "reqd": 1,
+   "unique": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-19 12:30:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "SF Report Number",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "read": 1,
+   "report": 1,
+   "role": "System Manager"
+  }
+ ],
+ "sort_field": "report_no",
+ "sort_order": "ASC",
+ "states": []
+}

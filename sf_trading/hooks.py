@@ -301,6 +301,8 @@ after_migrate = [
 	"sf_trading.landed_cost.ensure_custom_fields",
 	# "Import Without Landed Cost" and its reason, on the Purchase Invoice
 	"sf_trading.landed_cost_with_invoice.ensure_custom_fields",
+	# the Report No column on Report, and a number for every report that has none
+	"sf_trading.report_numbering.ensure_custom_fields",
 	# the cancellation reason picked from a list, on Sales Order and Purchase Order
 	"sf_trading.order_cancellation.ensure_custom_fields",
 	"sf_trading.order_cancellation.seed_reasons",
@@ -456,6 +458,12 @@ doc_events = {
 	# the account's name from it -- see sf_trading/account_numbering.py
 	"Account": {
 		"before_insert": "sf_trading.account_numbering.number_new_account",
+	},
+	# every Report carries a short number (RPT-0042) shown in the Report list, and keeps it through a
+	# re-sync from its app or a rename -- see sf_trading/report_numbering.py
+	"Report": {
+		"before_insert": "sf_trading.report_numbering.number_new_report",
+		"after_rename": "sf_trading.report_numbering.follow_rename",
 	},
 	# a change to Disable Purchase Receipt (GRN) or its roster reaches the desk without a re-login
 	"SF Trading Settings": {
