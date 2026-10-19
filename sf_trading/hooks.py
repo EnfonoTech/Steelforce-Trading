@@ -190,6 +190,8 @@ doctype_js = {
 	"Payment Entry":      [
 		"public/js/payment_entry_cancel.js",
 		"public/js/payment_entry_pdc.js",
+		# Get Outstanding Journal Entries, beside the Invoices and Orders buttons -- see payment_entry_journal.py
+		"public/js/payment_entry_journal.js",
 		# a popup when the supplier being paid would be refused -- see party_alert.py
 		"public/js/party_gate_alert.js",
 	],
@@ -307,6 +309,8 @@ after_migrate = [
 	"sf_trading.landed_cost_with_invoice.ensure_custom_fields",
 	# the Report No column on Report, and a number for every report that has none
 	"sf_trading.report_numbering.ensure_custom_fields",
+	# the Get Outstanding Journal Entries button on the Payment Entry
+	"sf_trading.payment_entry_journal.ensure_custom_fields",
 	# the cancellation reason picked from a list, on Sales Order and Purchase Order
 	"sf_trading.order_cancellation.ensure_custom_fields",
 	"sf_trading.order_cancellation.seed_reasons",

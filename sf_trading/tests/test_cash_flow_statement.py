@@ -579,7 +579,7 @@ class TestTheDrillDown(FrappeTestCase):
 		if not node:
 			self.skipTest("node is not installed")
 		done = subprocess.run([node, "-e", JS_RUNNER, "x", os.path.join(ROOT, "public", "js", "cash_flow_statement.js"), json.dumps(JS_DATA)],
-			capture_output=True, text=True, timeout=60)
+			capture_output=True, text=True, encoding="utf-8", timeout=60)
 		self.assertEqual(done.returncode, 0, done.stderr)
 		return json.loads(done.stdout)
 
