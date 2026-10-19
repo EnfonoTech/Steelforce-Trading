@@ -64,6 +64,8 @@ app_include_js = [
 	f"/assets/sf_trading/js/duplicate_check_popup.js?{_v}",
 	# the search bar finds a report by its number (RPT-0042) as well as its name -- see report_numbering.py
 	f"/assets/sf_trading/js/report_number_search.js?{_v}",
+	# formatting and drill-down into the General Ledger of the Cash Flow Statement -- see cash_flow_statement.py
+	f"/assets/sf_trading/js/cash_flow_statement.js?{_v}",
 ]
 
 # doctype_js: loaded only when that specific doctype form opens

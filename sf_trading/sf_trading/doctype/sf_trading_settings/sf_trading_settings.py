@@ -25,6 +25,7 @@ class SFTradingSettings(Document):
 				frappe.throw(_("Approval Threshold cannot be negative."))
 
 		self.validate_small_import_limits()
+		self.validate_cash_flow_account_map()
 
 	def validate_small_import_limits(self):
 		"""One row per company, none negative: the allowance for small imports is read by company."""
@@ -35,6 +36,14 @@ class SFTradingSettings(Document):
 			seen.add(row.company)
 			if flt(row.limit_amount) < 0:
 				frappe.throw(_("Row %s: the amount for small imports cannot be negative.") % row.idx)
+
+	def validate_cash_flow_account_map(self):
+		"""An account has one line on the Cash Flow Statement: a row twice would make the report pick one."""
+		rows = {}
+		for row in self.get("cash_flow_account_map") or []:
+			if row.account in rows:
+				frappe.throw(_("Row %s: %s is already placed on a Cash Flow line in row %s.") % (row.idx, row.account, rows[row.account]))
+			rows[row.account] = row.idx
 
 	def on_update(self):
 		# the approval gate decides whether a Sales Invoice workflow governs a document, and the

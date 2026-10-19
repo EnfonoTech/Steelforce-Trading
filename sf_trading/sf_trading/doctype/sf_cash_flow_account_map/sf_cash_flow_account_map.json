@@ -1,0 +1,44 @@
+{
+ "actions": [],
+ "creation": "2026-10-19 14:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "account",
+  "line"
+ ],
+ "fields": [
+  {
+   "fieldname": "account",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Account",
+   "options": "Account",
+   "reqd": 1,
+   "columns": 5,
+   "description": "A ledger account, or a group: the line applies to every account under it unless one of them has a row of its own."
+  },
+  {
+   "fieldname": "line",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Cash Flow Line",
+   "options": "Cash and cash equivalents\nSales revenue\nOther operating income\nCost of goods sold\nLanded costs capitalised into stock\nStock adjustments and write-downs\nOperating expenses\nDepreciation expense\nAmortisation expense\nShare-based compensation expense\nInterest expense\nIncome tax expense\nGain / loss on disposal of assets\nAccounts receivable\nDeferred revenue and customer advances\nInventory\nAccounts payable\nPrepaid expenses and other current assets\nAccrued and other liabilities\nAccrued interest\nTaxes payable / receivable (VAT and others)\nProvisions\nDeferred taxes\nAccumulated depreciation\nAccumulated amortisation\nShare-based compensation reserve\nProperty, plant and equipment\nInvestments\nLoans and borrowings\nOwners' equity (capital, drawings, dividends)",
+   "reqd": 1,
+   "columns": 5
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-19 14:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "SF Cash Flow Account Map",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

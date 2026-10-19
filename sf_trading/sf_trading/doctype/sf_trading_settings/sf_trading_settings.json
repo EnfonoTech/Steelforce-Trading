@@ -35,6 +35,8 @@
   "landed_cost_require_with_import",
   "small_import_section",
   "small_import_limits",
+  "cash_flow_statement_section",
+  "cash_flow_account_map",
   "master_rules_section",
   "master_rules_from",
   "names_and_numbers_section",
@@ -251,6 +253,18 @@
    "options": "SF Small Import Limit"
   },
   {
+   "fieldname": "cash_flow_statement_section",
+   "fieldtype": "Section Break",
+   "label": "Cash Flow Statement",
+   "description": "The Cash Flow Statement report places every ledger account on a line by its account type and name. A row here overrides that for one account, or for a whole group of accounts: say that a loan sits in Other Liabilities, that a bank account is not cash, or where a particular expense belongs."
+  },
+  {
+   "fieldname": "cash_flow_account_map",
+   "fieldtype": "Table",
+   "label": "Cash Flow Line of an Account",
+   "options": "SF Cash Flow Account Map"
+  },
+  {
    "fieldname": "master_rules_section",
    "fieldtype": "Section Break",
    "label": "Customer and Supplier Masters",
@@ -358,7 +372,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-19 12:00:00.000000",
+ "modified": "2026-10-19 14:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",
