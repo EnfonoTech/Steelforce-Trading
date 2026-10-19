@@ -31,8 +31,9 @@ def read(*parts):
 class Register:
 	"""An in-memory stand-in for the register and the series, behind the module's own seams."""
 
-	def __init__(self, held=None, ready=True, series_start=0):
+	def __init__(self, held=None, ready=True, series_start=0, reports=None):
 		self.held = dict(held or {})  # report name -> number
+		self.reports = dict(reports or {})  # number -> the report that holds it, in the Report table
 		self.ready = ready
 		self.series = series_start
 		self.inserted = []
@@ -42,6 +43,9 @@ class Register:
 		self.patches = []
 
 	def get_value(self, doctype, name, field=None, *a, **k):
+		if doctype == rn.REPORT:
+			# who holds a number right now: the reports in `reports`, else nobody
+			return self.reports.get(name[rn.FIELD]) if isinstance(name, dict) else None
 		assert doctype == rn.REGISTER
 		return self.held.get(name)
 
@@ -86,6 +90,7 @@ class Register:
 		db.table_exists.side_effect = lambda dt: self.ready
 		db.has_column.side_effect = lambda dt, col: self.ready
 		db.get_value.side_effect = self.get_value
+		db.set_value.side_effect = lambda doctype, name, field, value, **k: self.held.__setitem__(name, value)
 		db.exists.side_effect = self.exists
 		for target, attr, value in [
 			(rn.frappe, "db", db),
@@ -117,8 +122,8 @@ class Doc(frappe._dict):
 		self[key] = value
 
 
-def report(name="Item Prices", **values):
-	base = dict(doctype="Report", report_name=name, name=None)
+def report(report_name="Item Prices", **values):
+	base = dict(doctype="Report", report_name=report_name, name=None)
 	base.update(values)
 	return Doc(base)
 
@@ -154,6 +159,33 @@ class TestNumberingANewReport(FrappeTestCase):
 			doc = report("New")
 			rn.number_new_report(doc)
 		self.assertEqual(doc[rn.FIELD], "RPT-0003")
+
+	def test_an_import_that_keeps_the_files_name_numbers_the_name_it_will_have(self):
+		# fixtures/dcr_report.json: name "DCR Detailed", report_name "DCR Report". Numbering the report_name gave it
+		# the number of the other report and the unique key refused the insert, so migrate stopped.
+		with Register(held={"DCR Detailed": "RPT-0319", "DCR Report": "RPT-0320"}) as reg:
+			doc = report("DCR Report", name="DCR Detailed")
+			rn.number_new_report(doc)
+		self.assertEqual(doc[rn.FIELD], "RPT-0319")
+
+	def test_a_new_report_is_numbered_by_its_report_name_before_it_has_a_name(self):
+		with Register(held={"Alpha": "RPT-0007"}) as reg:
+			doc = report("Alpha", name=None)
+			rn.number_new_report(doc)
+		self.assertEqual(doc[rn.FIELD], "RPT-0007")
+
+	def test_a_registered_number_another_report_holds_is_replaced_not_handed_out_twice(self):
+		with Register(held={"Alpha": "RPT-0320", "Beta": "RPT-0320x"}, series_start=400, reports={"RPT-0320": "Beta"}) as reg:
+			doc = report("Alpha")
+			rn.number_new_report(doc)
+		self.assertEqual(doc[rn.FIELD], "RPT-0401")
+		self.assertEqual(reg.held["Alpha"], "RPT-0401", "the register follows")
+
+	def test_a_registered_number_held_by_the_report_itself_is_its_own(self):
+		with Register(held={"Alpha": "RPT-0320"}, reports={"RPT-0320": "Alpha"}, series_start=400):
+			doc = report("Alpha")
+			rn.number_new_report(doc)
+		self.assertEqual(doc[rn.FIELD], "RPT-0320")
 
 	def test_a_report_that_already_has_a_number_keeps_it(self):
 		with Register() as reg:

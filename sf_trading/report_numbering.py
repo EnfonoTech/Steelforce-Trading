@@ -76,10 +76,17 @@ def _next_number() -> str:
 
 
 def number_for(report_name: str) -> str:
-	"""The number of a report, from the register; handed out and registered on first sight."""
+	"""The number of a report, from the register; handed out and registered on first sight. A registered number
+	that another report holds right now (a register restored from a backup, say) is replaced by a fresh one,
+	never handed out twice."""
 	have = frappe.db.get_value(REGISTER, report_name, "report_no")
 	if have:
-		return have
+		holder = frappe.db.get_value(REPORT, {FIELD: have}, "name")
+		if not holder or holder == report_name:
+			return have
+		number = _next_number()
+		frappe.db.set_value(REGISTER, report_name, "report_no", number)
+		return number
 	number = _next_number()
 	frappe.get_doc({"doctype": REGISTER, "report": report_name, "report_no": number}).insert(ignore_permissions=True)
 	return number
@@ -89,8 +96,10 @@ def number_new_report(doc, method=None):
 	"""Report.before_insert: a report made with no number gets its own, or its old one back."""
 	if doc.doctype != REPORT or cstr(doc.get(FIELD)).strip() or not _ready():
 		return
-	# before_insert runs ahead of naming; a Report is named after its report_name
-	name = cstr(doc.get("report_name") or doc.get("name")).strip()
+	# before_insert runs ahead of naming. A Report is named after its report_name, except in an import, which
+	# keeps the name the file gives (fixtures/dcr_report.json names "DCR Detailed" a report_name "DCR Report"):
+	# the number belongs to the name the report will end up with.
+	name = cstr(doc.get("name") or doc.get("report_name")).strip()
 	if not name:
 		return
 	try:
