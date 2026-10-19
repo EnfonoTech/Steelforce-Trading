@@ -3,7 +3,8 @@
 
 A Report is known by its name alone, and names are long, translated, renamed and repeated across the
 apps on a site (Steel Force carries more than three hundred). `custom_report_no` gives each one a short
-number that is shown as a column in the Report list, can be filtered on, and never changes.
+number that is shown as a column in the Report list, can be filtered on, found in the search bar
+(`boot_numbers` puts it in the boot; public/js/report_number_search.js matches what is typed), and never changes.
 
 * **Who is numbered.** Every Report on the site, standard or custom, enabled or not. A new one is numbered
   on `Report.before_insert` with the next number; `after_migrate` numbers any that have none yet (the
@@ -114,6 +115,19 @@ def follow_rename(doc, method=None, old=None, new=None, merge=False):
 			rename_doc(REGISTER, old, new, force=True, ignore_permissions=True, show_alert=False)
 	except Exception:
 		frappe.log_error(title=_("Report number could not follow a rename"), message=frappe.get_traceback())
+
+
+def boot_numbers(bootinfo):
+	"""boot_session: each report the user may open carries its number, so the search bar finds it by "RPT-0042"
+	(public/js/report_number_search.js). The boot is cached per user, so a report numbered later shows up
+	with the next clear-cache, as a new report's name does."""
+	reports = (bootinfo.get("user") or {}).get("all_reports") or {}
+	if not reports or not _ready():
+		return
+	numbers = dict(frappe.get_all(REPORT, filters={FIELD: ["is", "set"]}, fields=["name", FIELD], as_list=True))
+	for name, info in reports.items():
+		if name in numbers and isinstance(info, dict):
+			info["report_no"] = numbers[name]
 
 
 def number_existing_reports() -> int:

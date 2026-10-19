@@ -9,6 +9,8 @@ The database is patched at the module's own seams, so nothing is created or read
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import types
 from unittest.mock import MagicMock, patch
@@ -293,3 +295,143 @@ class TestWhatTheSystemShips(FrappeTestCase):
 		fields = {f["fieldname"]: f for f in doctype["fields"]}
 		self.assertEqual(fields["report"]["unique"], 1)
 		self.assertEqual(fields["report_no"]["unique"], 1)
+
+
+class TestTheBootCarriesTheNumbers(FrappeTestCase):
+	def boot(self, **extra):
+		return frappe._dict(user=frappe._dict(all_reports={
+			"Stock Ledger": {"ref_doctype": "Stock Ledger Entry", "report_type": "Script Report"},
+			"Mine": {"ref_doctype": "Item", "report_type": "Report Builder"},
+			"Unnumbered": {"ref_doctype": "Item", "report_type": "Report Builder"},
+		}), **extra)
+
+	def test_each_report_the_user_may_open_carries_its_number(self):
+		boot = self.boot()
+		with Register() as reg, patch.object(rn.frappe, "get_all", MagicMock(return_value=[("Stock Ledger", "RPT-0007"), ("Mine", "RPT-0310"), ("Not Allowed", "RPT-0001")]), create=True) as get_all:
+			rn.boot_numbers(boot)
+		reports = boot.user.all_reports
+		self.assertEqual(reports["Stock Ledger"]["report_no"], "RPT-0007")
+		self.assertEqual(reports["Mine"]["report_no"], "RPT-0310")
+		self.assertNotIn("report_no", reports["Unnumbered"])
+		self.assertNotIn("Not Allowed", reports, "a report the user may not open is not added")
+		self.assertEqual(get_all.call_args.kwargs["as_list"], True)
+
+	def test_nothing_is_asked_before_the_column_exists_or_with_no_reports(self):
+		boot = self.boot()
+		with Register(ready=False), patch.object(rn.frappe, "get_all", MagicMock(side_effect=AssertionError("no column yet")), create=True):
+			rn.boot_numbers(boot)
+		with Register(), patch.object(rn.frappe, "get_all", MagicMock(side_effect=AssertionError("nothing to number")), create=True):
+			rn.boot_numbers(frappe._dict(user=frappe._dict(all_reports={})))
+			rn.boot_numbers(frappe._dict())
+
+	def test_the_hook_and_the_script_are_registered(self):
+		text = read("hooks.py")
+		self.assertIn("sf_trading.report_numbering.boot_numbers", text[text.index("boot_session"):])
+		self.assertIn("/assets/sf_trading/js/report_number_search.js", text)
+		self.assertTrue(os.path.exists(os.path.join(ROOT, "public", "js", "report_number_search.js")))
+
+
+JS_RUNNER = r"""
+const fs = require("fs"), vm = require("vm");
+const calls = [];
+const sandbox = {
+	__: (s, args) => (args || []).reduce((t, a, i) => t.replace("{" + i + "}", a), s),
+	$: () => ({ on() {} }),
+	document: {},
+	console,
+};
+sandbox.frappe = {
+	utils: { escape_html: (s) => String(s).replace(/</g, "&lt;") },
+	boot: { user: { all_reports: JSON.parse(process.argv[3]) } },
+	search: { utils: { get_reports: (kw) => (kw === "stock" || kw === "42" ? [{ type: "Report", index: 5, route: ["query-report", "Stock Ledger"], label: "by name" }] : []) } },
+};
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), sandbox);
+const f = sandbox.frappe;
+const out = { score: {}, results: {} };
+for (const kw of JSON.parse(process.argv[4])) {
+	out.score[kw] = f.sf_report_number_score(kw, "RPT-0042");
+	out.results[kw] = f.search.utils.get_reports(kw).map((d) => ({ label: d.label, route: d.route, index: d.index }));
+}
+out.installedOnce = (() => { const before = f.search.utils.get_reports; f.sf_install_report_number_search(); return before === f.search.utils.get_reports; })();
+console.log(JSON.stringify(out));
+"""
+
+
+class TestTheSearchBarFindsByNumber(FrappeTestCase):
+	REPORTS = {
+		"Stock Ledger": {"ref_doctype": "Stock Ledger Entry", "report_type": "Script Report", "report_no": "RPT-0042"},
+		"Item Sheet": {"ref_doctype": "Item", "report_type": "Report Builder", "report_no": "RPT-0043"},
+		"Other": {"ref_doctype": "Item", "report_type": "Script Report", "report_no": "RPT-0100"},
+		"Plain": {"ref_doctype": "Item", "report_type": "Script Report"},
+		"Four": {"ref_doctype": "Item", "report_type": "Script Report", "report_no": "RPT-0004"},
+	}
+	REPORTS.update({"Bulk %d" % n: {"ref_doctype": "Item", "report_type": "Script Report", "report_no": "RPT-%04d" % n} for n in range(201, 213)})
+	TYPED = ["RPT-0042", "rpt 42", "rpt42", "42", "0042", "4", "04", "rpt-004", "004", "rpt-0", "rpt", "stock", "20020000049",
+		"rpt-0042x", "", "Rpt-0100", "rpt-02", "020"]
+
+	def run_js(self):
+		node = shutil.which("node")
+		if not node:
+			self.skipTest("node is not installed")
+		done = subprocess.run([node, "-e", JS_RUNNER, "x", os.path.join(ROOT, "public", "js", "report_number_search.js"),
+			json.dumps(self.REPORTS), json.dumps(self.TYPED)], capture_output=True, text=True, timeout=60)
+		self.assertEqual(done.returncode, 0, done.stderr)
+		return json.loads(done.stdout)
+
+	def test_a_number_is_matched_however_it_is_typed(self):
+		out = self.run_js()
+		for typed in ("RPT-0042", "rpt 42", "rpt42", "42", "0042"):
+			self.assertEqual(out["score"][typed], 1e6, typed)
+
+	def test_what_is_not_a_number_matches_nothing(self):
+		out = self.run_js()
+		for typed in ("4", "rpt", "stock", "20020000049", "rpt-0042x", "", "rpt-0"):
+			self.assertEqual(out["score"][typed], 0, typed)
+
+	def test_a_prefix_lists_the_neighbours_only_when_rpt_is_typed(self):
+		out = self.run_js()
+		self.assertEqual(out["score"]["rpt-004"], 1e3)
+		routes = [r["route"] for r in out["results"]["rpt-004"]]
+		# RPT-0004 is the exact number "004" names, then the forties follow
+		self.assertEqual(routes, [["query-report", "Four"], ["query-report", "Stock Ledger"], ["List", "Item", "Report", "Item Sheet"]])
+		self.assertEqual(out["results"]["rpt-0"], [])
+
+	def test_the_report_is_offered_with_its_number_and_the_right_route(self):
+		out = self.run_js()
+		hit = out["results"]["RPT-0042"]
+		self.assertEqual(len(hit), 1)
+		self.assertEqual(hit[0]["route"], ["query-report", "Stock Ledger"])
+		self.assertIn("<mark>RPT-0042</mark> Stock Ledger", hit[0]["label"])
+		self.assertEqual(out["results"]["Rpt-0100"][0]["route"], ["query-report", "Other"])
+
+	def test_a_report_found_by_name_and_by_number_is_listed_once(self):
+		out = self.run_js()
+		self.assertEqual([r["route"] for r in out["results"]["stock"]], [["query-report", "Stock Ledger"]])
+		self.assertEqual(out["results"]["stock"][0]["label"], "by name", "a name match with no number typed is left as core made it")
+
+	def test_a_report_with_no_number_is_never_offered_by_number(self):
+		out = self.run_js()
+		for typed, results in out["results"].items():
+			self.assertNotIn(["query-report", "Plain"], [r["route"] for r in results], typed)
+
+	def test_a_single_digit_or_digits_without_rpt_never_list_a_prefix(self):
+		out = self.run_js()
+		self.assertEqual(out["results"]["4"], [], "a bare 4 is too common to mean RPT-0004")
+		self.assertEqual([r["route"] for r in out["results"]["04"]], [["query-report", "Four"]], "but two digits name it exactly")
+		self.assertEqual([r["route"] for r in out["results"]["004"]], [["query-report", "Four"]], "digits alone are the exact number")
+		self.assertEqual(out["results"]["020"], [], "no RPT typed: no prefix browsing of the 0201 to 0209")
+
+	def test_a_prefix_lists_ten_at_most_in_number_order(self):
+		out = self.run_js()
+		names = [r["route"][1] for r in out["results"]["rpt-02"]]
+		self.assertEqual(names, ["Bulk %d" % n for n in range(201, 211)])
+
+	def test_a_report_found_by_name_and_number_is_listed_once_with_its_number(self):
+		out = self.run_js()
+		hits = [r for r in out["results"]["42"] if r["route"] == ["query-report", "Stock Ledger"]]
+		self.assertEqual(len(hits), 1)
+		self.assertIn("RPT-0042", hits[0]["label"])
+
+	def test_it_is_installed_once(self):
+		self.assertTrue(self.run_js()["installedOnce"])

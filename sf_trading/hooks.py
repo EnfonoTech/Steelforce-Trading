@@ -62,6 +62,8 @@ app_include_js = [
 	# GS Issue 15: "N similar records found" while typing, on Item/Customer/Supplier/Account.
 	# UX only -- the real uniqueness rule stays server-side.
 	f"/assets/sf_trading/js/duplicate_check_popup.js?{_v}",
+	# the search bar finds a report by its number (RPT-0042) as well as its name -- see report_numbering.py
+	f"/assets/sf_trading/js/report_number_search.js?{_v}",
 ]
 
 # doctype_js: loaded only when that specific doctype form opens
@@ -373,7 +375,11 @@ has_permission = {
 }
 
 # the desk drops Purchase Receipt for a user GRN is disabled for -- see purchase_receipt_gate.py
-boot_session = ["sf_trading.purchase_receipt_gate.boot_session"]
+boot_session = [
+	"sf_trading.purchase_receipt_gate.boot_session",
+	# each report the user may open carries its number, so the search bar finds it by RPT-0042
+	"sf_trading.report_numbering.boot_numbers",
+]
 
 # DocType Class
 # ---------------
