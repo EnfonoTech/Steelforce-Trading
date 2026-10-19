@@ -13,6 +13,116 @@ frappe.provide("sf_trading.mis_pl");
 (function (pl) {
 	const ORIGIN = { own: "Own books", in: "Charged in", out: "Charged out" };
 
+	// ─── the period filters, as on the Profit and Loss Statement ───────────────────────────────
+	// Filter Based On: Date Range (From Date, To Date) or Fiscal Year (Start Year, End Year); the Quick Range
+	// fills the dates for the usual ranges. The server resolves them (mis_profit_loss.resolve_period).
+
+	const QUICK_RANGES = [
+		"",
+		"Today",
+		"This Month",
+		"Last Month",
+		"This Quarter",
+		"Last Quarter",
+		"This Year",
+		"Last Year",
+		"Last 12 Months",
+	];
+
+	pl.quick_range_dates = function (name) {
+		const d = frappe.datetime;
+		const today = d.get_today();
+		const before = (date) => d.add_days(date, -1);
+		switch (name) {
+			case "Today":
+				return [today, today];
+			case "This Month":
+				return [d.month_start(), d.month_end()];
+			case "Last Month":
+				return [d.add_months(d.month_start(), -1), before(d.month_start())];
+			case "This Quarter":
+				return [d.quarter_start(), d.quarter_end()];
+			case "Last Quarter":
+				return [d.add_months(d.quarter_start(), -3), before(d.quarter_start())];
+			case "This Year":
+				return [d.year_start(), d.year_end()];
+			case "Last Year":
+				return [d.add_months(d.year_start(), -12), before(d.year_start())];
+			case "Last 12 Months":
+				return [d.add_days(d.add_months(today, -12), 1), today];
+			default:
+				return null;
+		}
+	};
+
+	pl.current_fiscal_year = () => {
+		const fy = frappe.boot && frappe.boot.current_fiscal_year;
+		return fy && fy.length >= 3 ? { name: fy[0], start: fy[1], end: fy[2] } : null;
+	};
+
+	pl.period_filters = function () {
+		const fy = pl.current_fiscal_year();
+		const by_dates = "eval:doc.filter_based_on != 'Fiscal Year'";
+		const by_year = "eval:doc.filter_based_on == 'Fiscal Year'";
+		return [
+			{
+				fieldname: "filter_based_on",
+				label: __("Filter Based On"),
+				fieldtype: "Select",
+				options: ["Date Range", "Fiscal Year"].join("\n"),
+				default: "Date Range",
+				on_change: () => frappe.query_report.refresh(),
+			},
+			{
+				fieldname: "quick_range",
+				label: __("Quick Range"),
+				fieldtype: "Select",
+				options: QUICK_RANGES.join("\n"),
+				depends_on: by_dates,
+				on_change: () => {
+					const range = pl.quick_range_dates(frappe.query_report.get_filter_value("quick_range"));
+					if (range) {
+						frappe.query_report.set_filter_value({ from_date: range[0], to_date: range[1] });
+					}
+				},
+			},
+			{
+				fieldname: "from_date",
+				label: __("From Date"),
+				fieldtype: "Date",
+				default: fy ? fy.start : frappe.datetime.year_start(),
+				depends_on: by_dates,
+				mandatory_depends_on: by_dates,
+			},
+			{
+				fieldname: "to_date",
+				label: __("To Date"),
+				fieldtype: "Date",
+				default: frappe.datetime.get_today(),
+				depends_on: by_dates,
+				mandatory_depends_on: by_dates,
+			},
+			{
+				fieldname: "from_fiscal_year",
+				label: __("Start Year"),
+				fieldtype: "Link",
+				options: "Fiscal Year",
+				default: fy ? fy.name : undefined,
+				depends_on: by_year,
+				mandatory_depends_on: by_year,
+			},
+			{
+				fieldname: "to_fiscal_year",
+				label: __("End Year"),
+				fieldtype: "Link",
+				options: "Fiscal Year",
+				default: fy ? fy.name : undefined,
+				depends_on: by_year,
+				mandatory_depends_on: by_year,
+			},
+		];
+	};
+
 	pl.column_scope = function (report, fieldname) {
 		const meta = (report.data || []).find((d) => d.columns_meta);
 		const known = meta && meta.columns_meta[fieldname];
@@ -22,8 +132,10 @@ frappe.provide("sf_trading.mis_pl");
 	pl.detail_route = function (report, row, fieldname) {
 		const filters = report.get_filter_values();
 		const scope = pl.column_scope(report, fieldname);
+		// the dates of the column clicked, as dates: a Fiscal Year choice left on the detail report would ignore them
 		const route = {
 			company: filters.company,
+			filter_based_on: "Date Range",
 			from_date: scope.from_date || filters.from_date,
 			to_date: scope.to_date || filters.to_date,
 			group_by: row.is_line ? "Vouchers" : "Voucher Type",
@@ -96,7 +208,15 @@ frappe.provide("sf_trading.mis_pl");
 	};
 
 	pl.statement_route = function (filters) {
-		const route = { company: filters.company, from_date: filters.from_date, to_date: filters.to_date };
+		// the period as chosen on the detail report: its dates, or its fiscal years
+		const route = {
+			company: filters.company,
+			filter_based_on: filters.filter_based_on || "Date Range",
+			from_date: filters.from_date,
+			to_date: filters.to_date,
+		};
+		if (filters.from_fiscal_year) route.from_fiscal_year = filters.from_fiscal_year;
+		if (filters.to_fiscal_year) route.to_fiscal_year = filters.to_fiscal_year;
 		if (filters.cost_center) route.cost_center = filters.cost_center;
 		if (filters.branch && filters.branch.length) route.branch = filters.branch;
 		return route;

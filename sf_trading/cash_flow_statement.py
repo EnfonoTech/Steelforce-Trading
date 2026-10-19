@@ -406,9 +406,9 @@ PERIODICITY = ("Total", "Monthly", "Quarterly", "Yearly")
 def period_list(from_date, to_date, periodicity="Total") -> list:
 	"""[{label, from, to}] covering [from_date, to_date] exactly, cut at month / quarter / year ends."""
 	from_date, to_date = getdate(from_date), getdate(to_date)
-	if periodicity not in ("Monthly", "Quarterly", "Yearly"):
+	if periodicity not in ("Monthly", "Quarterly", "Half-Yearly", "Yearly"):
 		return [{"label": _("Amount"), "from": from_date, "to": to_date}]
-	step = {"Monthly": 1, "Quarterly": 3, "Yearly": 12}[periodicity]
+	step = {"Monthly": 1, "Quarterly": 3, "Half-Yearly": 6, "Yearly": 12}[periodicity]
 	out, start = [], from_date
 	while start <= to_date:
 		first_month = 1 if periodicity == "Yearly" else start.month - ((start.month - 1) % step)
@@ -424,6 +424,8 @@ def period_label(periodicity, first):
 		return first.strftime("%b %Y")
 	if periodicity == "Quarterly":
 		return "Q%d %d" % ((first.month - 1) // 3 + 1, first.year)
+	if periodicity == "Half-Yearly":
+		return "H%d %d" % ((first.month - 1) // 6 + 1, first.year)
 	return str(first.year)
 
 

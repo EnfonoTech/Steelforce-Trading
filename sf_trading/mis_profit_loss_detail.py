@@ -142,10 +142,10 @@ def build(filters) -> dict:
 	alts = mis.alternatives()
 	mine = [n for n, (c, _cc) in alts.items() if c == company]
 	scope_sql, scope_params = money.scope_params(filters)
-	cc_filter = set(money.cost_centers(filters.cost_center)) if filters.get("cost_center") else set()
+	allowed_in = mis.charged_in_scope(filters, mine, alts)
 	want_origin = ORIGIN_KEY.get(filters.get("origin") or "")
 	have_dimension = mis.has_dimension()
-	raw = fetch_entries(filters, [a for a in mine if not cc_filter or alts[a][1] in cc_filter] if have_dimension else [], scope_sql,
+	raw = fetch_entries(filters, [a for a in mine if allowed_in is None or a in allowed_in] if have_dimension else [], scope_sql,
 		scope_params, want_in=have_dimension and want_origin in (None, mis.IN), want_own=want_origin in (None, mis.OWN, mis.OUT))
 	accounts = mis.pl_accounts(company)
 	sources = {c: mis.pl_accounts(c) for c in {e["company"] for e in raw if e["company"] != company}}
@@ -189,10 +189,9 @@ def figure_total(filters, result) -> float:
 	scope_sql, scope_params = money.scope_params(filters)
 	alts = mis.alternatives()
 	mine = [n for n, (c, _cc) in alts.items() if c == company]
-	cc_filter = set(money.cost_centers(filters.cost_center)) if filters.get("cost_center") else set()
 	filters.range_from, filters.range_to = filters.from_date, filters.to_date
 	own = mis._own_rows(filters, scope_sql, scope_params)
-	inn = mis.fetch_in(filters, mine, {a for a in mine if alts[a][1] in cc_filter} if cc_filter else None) if mis.has_dimension() else []
+	inn = mis.fetch_in(filters, mine, mis.charged_in_scope(filters, mine, alts)) if mis.has_dimension() else []
 	accounts = mis.pl_accounts(company)
 	sources = {s: mis.pl_accounts(s) for s in {r[0] for r in inn}}
 	rates = mis.Rates(result["currency"])

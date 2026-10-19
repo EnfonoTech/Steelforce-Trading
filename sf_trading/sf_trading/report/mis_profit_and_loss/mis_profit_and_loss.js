@@ -13,25 +13,12 @@ frappe.query_reports["MIS Profit and Loss"] = {
 			reqd: 1,
 			default: frappe.defaults.get_user_default("Company"),
 		},
-		{
-			fieldname: "from_date",
-			label: __("From Date"),
-			fieldtype: "Date",
-			reqd: 1,
-			default: frappe.datetime.add_months(frappe.datetime.get_today(), -12),
-		},
-		{
-			fieldname: "to_date",
-			label: __("To Date"),
-			fieldtype: "Date",
-			reqd: 1,
-			default: frappe.datetime.get_today(),
-		},
+		...sf_trading.mis_pl.period_filters(),
 		{
 			fieldname: "periodicity",
 			label: __("Periodicity"),
 			fieldtype: "Select",
-			options: ["Total", "Monthly", "Quarterly", "Yearly"].join("\n"),
+			options: ["Total", "Monthly", "Quarterly", "Half-Yearly", "Yearly"].join("\n"),
 			default: "Total",
 		},
 		{
@@ -41,6 +28,13 @@ frappe.query_reports["MIS Profit and Loss"] = {
 			options: ["None", "Previous Period", "Same Period Last Year"].join("\n"),
 			default: "None",
 			description: __("Needs Periodicity Total and Columns By Period."),
+		},
+		{
+			fieldname: "accumulated_values",
+			label: __("Accumulated Values"),
+			fieldtype: "Check",
+			default: 0,
+			description: __("Each period column is the running total from the first day. Needs several periods."),
 		},
 		{
 			fieldname: "columns_by",

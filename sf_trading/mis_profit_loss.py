@@ -73,7 +73,8 @@ FIRST_SECTION = {key: ORDER[: i + 1] for i, key in enumerate(ORDER)}
 
 OWN, IN, OUT = "own", "in", "out"
 ORIGIN_LABEL = {OWN: "Own books", IN: "Charged in", OUT: "Charged out"}
-PERIODICITY = cfs.PERIODICITY
+PERIODICITY = ("Total", "Monthly", "Quarterly", "Half-Yearly", "Yearly")
+FILTER_BASED_ON = ("Date Range", "Fiscal Year")
 COMPARISONS = ("None", "Previous Period", "Same Period Last Year")
 COLUMNS_BY = ("Period", "Cost Center")
 DETAIL_LEVELS = ("Sections Only", "Sections and Accounts")
@@ -171,9 +172,21 @@ def fetch_own(filters, scope_sql, scope_params):
 	return frappe.db.sql(OWN_ROWS + scope_sql + OWN_GROUP, params)
 
 
+def charged_in_scope(filters, mine, alts):
+	"""None for every cost centre of this company, else the alternative cost centres the Cost Center filter and the user's
+	own Cost Center permissions allow. A charged-in line is as private as the cost centre it was charged to."""
+	allowed = set(money.cost_centers(filters.cost_center)) if filters.get("cost_center") else None
+	permitted = money.permitted("Cost Center")
+	if permitted is not None:
+		allowed = set(permitted) if allowed is None else (allowed & set(permitted))
+	if allowed is None:
+		return None
+	return {a for a in mine if alts[a][1] in allowed}
+
+
 def fetch_in(filters, alts, cc_alts):
-	"""Rows other companies posted and charged to a cost centre of this one; `cc_alts` narrows them to given cost centres."""
-	wanted = [a for a in alts if not cc_alts or a in cc_alts]
+	"""Rows other companies posted and charged to a cost centre of this one; `cc_alts` (None: all) narrows them to given ones."""
+	wanted = [a for a in alts if cc_alts is None or a in cc_alts]
 	if not wanted:
 		return []
 	params = dict(company=filters.company, from_date=filters.range_from, to_date=filters.range_to, alts=tuple(wanted))
@@ -310,30 +323,44 @@ def total_of(vals):
 
 
 def margin(value, revenue):
-	return (value / revenue * 100.0) if revenue else 0.0
+	"""A share of revenue in percent; None when there is no revenue, because 0% would say something that is not known."""
+	return (value / revenue * 100.0) if revenue else None
 
 
 class Out:
 	"""The report's rows in tree order."""
 
-	def __init__(self, columns, currency, show_percent):
-		self.columns, self.currency, self.show_percent = columns, currency, show_percent
+	def __init__(self, columns, currency, show_percent, accumulated=False):
+		self.columns, self.currency, self.show_percent, self.accumulated = columns, currency, show_percent, accumulated
 		self.data = []
 
-	def add(self, label, vals, indent, **extra):
+	@property
+	def has_total(self) -> bool:
+		"""A Total column: several periods that add up, or a cost centre each. Running totals end in their last column."""
+		if self.accumulated:
+			return False
+		several_periods = self.columns.kind == "Period" and not self.columns.comparison and len(self.columns) > 1
+		return several_periods or self.columns.kind == "Cost Center"
+
+	def add(self, label, vals, indent, total=None, **extra):
+		"""One row. A ratio row's Total and Change are the ratio's own (`total`), never the sum of its columns."""
 		row = {"rid": len(self.data) + 1, "label": label, "indent": indent, "currency": self.currency}
 		row.update(extra)
 		if vals is not None:
+			ratio = bool(extra.get("is_ratio"))
 			for i, v in enumerate(vals):
-				row["p%d" % i] = flt(v, 6) if abs(v) >= 5e-7 else 0.0
-			several_periods = self.columns.kind == "Period" and not self.columns.comparison and len(vals) > 1
-			if several_periods or self.columns.kind == "Cost Center":
-				total = sum(vals)
-				row["total"] = flt(total, 6) if abs(total) >= 5e-7 else 0.0
-			if self.columns.comparison and len(vals) == 2:
+				if v is not None:
+					row["p%d" % i] = flt(v, 6) if abs(v) >= 5e-7 else 0.0
+			if self.has_total:
+				if not ratio:
+					total = sum(vals)
+				if total is not None:
+					row["total"] = flt(total, 6) if abs(total) >= 5e-7 else 0.0
+			if self.columns.comparison and len(vals) == 2 and None not in vals:
 				change = vals[0] - vals[1]
 				row["change"] = flt(change, 6)
-				row["change_pct"] = flt((change / abs(vals[1]) * 100.0) if vals[1] else 0.0, 3)
+				if not ratio:
+					row["change_pct"] = flt(change / abs(vals[1]) * 100.0, 3) if vals[1] else None
 		self.data.append(row)
 		return row
 
@@ -350,7 +377,8 @@ def statement_rows(model: Model, out: Out, detail: str, show_zero: bool) -> dict
 			row = out.add(_(spec["label"]), vals, 0, bold=1, is_total=1, section=key, drill_title=spec["label"])
 			if spec.get("margin"):
 				base = revenue or [0.0] * n
-				out.add(_("%s margin %%") % _(spec["label"]), [margin(vals[i], base[i]) for i in range(n)], 1, is_ratio=1)
+				out.add(_("%s margin %%") % _(spec["label"]), [margin(vals[i], base[i]) for i in range(n)], 1, is_ratio=1,
+					total=margin(sum(vals), sum(base)))
 			continue
 		lines = model.sections.get(key, {})
 		net = [sum(line["vals"][i] for line in lines.values()) for i in range(n)]
@@ -382,11 +410,11 @@ def bridge_rows(model: Model, out: Out, company, mis_net):
 	in_total = [sum(line["vals"][i] for sec in model.sections.values() for k, line in sec.items() if line["origin"] == IN) for i in range(n)]
 	out.add(_("Bridge to the books of %s") % company, None, 0, bold=1, is_header=1)
 	out.add(_("Profit per books (as posted)"), books, 1, bold=1, is_bridge=1, origin="books")
-	row = out.add(_("Less: charged to cost centres of other companies"), [-v for v in out_total], 1, is_bridge=1, origin=OUT, drill_title="charged out")
+	row = out.add(_("Effect of lines charged out to other companies' cost centres"), [-v for v in out_total], 1, is_bridge=1, origin=OUT, drill_title="charged out")
 	for slot in sorted(model.out.values(), key=lambda s: (s["company"], s["label"])):
 		out.add("↳ %s: %s" % (slot["company"], slot["label"]), [-v for v in slot["vals"]], 2, is_line=1, origin=OUT,
 			source_company=slot["company"], account=slot["account"], drill_title="charged out")
-	out.add(_("Add: charged in from other companies"), in_total, 1, is_bridge=1, origin=IN, drill_title="charged in")
+	out.add(_("Effect of lines charged in from other companies"), in_total, 1, is_bridge=1, origin=IN, drill_title="charged in")
 	mis = [books[i] - out_total[i] + in_total[i] for i in range(n)]
 	out.add(_("Net profit, management view"), mis, 1, bold=1, is_total=1, is_bridge=1, origin="mis")
 	diff = [mis[i] - mis_net[i] for i in range(n)]
@@ -395,6 +423,39 @@ def bridge_rows(model: Model, out: Out, company, mis_net):
 
 
 # ─── the report ─────────────────────────────────────────────────────────────────────────────────
+
+
+def fiscal_year_dates(name):
+	"""(first day, last day) of a Fiscal Year."""
+	found = frappe.db.get_value("Fiscal Year", name, ["year_start_date", "year_end_date"]) if name else None
+	if not found:
+		frappe.throw(_("Fiscal Year %s does not exist.") % name)
+	return getdate(found[0]), getdate(found[1])
+
+
+def resolve_period(filters):
+	"""Set from_date and to_date from what the filters say, as the Profit and Loss Statement does: a Date Range is the two
+	dates given; Fiscal Year is the first day of the Start Year to the last day of the End Year."""
+	mode = filters.get("filter_based_on") or FILTER_BASED_ON[0]
+	if mode not in FILTER_BASED_ON:
+		frappe.throw(_("Filter Based On must be one of: %s.") % ", ".join(FILTER_BASED_ON))
+	filters.filter_based_on = mode
+	if mode == "Date Range":
+		filters.from_date, filters.to_date = money.as_dates(filters, cfs.default_from)
+		return
+	first = filters.get("from_fiscal_year")
+	if not first:
+		frappe.throw(_("Choose the Start Year."))
+	start = fiscal_year_dates(first)[0]
+	end = fiscal_year_dates(filters.get("to_fiscal_year") or first)[1]
+	if start > end:
+		frappe.throw(_("The Start Year is after the End Year."))
+	filters.from_date, filters.to_date = start, end
+
+
+def accumulating(filters, columns) -> bool:
+	"""Running totals only mean something across several periods of one range."""
+	return bool(cint(filters.get("accumulated_values"))) and columns.kind == "Period" and not columns.comparison and len(columns) > 1
 
 
 def validate(filters):
@@ -406,7 +467,7 @@ def validate(filters):
 		if (filters.get(name) or default) not in allowed:
 			frappe.throw(_("%s must be one of: %s.") % (_(name.replace("_", " ").title()), ", ".join(allowed)))
 		filters[name] = filters.get(name) or default
-	filters.from_date, filters.to_date = money.as_dates(filters, cfs.default_from)
+	resolve_period(filters)
 	if filters.comparison != "None" and filters.periodicity != "Total":
 		frappe.throw(_("A comparison needs Periodicity Total."))
 	if filters.comparison != "None" and filters.columns_by == "Cost Center":
@@ -431,24 +492,39 @@ def build(filters) -> dict:
 	alts = alternatives()
 	mine = [name for name, (c, _cc) in alts.items() if c == company]
 	scope_sql, scope_params = money.scope_params(filters)
-	cc_filter = set()
-	if filters.get("cost_center"):
-		cc_filter = set(money.cost_centers(filters.cost_center))
 	columns = period_columns(filters) if filters.columns_by == "Period" else None
 	filters.range_from, filters.range_to = columns.span if columns else (filters.from_date, filters.to_date)
 	own_rows = _own_rows(filters, scope_sql, scope_params)
-	in_rows = fetch_in(filters, mine, {a for a in mine if alts[a][1] in cc_filter} if cc_filter else None) if has_dimension() else []
+	in_rows = fetch_in(filters, mine, charged_in_scope(filters, mine, alts)) if has_dimension() else []
 	if columns is None:
 		columns = cost_centre_columns(own_rows, in_rows, alts, company)
 	accounts = pl_accounts(company)
 	sources = {s: pl_accounts(s) for s in {r[0] for r in in_rows}}
 	rates = Rates(currency)
 	model = build_model(own_rows, in_rows, accounts, sources, alts, company, columns, rates)
-	out = Out(columns, currency, cint(filters.get("show_percent")))
+	running = accumulating(filters, columns)
+	if running:
+		accumulate(model)
+	out = Out(columns, currency, cint(filters.get("show_percent")), accumulated=running)
 	totals = statement_rows(model, out, filters.detail, cint(filters.get("show_zero_rows")))
 	bridge = bridge_rows(model, out, company, totals["net"] or [0.0] * model.n)
 	return dict(model=model, out=out, columns=columns, currency=currency, totals=totals, bridge=bridge, rates=rates,
-		scoped=bool(scope_sql), dimension=has_dimension(), company=company)
+		scoped=bool(scope_sql), dimension=has_dimension(), company=company, accumulated=running)
+
+
+def accumulate(model: Model):
+	"""Turn every column into the running total up to and including it (Accumulated Values, as the Profit and Loss Statement has)."""
+	def run(vals):
+		total = 0.0
+		for i, v in enumerate(vals):
+			total += v
+			vals[i] = total
+	run(model.books)
+	for section in model.sections.values():
+		for line in section.values():
+			run(line["vals"])
+	for slot in model.out.values():
+		run(slot["vals"])
 
 
 def _own_rows(filters, scope_sql, scope_params):
@@ -468,7 +544,7 @@ def columns_for(result, filters) -> list:
 	if comparison:
 		cols.append({"label": _("Change"), "fieldname": "change", "fieldtype": "Currency", "options": "currency", "width": 130})
 		cols.append({"label": _("Change %"), "fieldname": "change_pct", "fieldtype": "Percent", "width": 90})
-	elif len(columns) > 1:
+	elif len(columns) > 1 and not result.get("accumulated"):
 		cols.append({"label": _("Total"), "fieldname": "total", "fieldtype": "Currency", "options": "currency", "width": 160})
 	cols.append({"label": "", "fieldname": "currency", "fieldtype": "Link", "options": "Currency", "hidden": 1})
 	return cols
@@ -479,18 +555,25 @@ def columns_is_comparison(result) -> bool:
 
 
 def percent_columns(data, columns, revenue_row):
-	"""Beside each amount, its share of revenue: filled in here so that ratio rows stay plain."""
+	"""Beside each amount, its share of revenue (blank when the column has no revenue): filled in here so that ratio rows stay plain."""
+	keys = ["p%d" % i for i in range(len(columns))] + ["total"]
 	for row in data:
 		if row.get("is_ratio") or row.get("is_difference") or row.get("is_header"):
 			continue
-		for i in range(len(columns)):
-			key = "p%d" % i
+		for key in keys:
 			if key in row:
-				row["pct%d" % i] = flt(margin(flt(row[key]), flt(revenue_row.get(key))), 3)
+				share = margin(flt(row[key]), flt(revenue_row.get(key)))
+				target = "pct_total" if key == "total" else "pct" + key[1:]
+				row[target] = None if share is None else flt(share, 3)
 
 
 def message(result, filters):
 	notes = []
+	if filters.get("filter_based_on") == "Fiscal Year":
+		notes.append(_("Fiscal Year %s to %s: %s to %s.") % (filters.get("from_fiscal_year"), filters.get("to_fiscal_year") or filters.get("from_fiscal_year"),
+			filters.from_date, filters.to_date))
+	if result.get("accumulated"):
+		notes.append(_("Each column is the running total from %s up to the end of its period.") % filters.from_date)
 	if not result["dimension"]:
 		notes.append(_("The Alternative Cost Center dimension is not set up on this site yet: the figures are the company's own books."))
 	if result["rates"].missing:
@@ -504,20 +587,35 @@ def message(result, filters):
 	return "<br>".join(notes) or None
 
 
+def card_columns(result) -> list:
+	"""The columns the summary cards add up: the current period when a previous one is beside it, the last column when the
+	columns are running totals, else all of them (periods of one range, or cost centres of one company)."""
+	n = len(result["columns"])
+	if result["columns"].comparison:
+		return [0]
+	if result.get("accumulated"):
+		return [n - 1]
+	return list(range(n))
+
+
 def summary(result):
-	cur, nets = result["currency"], result["totals"]["nets"]
-	revenue = sum(nets.get("REVENUE", [0.0]))
-	gross = revenue + sum(nets.get("COST_OF_SALES", [0.0]))
-	net = sum(result["totals"]["net"] or [0.0])
+	cur, nets, idx = result["currency"], result["totals"]["nets"], card_columns(result)
+	pick = lambda vals: sum(vals[i] for i in idx) if vals else 0.0
+	revenue = pick(nets.get("REVENUE"))
+	gross = revenue + pick(nets.get("COST_OF_SALES"))
+	ebitda = gross + pick(nets.get("OTHER_INCOME")) + pick(nets.get("OPEX"))
+	net = pick(result["totals"]["net"])
 	card = lambda label, value: {"label": label, "value": flt(value, 3), "datatype": "Currency", "currency": cur, "indicator": "Green" if value >= 0 else "Red"}
+	ratio = lambda label, value: {"label": label, "value": flt(value or 0.0, 1), "datatype": "Percent", "indicator": "Green" if (value or 0.0) >= 0 else "Red"}
 	return [
 		{"label": _("Revenue"), "value": flt(revenue, 3), "datatype": "Currency", "currency": cur, "indicator": "Blue"},
 		card(_("Gross Profit"), gross),
-		{"label": _("Gross Margin"), "value": flt(margin(gross, revenue), 1), "datatype": "Percent", "indicator": "Green" if gross >= 0 else "Red"},
+		ratio(_("Gross Margin"), margin(gross, revenue)),
+		card(_("EBITDA"), ebitda),
 		card(_("Net Profit"), net),
-		{"label": _("Net Margin"), "value": flt(margin(net, revenue), 1), "datatype": "Percent", "indicator": "Green" if net >= 0 else "Red"},
-		card(_("Charged In"), sum(result["bridge"]["in"])),
-		card(_("Charged Out"), -sum(result["bridge"]["out"])),
+		ratio(_("Net Margin"), margin(net, revenue)),
+		card(_("Charged In"), pick(result["bridge"]["in"])),
+		card(_("Charged Out, Added Back"), -pick(result["bridge"]["out"])),
 	]
 
 
@@ -535,16 +633,18 @@ def chart(result):
 	]}, "type": "bar"}
 
 
-def columns_meta(columns, from_date, to_date) -> dict:
-	"""What each money column stands for, for the drill-down: its dates, or its cost centre."""
+def columns_meta(columns, from_date, to_date, accumulated=False) -> dict:
+	"""What each money column stands for, for the drill-down: its dates (a running total starts at the first day), and its
+	cost centre. A cost-centre column carries the range's dates too, so a drill never falls back on the filter's stale ones."""
 	meta = {}
 	if columns.kind == "Cost Center":
 		for i, item in enumerate(columns.items):
-			meta["p%d" % i] = {"cost_center": "" if item["key"] == NO_CC else item["key"]}
+			meta["p%d" % i] = {"cost_center": "" if item["key"] == NO_CC else item["key"], "from_date": str(from_date), "to_date": str(to_date)}
+		meta["total"] = {"from_date": str(from_date), "to_date": str(to_date)}
 		return meta
 	for i, item in enumerate(columns.items):
-		meta["p%d" % i] = {"from_date": str(item["from"]), "to_date": str(item["to"])}
-	if len(columns) > 1 and not columns.comparison:
+		meta["p%d" % i] = {"from_date": str(from_date if accumulated else item["from"]), "to_date": str(item["to"])}
+	if len(columns) > 1 and not columns.comparison and not accumulated:
 		meta["total"] = {"from_date": str(from_date), "to_date": str(to_date)}
 	return meta
 
@@ -554,7 +654,7 @@ def execute(filters=None):
 	result = build(filters)
 	data = result["out"].data
 	if data:
-		data[0]["columns_meta"] = columns_meta(result["columns"], filters.from_date, filters.to_date)
+		data[0]["columns_meta"] = columns_meta(result["columns"], filters.from_date, filters.to_date, result["accumulated"])
 	revenue_row = next((r for r in data if r.get("section") == "REVENUE" and r.get("is_section")), {})
 	if cint(filters.get("show_percent")) and revenue_row:
 		percent_columns(data, result["columns"], revenue_row)
@@ -565,5 +665,7 @@ def execute(filters=None):
 			spliced.append(col)
 			if col["fieldname"].startswith("p") and col["fieldname"][1:].isdigit():
 				spliced.append({"label": _("% of Revenue"), "fieldname": "pct%s" % col["fieldname"][1:], "fieldtype": "Percent", "width": 90})
+			elif col["fieldname"] == "total":
+				spliced.append({"label": _("Total % of Revenue"), "fieldname": "pct_total", "fieldtype": "Percent", "width": 90})
 		cols = spliced
 	return cols, data, message(result, filters), chart(result), summary(result)

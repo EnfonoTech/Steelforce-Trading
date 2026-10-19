@@ -83,6 +83,7 @@ class Seams:
 			(mis, "has_dimension", MagicMock(return_value=True)),
 			(mis, "Rates", FixedRates),
 			(mis.money, "scope_params", MagicMock(return_value=("", {}))),
+			(mis.money, "permitted", MagicMock(return_value=None)),
 			(mis.frappe, "has_permission", MagicMock(return_value=True)),
 			(mis.frappe, "get_cached_value", MagicMock(side_effect=lambda dt, name, field: ("BHD" if name == BHD_CO else "OMR") if field == "default_currency" else name[:4])),
 		]:

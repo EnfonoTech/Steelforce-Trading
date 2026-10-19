@@ -314,11 +314,13 @@ class TestTheColumnsAndRows(FrappeTestCase):
 		self.assertEqual([r["label"] for r in ratios], ["Gross profit margin %", "EBITDA margin %", "Operating profit (EBIT) margin %", "Profit before tax margin %", "Net profit margin %"])
 		self.assertEqual(ratios[0]["p0"], 75.0)
 
-	def test_a_company_with_no_revenue_has_zero_margins_not_an_error(self):
+	def test_a_company_with_no_revenue_has_blank_margins_not_zero_ones(self):
 		own = [("52010700001 - Rent Expense - SFB", date(2026, 1, 5), "", "", -50.0)]
 		model, _r = run_model(own, [], month_periods(kind="Total"))
 		out, _t, _b = render(model)
-		self.assertTrue(all(r["p0"] == 0.0 for r in out.data if r.get("is_ratio")))
+		ratios = [r for r in out.data if r.get("is_ratio")]
+		self.assertEqual(len(ratios), 5)
+		self.assertTrue(all("p0" not in r for r in ratios), "0% would say the margin is nil, when there is nothing to take it of")
 
 	def test_sections_only_drops_the_account_rows_and_zero_rows_are_hidden_unless_asked(self):
 		own = [("41010100001 - Sales Revenue - SFB", date(2026, 1, 5), "", "", 200.0)]
@@ -359,7 +361,7 @@ class TestTheReport(FrappeTestCase):
 			patch.object(mis, "pl_accounts", return_value=ACCOUNTS),
 			patch.object(mis, "has_dimension", return_value=dimension),
 			patch.object(mis, "Rates", FixedRates),
-			patch.object(mis.money, "scope_params", return_value=("", {})),
+			patch.object(mis.money, "scope_params", return_value=("", {})), patch.object(mis.money, "permitted", return_value=None),
 			patch.object(mis.frappe, "has_permission", MagicMock(return_value=True), create=True),
 			patch.object(mis.frappe, "get_cached_value", MagicMock(side_effect=lambda dt, name, field: "OMR" if name == OMR_CO or field == "default_currency" and name != BHD_CO else ("BHD" if field == "default_currency" else "SFB")), create=True),
 		]
@@ -377,7 +379,7 @@ class TestTheReport(FrappeTestCase):
 		self.assertEqual([c["fieldname"] for c in columns][1:6], ["p0", "p1", "p2", "p3", "total"])
 		self.assertIsNone(message)
 		self.assertEqual(chart["type"], "bar")
-		self.assertEqual([c["label"] for c in summary], ["Revenue", "Gross Profit", "Gross Margin", "Net Profit", "Net Margin", "Charged In", "Charged Out"])
+		self.assertEqual([c["label"] for c in summary], ["Revenue", "Gross Profit", "Gross Margin", "EBITDA", "Net Profit", "Net Margin", "Charged In", "Charged Out, Added Back"])
 
 	def test_the_first_row_tells_the_drill_down_what_each_column_is(self):
 		_c, data, *_rest = self.run_report({"periodicity": "Quarterly"})
@@ -385,7 +387,11 @@ class TestTheReport(FrappeTestCase):
 		self.assertEqual(meta["p0"], {"from_date": "2026-01-01", "to_date": "2026-03-31"})
 		self.assertEqual(meta["total"], {"from_date": "2026-01-01", "to_date": "2026-04-30"})
 		_c, data, *_rest = self.run_report({"columns_by": "Cost Center"})
-		self.assertTrue(all("cost_center" in v for v in data[0]["columns_meta"].values()))
+		meta = data[0]["columns_meta"]
+		columns = [v for k, v in meta.items() if k != "total"]
+		self.assertTrue(columns and all("cost_center" in v for v in columns))
+		self.assertTrue(all(v["from_date"] == "2026-01-01" and v["to_date"] == "2026-04-30" for v in meta.values()), "a drill must never fall back on the filter's dates")
+		self.assertNotIn("cost_center", meta["total"])
 
 	def test_the_bridge_is_checked_and_a_failure_would_be_said(self):
 		_c, data, message, *_rest = self.run_report()
@@ -419,7 +425,7 @@ class TestTheReport(FrappeTestCase):
 			own, inn = random_rows(2)
 			patches = [patch.object(mis, "alternatives", return_value=ALTS), patch.object(mis, "_own_rows", return_value=own), patch.object(mis, "fetch_in", return_value=inn),
 				patch.object(mis, "pl_accounts", return_value=ACCOUNTS), patch.object(mis, "has_dimension", return_value=True),
-				patch.object(mis.money, "scope_params", return_value=("", {})), patch.object(mis.frappe, "has_permission", MagicMock(return_value=True), create=True),
+				patch.object(mis.money, "scope_params", return_value=("", {})), patch.object(mis.money, "permitted", return_value=None), patch.object(mis.frappe, "has_permission", MagicMock(return_value=True), create=True),
 				patch.object(mis.frappe, "get_cached_value", MagicMock(side_effect=lambda dt, name, field: "BHD" if name == BHD_CO else "OMR"), create=True)]
 			for p in patches:
 				p.start()
@@ -584,7 +590,7 @@ class TestTheDrillDown(FrappeTestCase):
 	def test_a_vouchers_number_opens_the_voucher_and_the_detail_leads_back(self):
 		fmt = self.run_js()["fmt"]
 		self.assertEqual(fmt["voucher"], '<a href="/app/Journal Entry/JV-1">JV-1</a>')
-		self.assertEqual(fmt["back"], {"company": "Co", "from_date": "2026-01-01", "to_date": "2026-04-30", "cost_center": "Main - SFTO", "branch": ["SFSB"]})
+		self.assertEqual(fmt["back"], {"company": "Co", "filter_based_on": "Date Range", "from_date": "2026-01-01", "to_date": "2026-04-30", "cost_center": "Main - SFTO", "branch": ["SFSB"]})
 
 
 class TestWhatTheSystemShips(FrappeTestCase):
@@ -599,8 +605,13 @@ class TestWhatTheSystemShips(FrappeTestCase):
 
 	def test_the_filters_of_the_profit_and_loss_are_the_ones_the_module_reads(self):
 		js = read("sf_trading", "report", "mis_profit_and_loss", "mis_profit_and_loss.js")
-		for name in ("company", "from_date", "to_date", "periodicity", "comparison", "columns_by", "detail", "branch", "cost_center", "show_percent", "show_zero_rows"):
+		for name in ("company", "periodicity", "comparison", "accumulated_values", "columns_by", "detail", "branch", "cost_center", "show_percent", "show_zero_rows"):
 			self.assertIn('fieldname: "%s"' % name, js)
+		self.assertIn("sf_trading.mis_pl.period_filters()", js)
+		self.assertIn("Half-Yearly", js)
+		shared = read("public", "js", "mis_profit_loss.js")
+		for name in ("filter_based_on", "quick_range", "from_date", "to_date", "from_fiscal_year", "to_fiscal_year"):
+			self.assertIn('fieldname: "%s"' % name, shared)
 		for option in mis.COMPARISONS + mis.COLUMNS_BY + mis.DETAIL_LEVELS:
 			self.assertIn(option, js)
 
@@ -608,3 +619,267 @@ class TestWhatTheSystemShips(FrappeTestCase):
 		self.assertIn("/assets/sf_trading/js/mis_profit_loss.js", read("hooks.py"))
 		js = read("public", "js", "mis_profit_loss.js")
 		self.assertIn("MIS Profit and Loss Detail", js)
+
+
+class TestThePeriodFilters(FrappeTestCase):
+	"""Filter Based On, as on the Profit and Loss Statement: a date range, or fiscal years."""
+
+	def fy(self, rows):
+		return patch.object(mis.frappe.db, "get_value", MagicMock(side_effect=lambda dt, name, fields: rows.get(name)), create=True)
+
+	def test_a_date_range_is_the_two_dates_and_the_default_filter(self):
+		filters = frappe._dict(from_date="2026-02-01", to_date="2026-03-31")
+		mis.resolve_period(filters)
+		self.assertEqual((filters.filter_based_on, filters.from_date, filters.to_date), ("Date Range", date(2026, 2, 1), date(2026, 3, 31)))
+
+	def test_a_fiscal_year_is_its_first_day_to_its_last(self):
+		filters = frappe._dict(filter_based_on="Fiscal Year", from_fiscal_year="2026", to_fiscal_year="2026", from_date="2020-01-01", to_date="2020-01-02")
+		with self.fy({"2026": (date(2026, 1, 1), date(2026, 12, 31))}):
+			mis.resolve_period(filters)
+		self.assertEqual((filters.from_date, filters.to_date), (date(2026, 1, 1), date(2026, 12, 31)), "the stale dates behind a hidden filter are not read")
+
+	def test_several_fiscal_years_run_from_the_first_of_the_start_year_to_the_last_of_the_end_year(self):
+		rows = {"2025": (date(2025, 4, 1), date(2026, 3, 31)), "2026": (date(2026, 4, 1), date(2027, 3, 31))}
+		filters = frappe._dict(filter_based_on="Fiscal Year", from_fiscal_year="2025", to_fiscal_year="2026")
+		with self.fy(rows):
+			mis.resolve_period(filters)
+		self.assertEqual((filters.from_date, filters.to_date), (date(2025, 4, 1), date(2027, 3, 31)))
+
+	def test_a_missing_end_year_means_the_start_year_alone(self):
+		filters = frappe._dict(filter_based_on="Fiscal Year", from_fiscal_year="2026")
+		with self.fy({"2026": (date(2026, 1, 1), date(2026, 12, 31))}):
+			mis.resolve_period(filters)
+		self.assertEqual(filters.to_date, date(2026, 12, 31))
+
+	def test_a_start_year_after_the_end_year_an_unknown_year_and_no_year_are_refused(self):
+		rows = {"2025": (date(2025, 1, 1), date(2025, 12, 31)), "2026": (date(2026, 1, 1), date(2026, 12, 31))}
+		with self.fy(rows):
+			with self.assertRaises(frappe.ValidationError):
+				mis.resolve_period(frappe._dict(filter_based_on="Fiscal Year", from_fiscal_year="2026", to_fiscal_year="2025"))
+			with self.assertRaises(frappe.ValidationError):
+				mis.resolve_period(frappe._dict(filter_based_on="Fiscal Year", from_fiscal_year="1999"))
+		with self.assertRaises(frappe.ValidationError):
+			mis.resolve_period(frappe._dict(filter_based_on="Fiscal Year"))
+		with self.assertRaises(frappe.ValidationError):
+			mis.resolve_period(frappe._dict(filter_based_on="Whenever"))
+
+	def test_from_after_to_is_still_refused_for_a_date_range(self):
+		with self.assertRaises(frappe.ValidationError):
+			mis.resolve_period(frappe._dict(from_date="2026-05-01", to_date="2026-01-01"))
+
+	def test_half_yearly_columns_are_cut_at_june_and_december(self):
+		periods = cfs.period_list("2026-01-01", "2026-12-31", "Half-Yearly")
+		self.assertEqual([(p["label"], str(p["from"]), str(p["to"])) for p in periods], [("H1 2026", "2026-01-01", "2026-06-30"), ("H2 2026", "2026-07-01", "2026-12-31")])
+		part = cfs.period_list("2026-03-15", "2026-08-20", "Half-Yearly")
+		self.assertEqual([(str(p["from"]), str(p["to"])) for p in part], [("2026-03-15", "2026-06-30"), ("2026-07-01", "2026-08-20")])
+		self.assertIn("Half-Yearly", mis.PERIODICITY)
+		self.assertNotIn("Half-Yearly", cfs.PERIODICITY, "the cash flow statement keeps its own list")
+
+
+class TestRunningTotals(FrappeTestCase):
+	def rows(self):
+		return [
+			("41010100001 - Sales Revenue - SFB", date(2026, 1, 5), "", "", 100.0),
+			("41010100001 - Sales Revenue - SFB", date(2026, 2, 5), "", "", 200.0),
+			("41010100001 - Sales Revenue - SFB", date(2026, 3, 5), "", "", 300.0),
+			("52010700001 - Rent Expense - SFB", date(2026, 2, 7), "", "Main - SFB", -40.0),
+			("52010700001 - Rent Expense - SFB", date(2026, 3, 7), "", "", -10.0),
+		]
+
+	def test_every_column_is_the_total_up_to_and_including_it(self):
+		inn = [(BHD_CO, "52010700001 - Rent Expense - SFB", date(2026, 3, 9), "Main - SFTO", -20.0)]
+		model, _r = run_model(self.rows(), inn, month_periods("2026-01-01", "2026-03-31", "Monthly"))
+		mis.accumulate(model)
+		out = mis.Out(model.columns, "OMR", 0, accumulated=True)
+		totals = mis.statement_rows(model, out, "Sections and Accounts", True)
+		bridge = mis.bridge_rows(model, out, OMR_CO, totals["net"])
+		revenue = next(r for r in out.data if r["label"] == "Revenue")
+		self.assertEqual([revenue["p0"], revenue["p1"], revenue["p2"]], [100.0, 300.0, 600.0])
+		self.assertNotIn("total", revenue, "a running total ends in its last column")
+		self.assertEqual(bridge["difference"], [0.0, 0.0, 0.0])
+		self.assertEqual(bridge["books"], [100.0, 260.0, 550.0])
+		self.assertEqual(bridge["out"], [0.0, -40.0, -40.0])
+
+	def test_the_margins_follow_the_running_totals(self):
+		model, _r = run_model(self.rows(), [], month_periods("2026-01-01", "2026-03-31", "Monthly"))
+		mis.accumulate(model)
+		out = mis.Out(model.columns, "OMR", 0, accumulated=True)
+		mis.statement_rows(model, out, "Sections and Accounts", True)
+		net = next(r for r in out.data if r["label"] == "Net profit margin %")
+		self.assertEqual([round(net["p%d" % i], 3) for i in range(3)], [100.0, 100.0, round((600.0 - 10.0) / 600.0 * 100, 3)])
+
+	def test_running_totals_apply_to_periods_of_one_range_only(self):
+		two = mis.Columns("Period", cfs.period_list("2026-01-01", "2026-02-28", "Monthly"))
+		self.assertTrue(mis.accumulating(frappe._dict(accumulated_values=1), two))
+		self.assertFalse(mis.accumulating(frappe._dict(accumulated_values=0), two))
+		self.assertFalse(mis.accumulating(frappe._dict(accumulated_values=1), mis.Columns("Period", cfs.period_list("2026-01-01", "2026-02-28", "Total"))))
+		compared = mis.Columns("Period", two.items, comparison=True)
+		self.assertFalse(mis.accumulating(frappe._dict(accumulated_values=1), compared))
+		self.assertFalse(mis.accumulating(frappe._dict(accumulated_values=1), mis.Columns("Cost Center", [{"label": "a", "key": "a"}, {"label": "b", "key": "b"}])))
+
+	def test_a_running_total_drills_from_the_first_day(self):
+		columns = month_periods("2026-01-01", "2026-03-31", "Monthly")
+		meta = mis.columns_meta(columns, date(2026, 1, 1), date(2026, 3, 31), accumulated=True)
+		self.assertEqual(meta["p2"], {"from_date": "2026-01-01", "to_date": "2026-03-31"})
+		self.assertEqual(meta["p0"], {"from_date": "2026-01-01", "to_date": "2026-01-31"})
+		self.assertNotIn("total", meta)
+		plain = mis.columns_meta(columns, date(2026, 1, 1), date(2026, 3, 31))
+		self.assertEqual(plain["p2"], {"from_date": "2026-03-01", "to_date": "2026-03-31"})
+
+
+class TestRatiosAndCards(FrappeTestCase):
+	def test_a_ratio_rows_total_is_the_ratio_of_the_totals_not_the_sum_of_the_columns(self):
+		own = [("41010100001 - Sales Revenue - SFB", date(2026, 1, 5), "", "", 100.0), ("51010100001 - Cost Of Goods Sold - SFB", date(2026, 1, 6), "", "", -50.0),
+			("41010100001 - Sales Revenue - SFB", date(2026, 2, 5), "", "", 300.0), ("51010100001 - Cost Of Goods Sold - SFB", date(2026, 2, 6), "", "", -60.0)]
+		model, _r = run_model(own, [], month_periods("2026-01-01", "2026-02-28", "Monthly"))
+		out, _t, _b = render(model)
+		gross = next(r for r in out.data if r["label"] == "Gross profit margin %")
+		self.assertEqual((gross["p0"], gross["p1"]), (50.0, 80.0))
+		self.assertEqual(gross["total"], 72.5, "(400 - 110) / 400, not 50 + 80")
+
+	def test_a_ratio_row_changes_in_points_and_has_no_percent_change(self):
+		own = [("41010100001 - Sales Revenue - SFB", date(2026, 1, 5), "", "", 100.0), ("51010100001 - Cost Of Goods Sold - SFB", date(2026, 1, 6), "", "", -50.0),
+			("41010100001 - Sales Revenue - SFB", date(2025, 12, 5), "", "", 100.0), ("51010100001 - Cost Of Goods Sold - SFB", date(2025, 12, 6), "", "", -80.0)]
+		columns = mis.Columns("Period", [{"label": "now", "from": date(2026, 1, 1), "to": date(2026, 1, 31)}, {"label": "before", "from": date(2025, 12, 1), "to": date(2025, 12, 31)}], comparison=True)
+		model, _r = run_model(own, [], columns)
+		out, _t, _b = render(model)
+		gross = next(r for r in out.data if r["label"] == "Gross profit margin %")
+		self.assertEqual((gross["p0"], gross["p1"], gross["change"]), (50.0, 20.0, 30.0))
+		self.assertNotIn("change_pct", gross)
+		self.assertNotIn("total", gross)
+
+	def test_a_percent_change_from_nothing_is_blank_not_zero(self):
+		own = [("41010100001 - Sales Revenue - SFB", date(2026, 1, 5), "", "", 100.0)]
+		columns = mis.Columns("Period", [{"label": "now", "from": date(2026, 1, 1), "to": date(2026, 1, 31)}, {"label": "before", "from": date(2025, 12, 1), "to": date(2025, 12, 31)}], comparison=True)
+		model, _r = run_model(own, [], columns)
+		out, _t, _b = render(model)
+		revenue = next(r for r in out.data if r["label"] == "Revenue")
+		self.assertEqual(revenue["change"], 100.0)
+		self.assertIsNone(revenue["change_pct"])
+
+	def test_percent_of_revenue_is_blank_in_a_column_with_no_revenue_and_has_a_total(self):
+		own = [("41010100001 - Sales Revenue - SFB", date(2026, 1, 5), "", "", 200.0), ("52010700001 - Rent Expense - SFB", date(2026, 1, 5), "", "", -50.0),
+			("52010700001 - Rent Expense - SFB", date(2026, 2, 5), "", "", -30.0)]
+		model, _r = run_model(own, [], month_periods("2026-01-01", "2026-02-28", "Monthly"))
+		out, _t, _b = render(model)
+		revenue = next(r for r in out.data if r["label"] == "Revenue")
+		mis.percent_columns(out.data, model.columns, revenue)
+		rent = next(r for r in out.data if r["label"].startswith("52010700001"))
+		self.assertEqual((rent["pct0"], rent["pct_total"]), (25.0, 40.0))
+		self.assertIsNone(rent["pct1"], "no revenue in February: no share to show")
+
+	def test_the_cards_of_a_comparison_are_the_current_period_not_both_added(self):
+		result = TestTheReport.run_report(TestTheReport(), {"comparison": "Previous Period", "from_date": "2026-03-01", "to_date": "2026-04-30"})
+		cards = {c["label"]: c["value"] for c in result[4]}
+		revenue = next(r for r in result[1] if r["label"] == "Revenue")
+		self.assertEqual(cards["Revenue"], round(revenue["p0"], 3), "the previous period is beside it, not part of it")
+
+	def test_the_cards_of_running_totals_are_the_last_column(self):
+		result = TestTheReport.run_report(TestTheReport(), {"periodicity": "Monthly", "accumulated_values": 1})
+		cards = {c["label"]: c["value"] for c in result[4]}
+		revenue = next(r for r in result[1] if r["label"] == "Revenue")
+		self.assertEqual(cards["Revenue"], round(revenue["p3"], 3))
+		self.assertNotIn("total", [c["fieldname"] for c in result[0]])
+		self.assertIn("running total", result[2])
+
+	def test_the_ebitda_card_is_the_ebitda_row(self):
+		result = TestTheReport.run_report(TestTheReport(), {"periodicity": "Total"})
+		cards = {c["label"]: c["value"] for c in result[4]}
+		ebitda = next(r for r in result[1] if r["label"] == "EBITDA")
+		self.assertEqual(cards["EBITDA"], round(ebitda["p0"], 3))
+
+
+class TestChargedInPrivacy(FrappeTestCase):
+	MINE = ["Main - SFTO", "WH - SFTO"]
+
+	def scope(self, cost_center=None, permitted=None):
+		filters = frappe._dict(cost_center=cost_center)
+		with patch.object(mis.money, "permitted", return_value=permitted), patch.object(mis.money, "cost_centers", side_effect=lambda cc: [cc]):
+			return mis.charged_in_scope(filters, self.MINE, ALTS)
+
+	def test_nothing_narrows_it_without_a_filter_or_a_permission(self):
+		self.assertIsNone(self.scope())
+
+	def test_the_cost_centre_filter_narrows_it(self):
+		self.assertEqual(self.scope(cost_center="WH - SFTO"), {"WH - SFTO"})
+
+	def test_a_users_cost_centre_permissions_narrow_what_is_charged_in_to_them(self):
+		self.assertEqual(self.scope(permitted={"WH - SFTO"}), {"WH - SFTO"})
+		self.assertEqual(self.scope(cost_center="Main - SFTO", permitted={"WH - SFTO"}), set())
+
+	def test_an_empty_scope_means_no_charged_in_rows_not_all_of_them(self):
+		with patch.object(mis.frappe.db, "sql", MagicMock(side_effect=AssertionError("must not query")), create=True):
+			filters = frappe._dict(company=OMR_CO, range_from=date(2026, 1, 1), range_to=date(2026, 4, 30))
+			self.assertEqual(mis.fetch_in(filters, self.MINE, set()), [])
+
+
+QUICK_RUNNER = r"""
+const fs = require("fs"), vm = require("vm");
+const iso = (d) => d.toISOString().slice(0, 10);
+const utc = (y, m, d) => new Date(Date.UTC(y, m, d));
+const TODAY = utc(2026, 9, 19);
+const datetime = {
+	get_today: () => iso(TODAY),
+	add_days: (s, n) => { const d = new Date(s + "T00:00:00Z"); d.setUTCDate(d.getUTCDate() + n); return iso(d); },
+	add_months: (s, n) => { const d = new Date(s + "T00:00:00Z"); const day = d.getUTCDate(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth() + n);
+		const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate(); d.setUTCDate(Math.min(day, last)); return iso(d); },
+	month_start: () => iso(utc(2026, 9, 1)), month_end: () => iso(utc(2026, 9, 31)),
+	quarter_start: () => iso(utc(2026, 9, 1)), quarter_end: () => iso(utc(2026, 11, 31)),
+	year_start: () => iso(utc(2026, 0, 1)), year_end: () => iso(utc(2026, 11, 31)),
+};
+const sandbox = { console, __: (s) => s, cint: (v) => parseInt(v) || 0, flt: (v) => parseFloat(v) || 0 };
+sandbox.frappe = {
+	provide(path) { path.split(".").reduce((o, k) => (o[k] = o[k] || {}, o[k]), sandbox); },
+	datetime, boot: JSON.parse(process.argv[3]),
+};
+sandbox.sf_trading = {};
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), sandbox);
+const pl = sandbox.sf_trading.mis_pl;
+const ranges = {};
+for (const name of ["", "Today", "This Month", "Last Month", "This Quarter", "Last Quarter", "This Year", "Last Year", "Last 12 Months"]) ranges[name] = pl.quick_range_dates(name);
+console.log(JSON.stringify({ ranges, filters: pl.period_filters() }));
+"""
+
+
+class TestTheQuickRangesAndFiscalYearFilters(FrappeTestCase):
+	def run_js(self, boot):
+		node = shutil.which("node")
+		if not node:
+			self.skipTest("node is not installed")
+		done = subprocess.run([node, "-e", QUICK_RUNNER, "x", os.path.join(ROOT, "public", "js", "mis_profit_loss.js"), json.dumps(boot)],
+			capture_output=True, text=True, encoding="utf-8", timeout=60)
+		self.assertEqual(done.returncode, 0, done.stderr)
+		return json.loads(done.stdout)
+
+	def test_each_quick_range_fills_the_dates_a_person_means_by_it(self):
+		ranges = self.run_js({})["ranges"]
+		self.assertIsNone(ranges[""], "blank is a custom range: nothing is filled in")
+		self.assertEqual(ranges["Today"], ["2026-10-19", "2026-10-19"])
+		self.assertEqual(ranges["This Month"], ["2026-10-01", "2026-10-31"])
+		self.assertEqual(ranges["Last Month"], ["2026-09-01", "2026-09-30"])
+		self.assertEqual(ranges["This Quarter"], ["2026-10-01", "2026-12-31"])
+		self.assertEqual(ranges["Last Quarter"], ["2026-07-01", "2026-09-30"])
+		self.assertEqual(ranges["This Year"], ["2026-01-01", "2026-12-31"])
+		self.assertEqual(ranges["Last Year"], ["2025-01-01", "2025-12-31"])
+		self.assertEqual(ranges["Last 12 Months"], ["2025-10-20", "2026-10-19"], "twelve whole months ending today")
+
+	def test_the_filters_mirror_the_profit_and_loss_statement_and_show_one_pair_at_a_time(self):
+		filters = {f["fieldname"]: f for f in self.run_js({"current_fiscal_year": ["2026", "2026-01-01", "2026-12-31"]})["filters"]}
+		self.assertEqual(list(filters), ["filter_based_on", "quick_range", "from_date", "to_date", "from_fiscal_year", "to_fiscal_year"])
+		self.assertEqual(filters["filter_based_on"]["options"].split("\n"), list(mis.FILTER_BASED_ON))
+		for name in ("quick_range", "from_date", "to_date"):
+			self.assertIn("!= 'Fiscal Year'", filters[name]["depends_on"], name)
+		for name in ("from_fiscal_year", "to_fiscal_year"):
+			self.assertIn("== 'Fiscal Year'", filters[name]["depends_on"], name)
+			self.assertEqual(filters[name]["options"], "Fiscal Year")
+		self.assertEqual((filters["from_date"]["default"], filters["to_date"]["default"]), ("2026-01-01", "2026-10-19"))
+		self.assertEqual((filters["from_fiscal_year"]["default"], filters["to_fiscal_year"]["default"]), ("2026", "2026"))
+		for name in ("from_date", "to_date", "from_fiscal_year", "to_fiscal_year"):
+			self.assertNotIn("reqd", filters[name], "a hidden filter must not block the report: it is required only when shown")
+			self.assertEqual(filters[name]["mandatory_depends_on"], filters[name]["depends_on"])
+
+	def test_with_no_fiscal_year_booted_the_dates_default_to_this_year(self):
+		filters = {f["fieldname"]: f for f in self.run_js({})["filters"]}
+		self.assertEqual(filters["from_date"]["default"], "2026-01-01")
+		self.assertIsNone(filters["from_fiscal_year"].get("default"))
