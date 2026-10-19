@@ -360,10 +360,9 @@ def get_expense_entry_lines(expense_doctype: str, expense_entry: str, parenttype
 	if expense_doctype not in EXPENSE_DOCTYPES:
 		frappe.throw(_("An expense entry is a Purchase Invoice, Journal Entry or Payment Entry."))
 	frappe.has_permission(expense_doctype, "read", doc=expense_entry, throw=True)
-	status = cint(frappe.db.get_value(expense_doctype, expense_entry, "docstatus"))
-	if status != 1:
-		frappe.throw(not_booked_reason(expense_doctype, expense_entry, status))
-	# the purchase the cost is spread over is not the expense that booked it (validate_charges refuses it too)
+	# the purchase the cost is spread over is not the expense that booked it (validate_charges refuses it too).
+	# Asked FIRST: the goods invoice is usually a draft itself, and "submit it first, then name it" would be
+	# exactly the wrong advice for it
 	own = {(parenttype, parent)} if parenttype in CHARGE_PARENTS and parent else set()
 	for pair in (frappe.parse_json(goods) if isinstance(goods, str) else goods) or []:
 		if isinstance(pair, (list, tuple)) and len(pair) == 2:
@@ -371,6 +370,9 @@ def get_expense_entry_lines(expense_doctype: str, expense_entry: str, parenttype
 	if (expense_doctype, expense_entry) in own:
 		frappe.throw(_("%s %s is the purchase this cost is spread over, not the expense that booked it. Name the freight or "
 			"customs bill, journal or payment that booked the cost.") % (_(expense_doctype), expense_entry))
+	status = cint(frappe.db.get_value(expense_doctype, expense_entry, "docstatus"))
+	if status != 1:
+		frappe.throw(not_booked_reason(expense_doctype, expense_entry, status))
 	exclude = (parenttype, parent) if parenttype and parent else None
 	ties = frappe._dict(repeats=set(), carried=set(), receipts=set())
 	if parenttype in CHARGE_PARENTS:
@@ -505,14 +507,16 @@ def validate_charges(doc, method=None):
 		values = frappe.db.get_value(expense_dt, expense, ["docstatus", "company"], as_dict=True)
 		if not values:
 			frappe.throw(label + ": " + _("{0} {1} does not exist.").format(_(expense_dt), frappe.bold(expense)))
+		# asked before "is it submitted": the goods invoice is usually a draft itself, and "submit it first" is the
+		# wrong advice for it
+		if (expense_dt, expense) in goods:
+			frappe.throw(label + ": " + _("%s is the purchase this cost is spread over, not the expense that booked it. Name "
+				"the freight or customs bill, journal or payment that booked the cost.") % frappe.bold(expense))
 		if cint(values.docstatus) != 1:
 			frappe.throw(label + ": " + not_booked_reason(expense_dt, frappe.bold(expense), values.docstatus))
 		if values.company != doc.company:
 			frappe.throw(label + ": " + _("{0} belongs to {1}, not {2}.").format(frappe.bold(expense), values.company,
 				doc.company))
-		if (expense_dt, expense) in goods:
-			frappe.throw(label + ": " + _("{0} is the purchase this cost is spread over, not the expense that booked it.")
-				.format(frappe.bold(expense)))
 
 		# the ledger: the expense entry must have debited this very account
 		on_account = booked(expense_dt, expense, account).get(account, 0.0)

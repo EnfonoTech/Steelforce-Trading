@@ -143,6 +143,15 @@ class TestLandedCostControls(FrappeTestCase):
 		with self.assertRaises(frappe.ValidationError):
 			self._validate(self._doc((FREIGHT, 10, "Purchase Invoice", "PI-GOODS"), receipts=[("Purchase Invoice", "PI-GOODS")]))
 
+	def test_a_goods_bill_that_is_a_draft_is_told_what_it_is_not_to_submit_it_first(self):
+		# the goods invoice is usually a draft itself: "still a draft, submit it first" would be the wrong advice
+		for docstatus in (0, 1, 2):
+			with self.assertRaises(frappe.ValidationError) as caught:
+				self._validate(self._doc((FREIGHT, 10, "Purchase Invoice", "PI-GOODS"), receipts=[("Purchase Invoice", "PI-GOODS")]),
+					expense=frappe._dict(docstatus=docstatus, company="SF"))
+			self.assertIn("spread over", str(caught.exception))
+			self.assertNotIn("Submit it first", str(caught.exception))
+
 	def test_the_link_is_required_on_submit_when_the_settings_say(self):
 		doc = self._doc((FREIGHT, 10, None, None))
 		with patch.object(lc, "settings", return_value=frappe._dict(require_on_lcv=1, require_on_purchase=0)):
@@ -278,11 +287,15 @@ class TestLandedCostStockDocuments(FrappeTestCase):
 
 	def test_the_goods_bill_is_never_offered_as_its_own_expense(self):
 		# the invoice a voucher spreads its cost over cannot also be the expense that booked it
+		# the goods invoice is usually a draft itself: it must be told what it is, not to submit it first
+		for docstatus in (0, 1, 2):
+			with self.assertRaises(frappe.ValidationError) as caught:
+				self._lines(docstatus, "Purchase Invoice", goods=[["Purchase Invoice", "X-1"]])
+			self.assertIn("spread over", str(caught.exception))
+			self.assertNotIn("Submit it first", str(caught.exception))
 		with self.assertRaises(frappe.ValidationError) as caught:
-			self._lines(1, "Purchase Invoice", goods=[["Purchase Invoice", "X-1"]])
+			self._lines(0, "Purchase Invoice", parenttype="Purchase Invoice", parent="X-1")
 		self.assertIn("spread over", str(caught.exception))
-		with self.assertRaises(frappe.ValidationError):
-			self._lines(1, "Purchase Invoice", parenttype="Purchase Invoice", parent="X-1")
 		# a different bill is fine
 		self.assertEqual(len(self._lines(1, "Purchase Invoice", goods=[["Purchase Invoice", "OTHER-1"]])), 1)
 		# and so is the same name under another doctype
