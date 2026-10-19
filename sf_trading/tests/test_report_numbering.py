@@ -67,9 +67,19 @@ class Register:
 	def __enter__(self):
 		naming = types.ModuleType("frappe.model.naming")
 		naming.getseries = self.getseries
-		self.saved_modules = {k: sys.modules.get(k) for k in ("frappe.model", "frappe.model.naming")}
+		renamer = types.ModuleType("frappe.model.rename_doc")
+
+		# core's own signature: an argument it does not take raises, as it does in production
+		def rename_doc(doctype=None, old=None, new=None, force=False, merge=False, ignore_permissions=False,
+				ignore_if_exists=False, show_alert=True, rebuild_search=True, doc=None, validate=True):
+			self.renamed.append((old, new))
+			self.held[new] = self.held.pop(old)
+
+		renamer.rename_doc = rename_doc
+		self.saved_modules = {k: sys.modules.get(k) for k in ("frappe.model", "frappe.model.naming", "frappe.model.rename_doc")}
 		sys.modules.setdefault("frappe.model", types.ModuleType("frappe.model"))
 		sys.modules["frappe.model.naming"] = naming
+		sys.modules["frappe.model.rename_doc"] = renamer
 		db = MagicMock()
 		db.table_exists.side_effect = lambda dt: self.ready
 		db.has_column.side_effect = lambda dt, col: self.ready
@@ -81,7 +91,6 @@ class Register:
 			(rn.frappe, "log_error", MagicMock(side_effect=lambda **k: self.log.append(k))),
 			(rn.frappe, "get_traceback", MagicMock(return_value="tb")),
 			(rn.frappe, "delete_doc", MagicMock(side_effect=lambda dt, name, **k: (self.deleted.append(name), self.held.pop(name, None)))),
-			(rn.frappe, "rename_doc", MagicMock(side_effect=lambda dt, old, new, **k: (self.renamed.append((old, new)), self.held.__setitem__(new, self.held.pop(old))))),
 		]:
 			p = patch.object(target, attr, value, create=True)
 			p.start()
@@ -220,6 +229,18 @@ class TestARenameKeepsTheNumber(FrappeTestCase):
 			rn.follow_rename(report("New Name"), None, "Old Name", "New Name", True)
 		self.assertEqual(reg.held, {"New Name": "RPT-0006"})
 		self.assertEqual(reg.renamed, [])
+
+	def test_a_rename_failure_is_logged_not_raised(self):
+		with Register(held={"Old Name": "RPT-0005"}) as reg:
+			with patch.object(rn.frappe, "delete_doc", side_effect=RuntimeError("boom")):
+				rn.follow_rename(report("New Name"), None, "Old Name", "New Name", True)
+		self.assertEqual(len(reg.log), 1)
+
+	def test_the_rename_goes_through_the_model_function_that_takes_ignore_permissions(self):
+		# frappe.rename_doc is a thin wrapper without ignore_permissions: calling it raises TypeError on a live site
+		code = read("report_numbering.py")
+		self.assertNotIn("frappe.rename_doc(", code)
+		self.assertIn("from frappe.model.rename_doc import rename_doc", code)
 
 	def test_a_report_with_no_number_yet_is_left_alone(self):
 		with Register() as reg:

@@ -108,7 +108,10 @@ def follow_rename(doc, method=None, old=None, new=None, merge=False):
 		if merge or frappe.db.exists(REGISTER, new):
 			frappe.delete_doc(REGISTER, old, ignore_permissions=True, force=1)
 		else:
-			frappe.rename_doc(REGISTER, old, new, force=True, ignore_permissions=True)
+			# the model-level function: `frappe.rename_doc` has no ignore_permissions, and the register is read-only to users
+			from frappe.model.rename_doc import rename_doc
+
+			rename_doc(REGISTER, old, new, force=True, ignore_permissions=True, show_alert=False)
 	except Exception:
 		frappe.log_error(title=_("Report number could not follow a rename"), message=frappe.get_traceback())
 
