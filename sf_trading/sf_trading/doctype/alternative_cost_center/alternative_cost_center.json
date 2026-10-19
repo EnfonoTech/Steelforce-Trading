@@ -1,0 +1,159 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "field:cost_center",
+ "creation": "2026-10-19 18:00:00.000000",
+ "description": "A cost centre a voucher can also be charged to, usually one of another company. Kept in step with the Cost Center list by sf_trading; do not add or delete them by hand.",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "cost_center",
+  "cost_center_name",
+  "company",
+  "disabled"
+ ],
+ "fields": [
+  {
+   "fieldname": "cost_center",
+   "fieldtype": "Link",
+   "options": "Cost Center",
+   "label": "Cost Center",
+   "reqd": 1,
+   "unique": 1,
+   "read_only_depends_on": "eval:!doc.__islocal",
+   "in_list_view": 1,
+   "bold": 1,
+   "ignore_user_permissions": 1
+  },
+  {
+   "fieldname": "cost_center_name",
+   "fieldtype": "Data",
+   "label": "Name",
+   "read_only": 1,
+   "in_list_view": 1,
+   "fetch_from": "cost_center.cost_center_name"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "options": "Company",
+   "label": "Company",
+   "read_only": 1,
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "fetch_from": "cost_center.company",
+   "ignore_user_permissions": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "disabled",
+   "fieldtype": "Check",
+   "label": "Disabled",
+   "default": "0",
+   "in_list_view": 1,
+   "description": "Set when the cost centre is disabled or becomes a group. A disabled one is not offered on a new voucher."
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-19 18:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "Alternative Cost Center",
+ "naming_rule": "By fieldname",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "role": "System Manager",
+   "write": 1,
+   "create": 1,
+   "delete": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "print": 1,
+   "role": "Accounts Manager",
+   "write": 1,
+   "create": 1,
+   "delete": 0
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "Accounts User"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "Bahrain Accountant"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "Purchase Manager"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "Purchase User"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "Sales Manager"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "Sales User"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "Stock Manager"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "Stock User"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "Expense Approver"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "Employee"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "export": 1,
+   "role": "Auditor"
+  }
+ ],
+ "search_fields": "company,cost_center_name",
+ "show_title_field_in_link": 0,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "cost_center_name"
+}

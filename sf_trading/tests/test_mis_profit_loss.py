@@ -1,0 +1,610 @@
+# sf_trading/tests/test_mis_profit_loss.py
+"""MIS Profit and Loss (sf_trading/mis_profit_loss.py).
+
+The database is patched at the module's own seams, so nothing is created or read:
+
+    bench --site <scratch-site> run-tests --module sf_trading.tests.test_mis_profit_loss
+
+The property under test: whatever was posted, however it was charged between companies, the management profit
+equals the profit per books, less what was charged out, plus what was charged in -- in every column, however
+the columns are cut -- and no ledger row is counted twice or dropped.
+"""
+
+import json
+import os
+import random
+import shutil
+import subprocess
+from datetime import date
+from unittest.mock import MagicMock, patch
+
+import frappe
+from frappe.tests.utils import FrappeTestCase
+
+from sf_trading import cash_flow_statement as cfs
+from sf_trading import mis_profit_loss as mis
+from sf_trading.tests.test_cash_flow_statement import CHART
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BHD_CO, OMR_CO = "Steel Force Trading WLL", "STEEL FORCE INTERNATIONAL SPC"
+ALTS = {
+	"Main - SFTO": (OMR_CO, "Main - SFTO"),
+	"WH - SFTO": (OMR_CO, "WH - SFTO"),
+	"Main - SFB": (BHD_CO, "Main - SFB"),
+	"SFSB - SFB": (BHD_CO, "SFSB - SFB"),
+}
+RATE = 2.6  # BHD into OMR, for the test (a made-up rate: only the arithmetic matters)
+
+
+def read(*parts):
+	with open(os.path.join(ROOT, *parts), encoding="utf-8") as f:
+		return f.read()
+
+
+def pl_account(name, root, account_type):
+	line = cfs.classify(frappe._dict(name=name, root_type=root, account_type=account_type))
+	parts = name.split(" - ")
+	return {"section": mis.section_of(line, root), "label": name, "root": root, "base": parts[1] if len(parts) > 2 else parts[0]}
+
+
+def pl_chart():
+	return {a.name: pl_account(a.name, a.root_type, a.account_type) for a, _k in CHART if a.root_type in ("Income", "Expense")}
+
+
+ACCOUNTS = pl_chart()
+SOURCES = {BHD_CO: ACCOUNTS, OMR_CO: ACCOUNTS}
+
+
+class FixedRates(mis.Rates):
+	"""BHD into OMR at a fixed rate; anything else is unknown."""
+
+	@staticmethod
+	def lookup(from_currency, to_currency, on):
+		return RATE if (from_currency, to_currency) == ("BHD", "OMR") else 0.0
+
+
+def month_periods(first="2026-01-01", last="2026-04-30", kind="Monthly"):
+	return mis.Columns("Period", cfs.period_list(first, last, kind))
+
+
+def random_rows(seed, company=OMR_CO, n=400):
+	"""Own rows of `company` (some charged out to the other company) and rows of the other company charged in."""
+	rng = random.Random(seed)
+	names = list(ACCOUNTS)
+	other = BHD_CO if company == OMR_CO else OMR_CO
+	own_alts = [a for a, (c, _cc) in ALTS.items() if c == other]
+	mine = [a for a, (c, _cc) in ALTS.items() if c == company]
+	own, inn = [], []
+	for _i in range(n):
+		on = date(2026, rng.randint(1, 4), rng.randint(1, 28))
+		cc = rng.choice(("SFSB - SFB", "SFSS - SFB", "Main - SFTO", ""))
+		net = round(rng.uniform(1, 900), 3) * rng.choice((1, -1))
+		alt = rng.choice(["", "", ""] + own_alts)
+		own.append((rng.choice(names), on, cc, alt, net))
+	for _i in range(n // 3):
+		on = date(2026, rng.randint(1, 4), rng.randint(1, 28))
+		inn.append((other, rng.choice(names), on, rng.choice(mine), round(rng.uniform(1, 900), 3) * rng.choice((1, -1))))
+	return own, inn
+
+
+def run_model(own, inn, columns, company=OMR_CO, rates=None):
+	currency = "OMR" if company == OMR_CO else "BHD"
+	rates = rates or FixedRates(currency)
+	with patch.object(mis.frappe, "get_cached_value", side_effect=lambda dt, name, field: ("BHD" if name == BHD_CO else "OMR") if field == "default_currency" else name[:4], create=True):
+		return mis.build_model(own, inn, ACCOUNTS, SOURCES, ALTS, company, columns, rates), rates
+
+
+def render(model, detail="Sections and Accounts", show_zero=True, show_percent=0):
+	out = mis.Out(model.columns, "OMR", show_percent)
+	totals = mis.statement_rows(model, out, detail, show_zero)
+	bridge = mis.bridge_rows(model, out, OMR_CO, totals["net"] or [0.0] * model.n)
+	return out, totals, bridge
+
+
+class TestTheLayout(FrappeTestCase):
+	def test_the_steps_run_in_the_order_a_manager_reads_them(self):
+		self.assertEqual(mis.ORDER, ["REVENUE", "COST_OF_SALES", "GROSS", "OTHER_INCOME", "OPEX", "EBITDA", "DA", "EBIT", "INTEREST", "DISPOSAL", "PBT", "TAX", "NET"])
+
+	def test_every_profit_and_loss_line_of_the_cash_flow_statement_has_exactly_one_section(self):
+		for key in cfs.PL_KEYS:
+			self.assertIn(key, mis.SECTION_OF_LINE, key)
+		sections = [s for s in mis.LAYOUT if not s.get("subtotal")]
+		seen = [line for s in sections for line in s["lines"]]
+		self.assertEqual(len(seen), len(set(seen)), "a line in two sections would be counted twice")
+
+	def test_an_account_the_rules_put_on_a_balance_sheet_line_still_lands_in_a_section(self):
+		self.assertEqual(mis.section_of("AR", "Income"), "OTHER_INCOME")
+		self.assertEqual(mis.section_of("LOANS", "Expense"), "OPEX")
+		self.assertEqual(mis.section_of(None, "Expense"), "OPEX")
+
+	def test_a_sections_sign_makes_costs_positive_and_a_subtotal_adds_what_is_above_it(self):
+		self.assertEqual(mis.section_signs("Operating expenses"), {"OPEX": -1})
+		self.assertEqual(mis.section_signs("revenue"), {"REVENUE": 1})
+		gross = mis.section_signs("Gross profit")
+		self.assertEqual(gross, {"REVENUE": 1, "COST_OF_SALES": 1})
+		net = mis.section_signs("Net profit")
+		self.assertEqual(set(net), {s["key"] for s in mis.LAYOUT if not s.get("subtotal")})
+		self.assertEqual(mis.section_signs("Nonsense"), {})
+
+	def test_the_accounts_of_the_chart_land_where_a_manager_expects(self):
+		by = {a: v["section"] for a, v in ACCOUNTS.items()}
+		self.assertEqual(by["41010100001 - Sales Revenue - SFB"], "REVENUE")
+		self.assertEqual(by["51010100001 - Cost Of Goods Sold - SFB"], "COST_OF_SALES")
+		self.assertEqual(by["51010300013 - Customs Duty - SFB"], "COST_OF_SALES")
+		self.assertEqual(by["52010700001 - Rent Expense - SFB"], "OPEX")
+		self.assertEqual(by["Depreciation - SFB"], "DA")
+		self.assertEqual(by["52010305 - Interest On Bank Loan - SFB"], "INTEREST")
+		self.assertEqual(by["Income Tax Expense - SFB"], "TAX")
+		self.assertEqual(by["Loss On Disposal Of Asset - SFB"], "DISPOSAL")
+		self.assertEqual(by["52010302 - Other Income - SFB"], "OTHER_INCOME")
+
+
+class TestTheArithmetic(FrappeTestCase):
+	def test_a_worked_example_from_revenue_to_net_profit(self):
+		own = [
+			("41010100001 - Sales Revenue - SFB", date(2026, 1, 5), "SFSB - SFB", "", 1000.0),
+			("51010100001 - Cost Of Goods Sold - SFB", date(2026, 1, 6), "SFSB - SFB", "", -600.0),
+			("52010700001 - Rent Expense - SFB", date(2026, 1, 7), "SFSB - SFB", "", -150.0),
+			("Depreciation - SFB", date(2026, 1, 31), "SFSB - SFB", "", -50.0),
+			("52010305 - Interest On Bank Loan - SFB", date(2026, 1, 31), "SFSB - SFB", "", -20.0),
+			("Income Tax Expense - SFB", date(2026, 1, 31), "SFSB - SFB", "", -30.0),
+		]
+		model, _r = run_model(own, [], month_periods("2026-01-01", "2026-01-31", "Total"))
+		out, totals, bridge = render(model)
+		by = {r["label"]: r.get("p0") for r in out.data}
+		self.assertEqual(by["Revenue"], 1000.0)
+		self.assertEqual(by["Cost of sales"], 600.0)
+		self.assertEqual(by["Gross profit"], 400.0)
+		self.assertEqual(by["Gross profit margin %"], 40.0)
+		self.assertEqual(by["Operating expenses"], 150.0)
+		self.assertEqual(by["EBITDA"], 250.0)
+		self.assertEqual(by["Operating profit (EBIT)"], 200.0)
+		self.assertEqual(by["Profit before tax"], 180.0)
+		self.assertEqual(by["Net profit"], 150.0)
+		self.assertEqual(by["Net profit margin %"], 15.0)
+		self.assertEqual(bridge["difference"], [0.0])
+
+	def test_what_is_charged_out_leaves_the_figures_and_is_listed_under_them(self):
+		own = [("41010100001 - Sales Revenue - SFB", date(2026, 1, 5), "SFSB - SFB", "", 500.0),
+			("52010700001 - Rent Expense - SFB", date(2026, 1, 7), "SFSB - SFB", "Main - SFTO", -120.0)]
+		model, _r = run_model(own, [], month_periods("2026-01-01", "2026-01-31", "Total"), company=BHD_CO)
+		out = mis.Out(model.columns, "BHD", 0)
+		totals = mis.statement_rows(model, out, "Sections and Accounts", True)
+		bridge = mis.bridge_rows(model, out, BHD_CO, totals["net"])
+		self.assertEqual(sum(totals["net"]), 500.0, "the rent is not this company's cost")
+		self.assertEqual(bridge["books"], [380.0])
+		self.assertEqual(bridge["out"], [-120.0])
+		self.assertEqual(bridge["mis"], [500.0])
+		out_rows = [r for r in out.data if r.get("origin") == "out" and r.get("is_line")]
+		self.assertEqual([(r["source_company"], round(r["p0"], 3)) for r in out_rows], [(OMR_CO, 120.0)])
+
+	def test_what_another_company_charged_in_is_added_in_this_companys_currency_and_marked(self):
+		inn = [(BHD_CO, "52010700001 - Rent Expense - SFB", date(2026, 1, 7), "Main - SFTO", -100.0)]
+		model, rates = run_model([], inn, month_periods("2026-01-01", "2026-01-31", "Total"))
+		out, totals, bridge = render(model)
+		line = next(r for r in out.data if r.get("origin") == "in" and r.get("is_line"))
+		self.assertTrue(line["label"].startswith("↳ "))
+		self.assertTrue(line["label"].endswith(": Rent Expense"), line["label"])
+		self.assertAlmostEqual(line["p0"], 100.0 * RATE, 6)
+		self.assertEqual(line["source_company"], BHD_CO)
+		self.assertAlmostEqual(sum(totals["net"]), -100.0 * RATE, 6)
+		self.assertAlmostEqual(bridge["in"][0], -100.0 * RATE, 6)
+		self.assertEqual(bridge["difference"], [0.0])
+
+	def test_a_row_charged_to_a_cost_centre_of_a_third_company_is_none_of_ours(self):
+		inn = [(BHD_CO, "52010700001 - Rent Expense - SFB", date(2026, 1, 7), "Main - SFB", -100.0)]
+		model, _r = run_model([], inn, month_periods("2026-01-01", "2026-01-31", "Total"))
+		self.assertEqual(model.sections, {})
+
+	def test_no_exchange_rate_means_the_amount_is_left_out_and_the_currency_is_listed(self):
+		class NoRates(mis.Rates):
+			@staticmethod
+			def lookup(*_a):
+				return 0.0
+
+		inn = [(BHD_CO, "52010700001 - Rent Expense - SFB", date(2026, 1, 7), "Main - SFTO", -100.0)]
+		model, rates = run_model([], inn, month_periods("2026-01-01", "2026-01-31", "Total"), rates=NoRates("OMR"))
+		out, totals, _bridge = render(model)
+		self.assertEqual(sum(totals["net"]), 0.0)
+		self.assertEqual(rates.missing, {"BHD"})
+		self.assertEqual(model.unconverted, {BHD_CO})
+
+	def test_the_same_currency_needs_no_rate(self):
+		rates = mis.Rates("BHD")
+		self.assertEqual(rates.rate("BHD", date(2026, 1, 1)), 1.0)
+		self.assertEqual(rates.rate(None, date(2026, 1, 1)), 1.0)
+		self.assertEqual(rates.missing, set())
+
+	def test_the_exchange_lookup_uses_the_latest_rate_on_or_before_and_the_inverse(self):
+		def get_all(doctype, filters=None, **k):
+			if filters["from_currency"] == "BHD" and filters["to_currency"] == "OMR":
+				return []
+			return [frappe._dict(exchange_rate=0.5)]
+		with patch.object(mis.frappe, "get_all", side_effect=get_all, create=True):
+			self.assertEqual(mis.Rates.lookup("BHD", "OMR", date(2026, 1, 1)), 2.0)
+
+
+class TestTheBridgeHolds(FrappeTestCase):
+	"""The property: profit per books - charged out + charged in == the management profit, always."""
+
+	def test_in_every_column_for_every_way_of_cutting_the_columns(self):
+		for seed in range(25):
+			own, inn = random_rows(seed)
+			for columns in (month_periods(), month_periods(kind="Total"), month_periods(kind="Quarterly")):
+				model, _r = run_model(own, inn, columns)
+				out, totals, bridge = render(model)
+				for i in range(model.n):
+					self.assertAlmostEqual(bridge["difference"][i], 0.0, 6, "seed %s column %s" % (seed, i))
+					self.assertAlmostEqual(bridge["mis"][i], totals["net"][i], 6)
+
+	def test_by_cost_centre_the_columns_add_up_to_the_whole(self):
+		for seed in range(10):
+			own, inn = random_rows(seed)
+			whole, _r = run_model(own, inn, month_periods(kind="Total"))
+			cc_cols = mis.cost_centre_columns(own, inn, ALTS, OMR_CO)
+			split, _r = run_model(own, inn, cc_cols)
+			a, b = render(whole), render(split)
+			self.assertAlmostEqual(sum(a[1]["net"]), sum(b[1]["net"]), 6, seed)
+			self.assertAlmostEqual(sum(b[2]["difference"]), 0.0, 6)
+
+	def test_every_ledger_row_of_ours_is_counted_once_and_none_twice(self):
+		own, inn = random_rows(3)
+		model, _r = run_model(own, inn, month_periods(kind="Total"))
+		books = sum(net for _a, _d, _c, _alt, net in own)
+		self.assertAlmostEqual(model.books[0], books, 6)
+		counted_in = sum(line["vals"][0] for sec in model.sections.values() for line in sec.values() if line["origin"] == "in")
+		expected_in = sum(net * RATE for src, _a, _d, alt, net in inn if ALTS[alt][0] == OMR_CO)
+		self.assertAlmostEqual(counted_in, expected_in, 6)
+
+	def test_a_company_with_nothing_charged_either_way_has_no_bridge_adjustment(self):
+		own = [(a, date(2026, 2, 1), "SFSB - SFB", "", 10.0) for a in list(ACCOUNTS)[:5]]
+		model, _r = run_model(own, [], month_periods(kind="Total"))
+		_out, totals, bridge = render(model)
+		self.assertEqual((bridge["out"], bridge["in"]), ([0.0], [0.0]))
+		self.assertAlmostEqual(bridge["books"][0], totals["net"][0], 6)
+
+
+class TestTheColumnsAndRows(FrappeTestCase):
+	def test_a_period_goes_to_the_one_column_that_holds_its_date(self):
+		cols = month_periods()
+		self.assertEqual([cols.index(date(2026, m, 15), "x") for m in (1, 2, 3, 4)], [0, 1, 2, 3])
+		self.assertIsNone(cols.index(date(2026, 5, 1), "x"))
+
+	def test_a_cost_centre_column_holds_its_own_postings_and_an_empty_one_has_its_own_column(self):
+		cols = mis.Columns("Cost Center", [{"label": "A", "key": "A"}, {"label": mis.NO_CC, "key": mis.NO_CC}])
+		self.assertEqual((cols.index(date(2026, 1, 1), "A"), cols.index(date(2026, 1, 1), ""), cols.index(date(2026, 1, 1), "Z")), (0, 1, None))
+
+	def test_a_charged_in_row_falls_in_the_cost_centre_it_was_charged_to(self):
+		inn = [(BHD_CO, "52010700001 - Rent Expense - SFB", date(2026, 1, 7), "WH - SFTO", -10.0)]
+		cols = mis.cost_centre_columns([], inn, ALTS, OMR_CO)
+		self.assertEqual([i["key"] for i in cols.items], ["WH - SFTO"])
+
+	def test_comparison_sets_the_earlier_range_beside_the_current_and_adds_the_change(self):
+		filters = frappe._dict(from_date=date(2026, 4, 1), to_date=date(2026, 6, 30), comparison="Previous Period", periodicity="Total")
+		cols = mis.period_columns(filters)
+		self.assertTrue(cols.comparison)
+		self.assertEqual((cols.items[1]["from"], cols.items[1]["to"]), (date(2026, 1, 1), date(2026, 3, 31)))
+		# not a whole number of months: the same number of days before
+		odd = frappe._dict(from_date=date(2026, 4, 10), to_date=date(2026, 4, 19), comparison="Previous Period", periodicity="Total")
+		self.assertEqual((mis.period_columns(odd).items[1]["from"], mis.period_columns(odd).items[1]["to"]), (date(2026, 3, 31), date(2026, 4, 9)))
+		filters.comparison = "Same Period Last Year"
+		cols = mis.period_columns(filters)
+		self.assertEqual((cols.items[1]["from"], cols.items[1]["to"]), (date(2025, 4, 1), date(2025, 6, 30)))
+		own = [("41010100001 - Sales Revenue - SFB", date(2026, 5, 1), "", "", 300.0), ("41010100001 - Sales Revenue - SFB", date(2025, 5, 1), "", "", 200.0)]
+		model, _r = run_model(own, [], cols)
+		out = mis.Out(cols, "OMR", 0)
+		mis.statement_rows(model, out, "Sections Only", True)
+		revenue = next(r for r in out.data if r["label"] == "Revenue")
+		self.assertEqual((revenue["p0"], revenue["p1"], revenue["change"], revenue["change_pct"]), (300.0, 200.0, 100.0, 50.0))
+
+	def test_a_total_column_is_added_for_several_periods_and_for_cost_centres(self):
+		own, inn = random_rows(1)
+		model, _r = run_model(own, inn, month_periods())
+		out, _t, _b = render(model)
+		row = next(r for r in out.data if r["label"] == "Revenue")
+		self.assertAlmostEqual(sum(row["p%d" % i] for i in range(4)), row["total"], 5)
+		single, _r = run_model(own, inn, month_periods(kind="Total"))
+		self.assertNotIn("total", next(r for r in render(single)[0].data if r["label"] == "Revenue"))
+
+	def test_a_margin_row_follows_each_profit_step_and_is_marked_so_it_is_not_a_figure(self):
+		own = [("41010100001 - Sales Revenue - SFB", date(2026, 1, 5), "", "", 200.0), ("51010100001 - Cost Of Goods Sold - SFB", date(2026, 1, 5), "", "", -50.0)]
+		model, _r = run_model(own, [], month_periods(kind="Total"))
+		out, _t, _b = render(model)
+		ratios = [r for r in out.data if r.get("is_ratio")]
+		self.assertEqual([r["label"] for r in ratios], ["Gross profit margin %", "EBITDA margin %", "Operating profit (EBIT) margin %", "Profit before tax margin %", "Net profit margin %"])
+		self.assertEqual(ratios[0]["p0"], 75.0)
+
+	def test_a_company_with_no_revenue_has_zero_margins_not_an_error(self):
+		own = [("52010700001 - Rent Expense - SFB", date(2026, 1, 5), "", "", -50.0)]
+		model, _r = run_model(own, [], month_periods(kind="Total"))
+		out, _t, _b = render(model)
+		self.assertTrue(all(r["p0"] == 0.0 for r in out.data if r.get("is_ratio")))
+
+	def test_sections_only_drops_the_account_rows_and_zero_rows_are_hidden_unless_asked(self):
+		own = [("41010100001 - Sales Revenue - SFB", date(2026, 1, 5), "", "", 200.0)]
+		model, _r = run_model(own, [], month_periods(kind="Total"))
+		self.assertFalse([r for r in render(model, "Sections Only")[0].data if r.get("is_line") and r.get("origin") == "own"])
+		hidden = render(model, show_zero=False)[0].data
+		self.assertNotIn("Operating expenses", [r["label"] for r in hidden])
+		shown = render(model, show_zero=True)[0].data
+		self.assertIn("Operating expenses", [r["label"] for r in shown])
+
+	def test_a_charged_in_line_comes_after_the_own_lines_of_its_section(self):
+		own = [("52010700001 - Rent Expense - SFB", date(2026, 1, 5), "", "", -5.0)]
+		inn = [(BHD_CO, "52010700001 - Rent Expense - SFB", date(2026, 1, 5), "Main - SFTO", -900.0)]
+		model, _r = run_model(own, inn, month_periods(kind="Total"))
+		lines = [r for r in render(model)[0].data if r.get("is_line") and r.get("section") == "OPEX"]
+		self.assertEqual([r.get("origin") for r in lines], ["own", "in"], "own first even though the charged-in line is bigger")
+
+	def test_percent_of_revenue_is_filled_beside_each_amount(self):
+		own = [("41010100001 - Sales Revenue - SFB", date(2026, 1, 5), "", "", 200.0), ("52010700001 - Rent Expense - SFB", date(2026, 1, 5), "", "", -50.0)]
+		model, _r = run_model(own, [], month_periods(kind="Total"))
+		out, _t, _b = render(model)
+		revenue = next(r for r in out.data if r["label"] == "Revenue")
+		mis.percent_columns(out.data, model.columns, revenue)
+		rent = next(r for r in out.data if r["label"].startswith("52010700001"))
+		self.assertEqual((rent["pct0"], revenue["pct0"]), (25.0, 100.0))
+		self.assertNotIn("pct0", next(r for r in out.data if r.get("is_ratio")))
+
+
+class TestTheReport(FrappeTestCase):
+	BASE = dict(company=OMR_CO, from_date="2026-01-01", to_date="2026-04-30")
+
+	def run_report(self, extra=None, seed=2, dimension=True):
+		own, inn = random_rows(seed)
+		patches = [
+			patch.object(mis, "alternatives", return_value=ALTS),
+			patch.object(mis, "_own_rows", return_value=own),
+			patch.object(mis, "fetch_in", return_value=inn),
+			patch.object(mis, "pl_accounts", return_value=ACCOUNTS),
+			patch.object(mis, "has_dimension", return_value=dimension),
+			patch.object(mis, "Rates", FixedRates),
+			patch.object(mis.money, "scope_params", return_value=("", {})),
+			patch.object(mis.frappe, "has_permission", MagicMock(return_value=True), create=True),
+			patch.object(mis.frappe, "get_cached_value", MagicMock(side_effect=lambda dt, name, field: "OMR" if name == OMR_CO or field == "default_currency" and name != BHD_CO else ("BHD" if field == "default_currency" else "SFB")), create=True),
+		]
+		for p in patches:
+			p.start()
+		try:
+			return mis.execute(frappe._dict(dict(self.BASE, **(extra or {}))))
+		finally:
+			for p in reversed(patches):
+				p.stop()
+
+	def test_it_returns_columns_rows_message_chart_and_cards(self):
+		columns, data, message, chart, summary = self.run_report({"periodicity": "Monthly"})
+		self.assertEqual(columns[0]["fieldname"], "label")
+		self.assertEqual([c["fieldname"] for c in columns][1:6], ["p0", "p1", "p2", "p3", "total"])
+		self.assertIsNone(message)
+		self.assertEqual(chart["type"], "bar")
+		self.assertEqual([c["label"] for c in summary], ["Revenue", "Gross Profit", "Gross Margin", "Net Profit", "Net Margin", "Charged In", "Charged Out"])
+
+	def test_the_first_row_tells_the_drill_down_what_each_column_is(self):
+		_c, data, *_rest = self.run_report({"periodicity": "Quarterly"})
+		meta = data[0]["columns_meta"]
+		self.assertEqual(meta["p0"], {"from_date": "2026-01-01", "to_date": "2026-03-31"})
+		self.assertEqual(meta["total"], {"from_date": "2026-01-01", "to_date": "2026-04-30"})
+		_c, data, *_rest = self.run_report({"columns_by": "Cost Center"})
+		self.assertTrue(all("cost_center" in v for v in data[0]["columns_meta"].values()))
+
+	def test_the_bridge_is_checked_and_a_failure_would_be_said(self):
+		_c, data, message, *_rest = self.run_report()
+		self.assertIsNone(message)
+		diff = next(r for r in data if r.get("is_difference"))
+		self.assertAlmostEqual(diff["p0"], 0.0, 6)
+
+	def test_without_the_dimension_it_says_so_and_shows_the_books(self):
+		_c, _d, message, *_rest = self.run_report(dimension=False)
+		self.assertIn("not set up on this site", message)
+
+	def test_a_comparison_needs_a_total_and_period_columns(self):
+		for bad in ({"comparison": "Previous Period", "periodicity": "Monthly"}, {"comparison": "Previous Period", "columns_by": "Cost Center"},
+				{"periodicity": "Weekly"}, {"detail": "Everything"}, {"company": ""}, {"from_date": "2026-09-01"}):
+			with self.assertRaises(frappe.ValidationError, msg=str(bad)):
+				self.run_report(bad)
+
+	def test_percent_columns_come_after_each_amount_column(self):
+		columns, data, *_rest = self.run_report({"show_percent": 1})
+		names = [c["fieldname"] for c in columns]
+		self.assertEqual(names[1:3], ["p0", "pct0"])
+		self.assertTrue(any("pct0" in r for r in data))
+
+	def test_a_missing_exchange_rate_is_said_in_the_message(self):
+		class NoRates(mis.Rates):
+			@staticmethod
+			def lookup(*_a):
+				return 0.0
+
+		with patch.object(mis, "Rates", NoRates):
+			own, inn = random_rows(2)
+			patches = [patch.object(mis, "alternatives", return_value=ALTS), patch.object(mis, "_own_rows", return_value=own), patch.object(mis, "fetch_in", return_value=inn),
+				patch.object(mis, "pl_accounts", return_value=ACCOUNTS), patch.object(mis, "has_dimension", return_value=True),
+				patch.object(mis.money, "scope_params", return_value=("", {})), patch.object(mis.frappe, "has_permission", MagicMock(return_value=True), create=True),
+				patch.object(mis.frappe, "get_cached_value", MagicMock(side_effect=lambda dt, name, field: "BHD" if name == BHD_CO else "OMR"), create=True)]
+			for p in patches:
+				p.start()
+			try:
+				_c, _d, message, *_rest = mis.execute(frappe._dict(self.BASE))
+			finally:
+				for p in reversed(patches):
+					p.stop()
+		self.assertIn("No exchange rate", message)
+
+
+class TestTheQueries(FrappeTestCase):
+	def filters(self):
+		return frappe._dict(company=OMR_CO, range_from=date(2026, 1, 1), range_to=date(2026, 4, 30))
+
+	def test_own_rows_are_the_companys_profit_and_loss_without_closing_entries_and_bind_every_value(self):
+		with patch.object(mis.frappe.db, "sql", MagicMock(return_value=[]), create=True) as sql:
+			mis.fetch_own(self.filters(), " and gle.branch in %(branches)s", {"branches": ("SFSB",)})
+		query, params = sql.call_args.args
+		for fragment in ("acc.root_type in ('Income', 'Expense')", "voucher_type != 'Period Closing Voucher'", "is_cancelled = 0", "gle.company = %(company)s",
+				"alternative_cost_center", "group by gle.account, gle.posting_date, gle.cost_center, alt", "gle.branch in %(branches)s"):
+			self.assertIn(fragment, query)
+		self.assertEqual(params["company"], OMR_CO)
+		self.assertNotIn("STEEL FORCE", query)
+
+	def test_charged_in_rows_are_other_companies_rows_charged_to_one_of_ours(self):
+		with patch.object(mis.frappe.db, "sql", MagicMock(return_value=[]), create=True) as sql:
+			mis.fetch_in(self.filters(), ["Main - SFTO", "WH - SFTO"], None)
+		query, params = sql.call_args.args
+		for fragment in ("gle.company != %(company)s", "gle.alternative_cost_center in %(alts)s", "group by gle.company, gle.account, gle.posting_date, alt"):
+			self.assertIn(fragment, query)
+		self.assertEqual(params["alts"], ("Main - SFTO", "WH - SFTO"))
+
+	def test_a_cost_centre_filter_narrows_the_charged_in_rows_to_that_cost_centre(self):
+		with patch.object(mis.frappe.db, "sql", MagicMock(return_value=[]), create=True) as sql:
+			mis.fetch_in(self.filters(), ["Main - SFTO", "WH - SFTO"], {"WH - SFTO"})
+		self.assertEqual(sql.call_args.args[1]["alts"], ("WH - SFTO",))
+
+	def test_no_alternative_cost_centre_of_ours_means_no_query(self):
+		with patch.object(mis.frappe.db, "sql", MagicMock(side_effect=AssertionError("nothing can be charged in")), create=True):
+			self.assertEqual(mis.fetch_in(self.filters(), [], None), [])
+			self.assertEqual(mis.fetch_in(self.filters(), ["A"], {"B"}), [])
+
+	def test_without_the_dimension_column_the_own_query_reads_a_blank_in_its_place(self):
+		with patch.object(mis, "has_dimension", return_value=False), patch.object(mis.frappe.db, "sql", MagicMock(return_value=[]), create=True) as sql:
+			mis._own_rows(self.filters(), "", {})
+		self.assertNotIn("gle.alternative_cost_center", sql.call_args.args[0])
+		self.assertIn("'' as alt", sql.call_args.args[0])
+
+	def test_the_query_text_holds_placeholders_only(self):
+		for text in (mis.OWN_ROWS, mis.OWN_GROUP, mis.IN_ROWS, mis.IN_GROUP, mis.BASE):
+			self.assertNotIn("{", text)
+
+
+JS_RUNNER = r"""
+const fs = require("fs"), vm = require("vm");
+const sandbox = { console, $: () => ({}), __: (s) => s, cint: (v) => parseInt(v) || 0, flt: (v) => parseFloat(v) || 0 };
+sandbox.frappe = {
+	provide(path) { path.split(".").reduce((o, k) => (o[k] = o[k] || {}, o[k]), sandbox); },
+	route_options: null, set_route(...r) { sandbox.routed = r; }, show_alert(a) { sandbox.alert = a; },
+	utils: { get_form_link: (dt, name, html, text) => '<a href="/app/' + dt + '/' + name + '">' + text + '</a>' },
+};
+sandbox.sf_trading = {};
+vm.createContext(sandbox);
+vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), sandbox);
+const pl = sandbox.sf_trading.mis_pl;
+const data = JSON.parse(process.argv[3]);
+const filters = JSON.parse(process.argv[4]);
+const report = { data, get_filter_values: () => filters };
+const open = (rid, col) => { sandbox.routed = null; sandbox.alert = null; sandbox.frappe.route_options = null; pl.open_detail(report, rid, col);
+	return { route: sandbox.routed, options: sandbox.frappe.route_options, alert: sandbox.alert }; };
+const passthrough = (v) => String(v);
+const out = { section: open(2, "p1"), own: open(3, "p0"), charged_in: open(4, "p0"), subtotal: open(5, "total"), bridge_out: open(6, "p0"), books: open(7, "p0"), header: open(1, "p0") };
+out.fmt = {
+	amount: pl.formatter(5, 0, { fieldname: "p0" }, data[1], passthrough),
+	negative: pl.formatter(-5, 0, { fieldname: "p0" }, { ...data[1], p0: -5 }, passthrough),
+	ratio: pl.formatter(40, 0, { fieldname: "p0" }, { is_ratio: 1, p0: 40, label: "x" }, passthrough),
+	ratio_label: pl.formatter("GP", 0, { fieldname: "label" }, { is_ratio: 1 }, passthrough),
+	diff_ok: pl.formatter(0, 0, { fieldname: "p0" }, { is_difference: 1, p0: 0, rid: 9 }, passthrough),
+	diff_bad: pl.formatter(2, 0, { fieldname: "p0" }, { is_difference: 1, p0: 2, rid: 9 }, passthrough),
+	change: pl.formatter(7, 0, { fieldname: "change" }, { ...data[1], change: 7 }, passthrough),
+	header: pl.formatter(5, 0, { fieldname: "p0" }, data[0], passthrough),
+	voucher: pl.detail_formatter("x", 0, { fieldname: "label" }, { is_voucher: 1, voucher_type: "Journal Entry", voucher_no: "JV-1" }, passthrough),
+	back: pl.statement_route(filters),
+};
+console.log(JSON.stringify(out));
+"""
+
+JS_DATA = [
+	{"rid": 1, "label": "Bridge", "is_header": 1, "columns_meta": {"p0": {"from_date": "2026-01-01", "to_date": "2026-01-31"}, "p1": {"from_date": "2026-02-01", "to_date": "2026-04-30"}, "total": {"from_date": "2026-01-01", "to_date": "2026-04-30"}}},
+	{"rid": 2, "label": "Operating expenses", "is_section": 1, "section": "OPEX", "drill_title": "Operating expenses", "p0": 5},
+	{"rid": 3, "label": "52010700001 - Rent", "is_line": 1, "section": "OPEX", "origin": "own", "account": "Rent - SFB", "drill_title": "Operating expenses"},
+	{"rid": 4, "label": "↳ SFB: Rent", "is_line": 1, "section": "OPEX", "origin": "in", "account": "Rent - SFB", "source_company": "Steel Force Trading WLL", "drill_title": "Operating expenses"},
+	{"rid": 5, "label": "Gross profit", "is_total": 1, "section": "GROSS", "drill_title": "Gross profit"},
+	{"rid": 6, "label": "Less: charged out", "is_bridge": 1, "origin": "out", "drill_title": "charged out"},
+	{"rid": 7, "label": "Profit per books", "is_bridge": 1, "origin": "books"},
+]
+JS_FILTERS = {"company": "Co", "from_date": "2026-01-01", "to_date": "2026-04-30", "cost_center": "Main - SFTO", "branch": ["SFSB"]}
+
+
+class TestTheDrillDown(FrappeTestCase):
+	def run_js(self, filters=None):
+		node = shutil.which("node")
+		if not node:
+			self.skipTest("node is not installed")
+		done = subprocess.run([node, "-e", JS_RUNNER, "x", os.path.join(ROOT, "public", "js", "mis_profit_loss.js"), json.dumps(JS_DATA),
+			json.dumps(filters or JS_FILTERS)], capture_output=True, text=True, encoding="utf-8", timeout=60)
+		self.assertEqual(done.returncode, 0, done.stderr)
+		return json.loads(done.stdout)
+
+	def test_a_section_opens_its_vouchers_for_the_column_clicked(self):
+		out = self.run_js()["section"]
+		self.assertEqual(out["route"], ["query-report", "MIS Profit and Loss Detail"])
+		o = out["options"]
+		self.assertEqual((o["line"], o["from_date"], o["to_date"], o["group_by"]), ("Operating expenses", "2026-02-01", "2026-04-30", "Voucher Type"))
+		self.assertEqual((o["cost_center"], o["branch"]), ("Main - SFTO", ["SFSB"]))
+		self.assertNotIn("origin", o)
+
+	def test_an_own_line_opens_its_account_and_a_charged_in_line_its_account_company_and_origin(self):
+		own = self.run_js()["own"]["options"]
+		self.assertEqual((own["origin"], own["account"], own["group_by"]), ("Own books", ["Rent - SFB"], "Vouchers"))
+		charged = self.run_js()["charged_in"]["options"]
+		self.assertEqual((charged["origin"], charged["source_company"], charged["account"]), ("Charged in", "Steel Force Trading WLL", ["Rent - SFB"]))
+
+	def test_a_subtotal_opens_for_the_whole_range_and_carries_no_origin(self):
+		o = self.run_js()["subtotal"]["options"]
+		self.assertEqual((o["line"], o["from_date"], o["to_date"]), ("Gross profit", "2026-01-01", "2026-04-30"))
+
+	def test_a_bridge_row_opens_by_origin_with_no_section(self):
+		o = self.run_js()["bridge_out"]["options"]
+		self.assertEqual(o["origin"], "Charged out")
+		self.assertNotIn("line", o)
+
+	def test_the_books_row_and_a_header_have_nothing_to_open(self):
+		for key in ("books", "header"):
+			out = self.run_js()[key]
+			self.assertIsNone(out["route"], key)
+			self.assertIn("Nothing to open", out["alert"]["message"])
+
+	def test_a_cost_centre_column_carries_its_cost_centre_instead_of_the_filters(self):
+		data = json.loads(json.dumps(JS_DATA))
+		data[0]["columns_meta"] = {"p0": {"cost_center": "WH - SFTO"}}
+		node = shutil.which("node")
+		if not node:
+			self.skipTest("node is not installed")
+		done = subprocess.run([node, "-e", JS_RUNNER, "x", os.path.join(ROOT, "public", "js", "mis_profit_loss.js"), json.dumps(data), json.dumps(JS_FILTERS)],
+			capture_output=True, text=True, encoding="utf-8", timeout=60)
+		self.assertEqual(json.loads(done.stdout)["own"]["options"]["cost_center"], "WH - SFTO")
+
+	def test_amounts_are_links_ratios_are_plain_percentages_and_a_clean_difference_is_green(self):
+		fmt = self.run_js()["fmt"]
+		self.assertIn('class="sf-mis-drill"', fmt["amount"])
+		self.assertIn("#c62828", fmt["negative"])
+		self.assertIn("40.0%", fmt["ratio"])
+		self.assertNotIn("sf-mis-drill", fmt["ratio"])
+		self.assertIn("<i", fmt["ratio_label"])
+		self.assertIn("#2e7d32", fmt["diff_ok"])
+		self.assertIn("#c62828", fmt["diff_bad"])
+		self.assertNotIn("sf-mis-drill", fmt["change"])
+		self.assertEqual(fmt["header"], "")
+
+	def test_a_vouchers_number_opens_the_voucher_and_the_detail_leads_back(self):
+		fmt = self.run_js()["fmt"]
+		self.assertEqual(fmt["voucher"], '<a href="/app/Journal Entry/JV-1">JV-1</a>')
+		self.assertEqual(fmt["back"], {"company": "Co", "from_date": "2026-01-01", "to_date": "2026-04-30", "cost_center": "Main - SFTO", "branch": ["SFSB"]})
+
+
+class TestWhatTheSystemShips(FrappeTestCase):
+	def test_the_report_files_exist_and_are_for_accountants(self):
+		for name, title in (("mis_profit_and_loss", "MIS Profit and Loss"), ("mis_profit_and_loss_detail", "MIS Profit and Loss Detail")):
+			base = os.path.join(ROOT, "sf_trading", "report", name)
+			for ext in ("py", "js", "json"):
+				self.assertTrue(os.path.exists(os.path.join(base, name + "." + ext)), name + "." + ext)
+			report = json.loads(read("sf_trading", "report", name, name + ".json"))
+			self.assertEqual((report["name"], report["report_type"], report["ref_doctype"]), (title, "Script Report", "GL Entry"))
+			self.assertIn({"role": "Accounts Manager"}, report["roles"])
+
+	def test_the_filters_of_the_profit_and_loss_are_the_ones_the_module_reads(self):
+		js = read("sf_trading", "report", "mis_profit_and_loss", "mis_profit_and_loss.js")
+		for name in ("company", "from_date", "to_date", "periodicity", "comparison", "columns_by", "detail", "branch", "cost_center", "show_percent", "show_zero_rows"):
+			self.assertIn('fieldname: "%s"' % name, js)
+		for option in mis.COMPARISONS + mis.COLUMNS_BY + mis.DETAIL_LEVELS:
+			self.assertIn(option, js)
+
+	def test_the_drill_script_is_loaded_everywhere(self):
+		self.assertIn("/assets/sf_trading/js/mis_profit_loss.js", read("hooks.py"))
+		js = read("public", "js", "mis_profit_loss.js")
+		self.assertIn("MIS Profit and Loss Detail", js)

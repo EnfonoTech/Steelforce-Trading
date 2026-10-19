@@ -66,6 +66,10 @@ app_include_js = [
 	f"/assets/sf_trading/js/report_number_search.js?{_v}",
 	# formatting and drill-down into the General Ledger of the Cash Flow Statement -- see cash_flow_statement.py
 	f"/assets/sf_trading/js/cash_flow_statement.js?{_v}",
+	# the Alternative Cost Center field offers only cost centres of other companies -- see alternative_cost_center.py
+	f"/assets/sf_trading/js/alternative_cost_center.js?{_v}",
+	# formatting and drill-down of the MIS Profit and Loss and its detail -- see mis_profit_loss.py
+	f"/assets/sf_trading/js/mis_profit_loss.js?{_v}",
 ]
 
 # doctype_js: loaded only when that specific doctype form opens
@@ -311,6 +315,8 @@ after_migrate = [
 	"sf_trading.report_numbering.ensure_custom_fields",
 	# the Get Outstanding Journal Entries button on the Payment Entry
 	"sf_trading.payment_entry_journal.ensure_custom_fields",
+	# every cost centre mirrored, and the Alternative Cost Center accounting dimension -- see alternative_cost_center.py
+	"sf_trading.alternative_cost_center.ensure_dimension",
 	# the cancellation reason picked from a list, on Sales Order and Purchase Order
 	"sf_trading.order_cancellation.ensure_custom_fields",
 	"sf_trading.order_cancellation.seed_reasons",
@@ -466,6 +472,17 @@ _SDBNB_DN_HOOK = "sf_trading.sdbnb.set_delivery_note_expense_account"
 _SBND_DN_HOOK = "sf_trading.sbnd.set_delivery_note_expense_account"
 
 doc_events = {
+	# an alternative cost centre on a voucher is an enabled leaf of ANOTHER company -- see alternative_cost_center.py
+	"*": {
+		"validate": "sf_trading.alternative_cost_center.validate_voucher",
+	},
+	# every cost centre has a mirror master that the Alternative Cost Center dimension points at
+	"Cost Center": {
+		"after_insert": "sf_trading.alternative_cost_center.sync_cost_center",
+		"on_update": "sf_trading.alternative_cost_center.sync_cost_center",
+		"on_trash": "sf_trading.alternative_cost_center.drop_cost_center",
+		"after_rename": "sf_trading.alternative_cost_center.follow_rename",
+	},
 	# a new account with no number gets the next one in its parent's series, before ERPNext builds
 	# the account's name from it -- see sf_trading/account_numbering.py
 	"Account": {
