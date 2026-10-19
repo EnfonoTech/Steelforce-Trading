@@ -26,7 +26,8 @@ The layout is the management one, each step with its margin on revenue:
     - Income tax                                      = Net profit
 
 An account goes to a section by the same rules as the Cash Flow Statement (account type, then root type and
-name words, then the override on SF Trading Settings > Cash Flow Statement).
+name words, then the override on SF Trading Settings > Cash Flow Statement), with one refinement for a chart whose
+sales accounts were never typed: see `refine_line`.
 
 Columns: a period each (total, monthly, quarterly, yearly), or the previous period / the same period last year
 beside the current one with the change, or a cost centre each (an own line by the cost centre it was posted to,
@@ -34,6 +35,7 @@ a charged-in line by the cost centre of this company it was charged to). Every f
 behind it (MIS Profit and Loss Detail).
 """
 
+import re
 from collections import defaultdict
 from datetime import date
 
@@ -196,14 +198,39 @@ def fetch_in(filters, alts, cc_alts):
 # ─── accounts ───────────────────────────────────────────────────────────────────────────────────
 
 
+#: income that is not sales, by its name; every other income account is revenue
+OTHER_INCOME_WORDS = re.compile(r"other income|interest (income|received)|discount received|miscellaneous income|\bgain\b|commission received|"
+	r"rent(al)? income|insurance claim|scrap|write[- ]?back|grant")
+#: an expense account nobody typed whose name says it is the cost of what was sold
+COST_OF_SALES_WORDS = re.compile(r"cost of goods|cost of sales|cost of revenue|\bcogs\b")
+
+
+def refine_line(root_type, account_type, name, line_key, ruled) -> str:
+	"""The cash flow statement puts an Income account with no account type under Other income (and an untyped cost of goods sold
+	under Operating expenses): right for a cash flow, wrong for a profit and loss, where a chart that never typed its sales
+	accounts would show no revenue at all. For the MIS profit and loss an untyped (or "Income Account") income account is
+	Revenue unless its name says otherwise, and an untyped expense named cost of goods sold is a cost of sales. An account
+	the settings or the company name, or that has a type the rules know, keeps its line (`ruled`)."""
+	if ruled:
+		return line_key
+	text = re.sub(r"^[\d\s.\-]+", "", (name or "").lower())
+	if root_type == "Income" and (account_type or "") in ("", "Income Account"):
+		return "OTHER_INCOME" if OTHER_INCOME_WORDS.search(text) else "SALES"
+	if root_type == "Expense" and not account_type and line_key == "OPEX" and COST_OF_SALES_WORDS.search(text):
+		return "COGS"
+	return line_key
+
+
 def pl_accounts(company) -> dict:
 	"""{account: {section, label, root}} for a company's profit and loss accounts."""
 	line_of, _meta = cfs.load_accounts(company)
+	ruled = set(cfs.line_overrides(company)) | set(cfs.company_account_lines(company))
 	out = {}
 	for a in frappe.get_all("Account", filters={"company": company, "is_group": 0, "root_type": ["in", ["Income", "Expense"]]},
-			fields=["name", "account_name", "account_number", "root_type"], limit_page_length=0):
+			fields=["name", "account_name", "account_number", "root_type", "account_type"], limit_page_length=0):
 		label = ("%s - %s" % (a.account_number, a.account_name)) if a.account_number else a.account_name
-		out[a.name] = {"section": section_of(line_of.get(a.name), a.root_type), "label": label or a.name, "root": a.root_type,
+		line = refine_line(a.root_type, a.account_type, a.account_name or a.name, line_of.get(a.name), a.name in ruled)
+		out[a.name] = {"section": section_of(line, a.root_type), "label": label or a.name, "root": a.root_type,
 			"base": a.account_name or a.name}
 	return out
 

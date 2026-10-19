@@ -883,3 +883,39 @@ class TestTheQuickRangesAndFiscalYearFilters(FrappeTestCase):
 		filters = {f["fieldname"]: f for f in self.run_js({})["filters"]}
 		self.assertEqual(filters["from_date"]["default"], "2026-01-01")
 		self.assertIsNone(filters["from_fiscal_year"].get("default"))
+
+
+class TestAnUntypedChartStillShowsRevenue(FrappeTestCase):
+	"""A chart whose sales accounts were never given an account type (the Oman one) must not show an empty Revenue line."""
+
+	def test_an_untyped_income_account_is_revenue_unless_its_name_says_otherwise(self):
+		for name in ("Sales - SFTO", "41010100001 - Sales Revenue - SFTO", "Service - SFTO", "Direct Income - SFTO"):
+			self.assertEqual(mis.refine_line("Income", None, name, "OTHER_INCOME", False), "SALES", name)
+			self.assertEqual(mis.refine_line("Income", "Income Account", name, "SALES", False), "SALES", name)
+		for name in ("Other Income - X", "41010101 - Discount Received On Purchase - X", "Interest Income - X", "Rental Income - X", "Forex Gain - X", "Scrap Sales - X"):
+			self.assertEqual(mis.refine_line("Income", None, name, "OTHER_INCOME", False), "OTHER_INCOME", name)
+			self.assertEqual(mis.refine_line("Income", "Income Account", name, "SALES", False), "OTHER_INCOME", name)
+
+	def test_an_untyped_cost_of_goods_sold_is_a_cost_of_sales(self):
+		self.assertEqual(mis.refine_line("Expense", None, "51010100001 - Cost Of Goods Sold - SFTO", "OPEX", False), "COGS")
+		self.assertEqual(mis.refine_line("Expense", None, "Cost of Sales - X", "OPEX", False), "COGS")
+		self.assertEqual(mis.refine_line("Expense", None, "52010100001 - Employee Salaries & Wages - SFTO", "OPEX", False), "OPEX")
+
+	def test_a_typed_account_an_override_and_a_named_account_keep_their_line(self):
+		self.assertEqual(mis.refine_line("Income", "Tax", "Sales Tax Refund", "OTHER_INCOME", False), "OTHER_INCOME")
+		self.assertEqual(mis.refine_line("Expense", "Expense Account", "Cost Of Goods Sold - X", "OPEX", False), "OPEX", "typed: the rules had their say")
+		self.assertEqual(mis.refine_line("Income", None, "Sales - X", "OTHER_INCOME", True), "OTHER_INCOME", "the settings table wins over any name")
+		self.assertEqual(mis.refine_line("Expense", None, "Cost Of Goods Sold - X", "DEPRECIATION", True), "DEPRECIATION")
+		self.assertEqual(mis.refine_line("Expense", None, "Interest On Cost Of Sales Loan", "INTEREST_EXP", False), "INTEREST_EXP", "only the default line is refined")
+
+	def test_the_accounts_of_a_company_come_out_with_the_refined_sections(self):
+		rows = [frappe._dict(name="Sales - SFTO", account_name="Sales", account_number=None, root_type="Income", account_type=None),
+			frappe._dict(name="Other Income - SFTO", account_name="Other Income", account_number=None, root_type="Income", account_type=None),
+			frappe._dict(name="51010100001 - Cost Of Goods Sold - SFTO", account_name="Cost Of Goods Sold", account_number="51010100001", root_type="Expense", account_type=None),
+			frappe._dict(name="Rent - SFTO", account_name="Rent", account_number=None, root_type="Expense", account_type="Expense Account")]
+		lines = {"Sales - SFTO": "OTHER_INCOME", "Other Income - SFTO": "OTHER_INCOME", "51010100001 - Cost Of Goods Sold - SFTO": "OPEX", "Rent - SFTO": "OPEX"}
+		with patch.object(mis.cfs, "load_accounts", return_value=(lines, {})), patch.object(mis.cfs, "line_overrides", return_value={}), \
+				patch.object(mis.cfs, "company_account_lines", return_value={}), patch.object(mis.frappe, "get_all", return_value=rows, create=True):
+			out = mis.pl_accounts(OMR_CO)
+		self.assertEqual({k: v["section"] for k, v in out.items()},
+			{"Sales - SFTO": "REVENUE", "Other Income - SFTO": "OTHER_INCOME", "51010100001 - Cost Of Goods Sold - SFTO": "COST_OF_SALES", "Rent - SFTO": "OPEX"})
