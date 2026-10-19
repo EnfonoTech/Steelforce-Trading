@@ -478,6 +478,15 @@ class TestWhatTheSystemShips(FrappeTestCase):
 		self.assertEqual((report["name"], report["report_type"], report["ref_doctype"]), ("Cash Flow Statement", "Script Report", "GL Entry"))
 		self.assertIn({"role": "Accounts Manager"}, report["roles"])
 
+	def test_the_detail_report_files_exist_and_it_is_for_accountants(self):
+		base = os.path.join(ROOT, "sf_trading", "report", "cash_flow_statement_detail")
+		for ext in ("py", "js", "json"):
+			self.assertTrue(os.path.exists(os.path.join(base, "cash_flow_statement_detail." + ext)))
+		report = json.loads(read("sf_trading", "report", "cash_flow_statement_detail", "cash_flow_statement_detail.json"))
+		self.assertEqual((report["name"], report["report_type"], report["ref_doctype"]), ("Cash Flow Statement Detail", "Script Report", "GL Entry"))
+		self.assertIn({"role": "Accounts Manager"}, report["roles"])
+		self.assertIn("Cash Flow Statement Detail", read("public", "js", "cash_flow_statement.js"))
+
 	def test_the_drill_script_is_loaded_everywhere(self):
 		self.assertIn("/assets/sf_trading/js/cash_flow_statement.js", read("hooks.py"))
 		self.assertTrue(os.path.exists(os.path.join(ROOT, "public", "js", "cash_flow_statement.js")))
@@ -538,64 +547,92 @@ const sandbox = { console, $: () => ({}), __: (s) => s, cint: (v) => parseInt(v)
 sandbox.frappe = {
 	provide(path) { path.split(".").reduce((o, k) => (o[k] = o[k] || {}, o[k]), sandbox); },
 	route_options: null, set_route(...r) { sandbox.routed = r; }, show_alert(a) { sandbox.alert = a; },
+	utils: { get_form_link: (dt, name, html, text) => '<a href="/app/' + dt + '/' + name + '">' + text + '</a>' },
 };
 sandbox.sf_trading = {};
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), sandbox);
 const cfs = sandbox.sf_trading.cash_flow_statement;
 const data = JSON.parse(process.argv[3]);
-const report = { data, get_filter_values: () => ({ company: "Co", from_date: "2026-01-01", to_date: "2026-04-30", cost_center: "SFSB - SFB" }) };
+const filters = JSON.parse(process.argv[4]);
+const report = { data, get_filter_values: () => filters };
 const out = {};
-const total = data.find((d) => d.label === "Net cash");
-out.union = cfs.accounts_of(data, total).sort();
-cfs.open_ledger(report, 3, "p1");
-out.route = { route: sandbox.routed, options: sandbox.frappe.route_options };
-cfs.open_ledger(report, 9, "total");
-out.alert = sandbox.alert || null;
+const open = (rid, col) => { sandbox.routed = null; sandbox.alert = null; sandbox.frappe.route_options = null; cfs.open_detail(report, rid, col);
+	return { route: sandbox.routed, options: sandbox.frappe.route_options, alert: sandbox.alert }; };
+out.line = open(2, "p1");
+out.account = open(3, "p0");
+out.total = open(4, "total");
+out.header = open(1, "p0");
 const passthrough = (v) => String(v);
 out.fmt = {
 	line: cfs.formatter(5, 0, { fieldname: "p0" }, data[1], passthrough),
 	negative: cfs.formatter(-5, 0, { fieldname: "p0" }, { ...data[1], p0: -5 }, passthrough),
-	header: cfs.formatter(5, 0, { fieldname: "p0" }, { is_header: 1, rid: 7 }, passthrough),
+	header: cfs.formatter(5, 0, { fieldname: "p0" }, data[0], passthrough),
 	difference_ok: cfs.formatter(0, 0, { fieldname: "p0" }, { is_difference: 1, p0: 0, rid: 8 }, passthrough),
 	difference_bad: cfs.formatter(3, 0, { fieldname: "p0" }, { is_difference: 1, p0: 3, rid: 8 }, passthrough),
-	label: cfs.formatter("Cash", 0, { fieldname: "label" }, { is_total: 1, rid: 4 }, passthrough),
+	label: cfs.formatter("Cash", 0, { fieldname: "label" }, { is_total: 1, rid: 4, drill_line: "T" }, passthrough),
+};
+out.detail = {
+	voucher: cfs.detail_formatter("x", 0, { fieldname: "label" }, { is_voucher: 1, voucher_type: "Sales Invoice", voucher_no: "SINV-1" }, passthrough),
+	negative: cfs.detail_formatter("-4", 0, { fieldname: "amount" }, { amount: -4 }, passthrough),
+	pooled: cfs.detail_formatter("rest", 0, { fieldname: "label" }, { is_pooled: 1 }, passthrough),
+	group: cfs.detail_formatter("Sales Invoice", 0, { fieldname: "label" }, { is_group: 1 }, passthrough),
+	statement: cfs.statement_route(filters),
+	ledger: cfs.ledger_route(filters, ["A", "B"]),
 };
 console.log(JSON.stringify(out));
 """
 
 JS_DATA = [
-	{"rid": 1, "label": "Header", "is_header": 1, "lines": [2, 3], "periods": {"p0": {"from_date": "2026-01-01", "to_date": "2026-01-31"}, "p1": {"from_date": "2026-02-01", "to_date": "2026-04-30"}}},
-	{"rid": 2, "label": "Line one", "is_line": 1, "accounts": ["A", "B"], "p0": 1},
-	{"rid": 3, "label": "Line two", "is_line": 1, "accounts": ["B", "C"], "p0": 2},
-	{"rid": 4, "label": "Net cash", "is_total": 1, "lines": [2, 3]},
-	{"rid": 9, "label": "Empty", "is_line": 1, "accounts": []},
+	{"rid": 1, "label": "A. Cash flows", "is_header": 1, "periods": {"p0": {"from_date": "2026-01-01", "to_date": "2026-01-31"}, "p1": {"from_date": "2026-02-01", "to_date": "2026-04-30"}, "total": {"from_date": "2026-01-01", "to_date": "2026-04-30"}}},
+	{"rid": 2, "label": "Change in accounts receivable", "is_line": 1, "accounts": ["A", "B"], "drill_line": "Change in accounts receivable", "p0": 1},
+	{"rid": 3, "label": "Customer One", "is_account": 1, "accounts": ["Customer One - SFB"], "drill_line": "Change in accounts receivable", "p0": 2},
+	{"rid": 4, "label": "Net cash from operating activities", "is_total": 1, "drill_line": "Net cash from operating activities"},
 ]
+
+JS_FILTERS = {"company": "Co", "from_date": "2026-01-01", "to_date": "2026-04-30", "method": "Indirect", "cost_center": "SFSB - SFB", "branch": ["SFSB"]}
 
 
 class TestTheDrillDown(FrappeTestCase):
-	def run_js(self):
+	def run_js(self, filters=None):
 		node = shutil.which("node")
 		if not node:
 			self.skipTest("node is not installed")
-		done = subprocess.run([node, "-e", JS_RUNNER, "x", os.path.join(ROOT, "public", "js", "cash_flow_statement.js"), json.dumps(JS_DATA)],
-			capture_output=True, text=True, encoding="utf-8", timeout=60)
+		done = subprocess.run([node, "-e", JS_RUNNER, "x", os.path.join(ROOT, "public", "js", "cash_flow_statement.js"), json.dumps(JS_DATA),
+			json.dumps(filters or JS_FILTERS)], capture_output=True, text=True, encoding="utf-8", timeout=60)
 		self.assertEqual(done.returncode, 0, done.stderr)
 		return json.loads(done.stdout)
 
-	def test_a_total_opens_the_accounts_of_all_its_lines_once(self):
-		self.assertEqual(self.run_js()["union"], ["A", "B", "C"])
+	def test_a_line_opens_the_detail_for_its_column_dates_and_every_filter_of_the_report(self):
+		out = self.run_js()["line"]
+		self.assertEqual(out["route"], ["query-report", "Cash Flow Statement Detail"])
+		options = out["options"]
+		self.assertEqual((options["company"], options["method"], options["line"]), ("Co", "Indirect", "Change in accounts receivable"))
+		self.assertEqual((options["from_date"], options["to_date"]), ("2026-02-01", "2026-04-30"), "the column clicked, not the whole report")
+		self.assertEqual((options["cost_center"], options["branch"]), ("SFSB - SFB", ["SFSB"]))
+		self.assertEqual(options["group_by"], "Voucher Type")
+		self.assertNotIn("account", options)
 
-	def test_a_figure_opens_the_ledger_for_its_accounts_company_dates_and_cost_centre(self):
-		out = self.run_js()
-		self.assertEqual(out["route"]["route"], ["query-report", "General Ledger"])
-		options = out["route"]["options"]
-		self.assertEqual(options["account"], ["B", "C"])
-		self.assertEqual((options["company"], options["from_date"], options["to_date"]), ("Co", "2026-02-01", "2026-04-30"))
-		self.assertEqual(options["cost_center"], ["SFSB - SFB"])
+	def test_an_account_row_opens_its_vouchers_for_that_account_only(self):
+		options = self.run_js()["account"]["options"]
+		self.assertEqual(options["account"], ["Customer One - SFB"])
+		self.assertEqual(options["group_by"], "Vouchers")
+		self.assertEqual(options["line"], "Change in accounts receivable", "the line gives the account its weight")
 
-	def test_a_figure_with_nothing_behind_it_says_so_instead_of_opening_an_empty_ledger(self):
-		self.assertIn("Nothing to open", self.run_js()["alert"]["message"])
+	def test_a_total_opens_the_whole_figure_for_the_whole_range(self):
+		options = self.run_js()["total"]["options"]
+		self.assertEqual(options["line"], "Net cash from operating activities")
+		self.assertEqual((options["from_date"], options["to_date"]), ("2026-01-01", "2026-04-30"))
+
+	def test_a_figure_with_no_line_behind_it_says_so_instead_of_opening_an_empty_report(self):
+		out = self.run_js()["header"]
+		self.assertIsNone(out["route"])
+		self.assertIn("Nothing to open", out["alert"]["message"])
+
+	def test_filters_that_are_not_set_are_not_sent(self):
+		options = self.run_js({"company": "Co", "from_date": "2026-01-01", "to_date": "2026-04-30", "method": "Direct", "branch": []})["line"]["options"]
+		self.assertNotIn("cost_center", options)
+		self.assertNotIn("branch", options)
 
 	def test_amounts_are_links_and_headers_and_a_clean_difference_are_not(self):
 		fmt = self.run_js()["fmt"]
@@ -607,3 +644,18 @@ class TestTheDrillDown(FrappeTestCase):
 		self.assertIn("#c62828", fmt["difference_bad"])
 		self.assertNotIn("sf-cfs-drill", fmt["difference_bad"])
 		self.assertEqual(fmt["label"], "<b>Cash</b>")
+
+	def test_in_the_detail_a_vouchers_number_opens_the_voucher(self):
+		detail = self.run_js()["detail"]
+		self.assertEqual(detail["voucher"], '<a href="/app/Sales Invoice/SINV-1">SINV-1</a>')
+		self.assertIn("#c62828", detail["negative"])
+		self.assertEqual(detail["pooled"], "<i>rest</i>")
+		self.assertEqual(detail["group"], "<b>Sales Invoice</b>")
+
+	def test_the_detail_leads_back_to_the_statement_and_on_to_the_general_ledger(self):
+		detail = self.run_js()["detail"]
+		self.assertEqual(detail["statement"], {"company": "Co", "from_date": "2026-01-01", "to_date": "2026-04-30", "method": "Indirect",
+			"cost_center": "SFSB - SFB", "branch": ["SFSB"]})
+		self.assertEqual(detail["ledger"]["account"], ["A", "B"])
+		self.assertEqual(detail["ledger"]["cost_center"], ["SFSB - SFB"])
+		self.assertEqual(detail["ledger"]["group_by"], "Group by Voucher (Consolidated)")

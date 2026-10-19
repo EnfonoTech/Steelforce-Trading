@@ -286,6 +286,39 @@ def display_lines(method):
 	return out
 
 
+GRAND_TITLE = "Net increase / (decrease) in cash and bank"
+
+
+def title_weights(method) -> dict:
+	"""{normalised title: {"title": ..., "weights": {line key: weight}}} for every line, group, section total and the
+	whole statement of a method, under its English title and the user's language. The weight of a line key is
+	what it counts for in that figure (the indirect statement adds a P&L line back, so its weight there can be -1,
+	and a total adds a key's weights up: every key weighs 1 in the whole statement). The detail report reads a
+	figure's vouchers by these weights, which is how its total equals the figure."""
+	out = {}
+
+	def add(title, lines):
+		weights = defaultdict(int)
+		for line in lines:
+			for key, mult in line["members"]:
+				weights[key] += mult
+		entry = {"title": title, "weights": {key: w for key, w in weights.items() if w}}
+		for name in {title, _(title)}:
+			out[name.strip().lower()] = entry
+
+	for section in SECTIONS[method]:
+		section_lines = []
+		for group in section.get("groups") or []:
+			add(group["label"], group["lines"])
+			section_lines += group["lines"]
+		section_lines += section.get("lines") or []
+		for line in section_lines:
+			add(line["label"], [line])
+		add(section["total"], section_lines)
+	add(GRAND_TITLE, display_lines(method))
+	return out
+
+
 # ─── which line is an account? ─────────────────────────────────────────────────────────────────
 
 
@@ -548,26 +581,26 @@ def statement_rows(model, method, rows: Rows, opening):
 			if group:
 				if not lines and not rows.show_zero and zero(group_vals):
 					continue
-				group_row = rows.add(_(group["label"]), group_vals, 1, bold=1, is_group=1, lines=[])
+				group_row = rows.add(_(group["label"]), group_vals, 1, bold=1, is_group=1, lines=[], drill_line=group["label"])
 				indent = 2
 			for line in lines:
 				vals = [display_amount(model, line, i) for i in range(n)]
-				line_row = rows.add(_(line["label"]), vals, indent, is_line=1, accounts=[])
+				line_row = rows.add(_(line["label"]), vals, indent, is_line=1, accounts=[], drill_line=line["label"])
 				accts = display_accounts(model, line)
 				line_row["accounts"] = sorted(a for a, v in accts.items() if not zero(v))
 				if group_row is not None:
 					group_row["lines"].append(line_row["rid"])
 				section_rids.append(line_row["rid"])
 				if rows.show_accounts != "None":
-					account_rows(rows, accts, indent + 1)
+					account_rows(rows, accts, indent + 1, line["label"])
 			for i in range(n):
 				section_total[i] += group_vals[i]
-		total_row = rows.add(_(section["total"]), section_total, 0, bold=1, is_total=1, lines=section_rids)
+		total_row = rows.add(_(section["total"]), section_total, 0, bold=1, is_total=1, lines=section_rids, drill_line=section["total"])
 		head["lines"] = section_rids
 		totals[section["key"]] = section_total
 		for i in range(n):
 			grand[i] += section_total[i]
-	rows.add(_("Net increase / (decrease) in cash and bank"), grand, 0, bold=1, is_total=1, lines=[r["rid"] for r in rows.data if r.get("is_line")])
+	rows.add(_(GRAND_TITLE), grand, 0, bold=1, is_total=1, lines=[r["rid"] for r in rows.data if r.get("is_line")], drill_line=GRAND_TITLE)
 	cash_begin, cash_end, cash_ledger = [], [], []
 	running = opening
 	for i in range(n):
@@ -587,17 +620,17 @@ def statement_rows(model, method, rows: Rows, opening):
 		"end_ledger": cash_ledger[-1] if cash_ledger else opening}
 
 
-def account_rows(rows: Rows, accts, indent):
+def account_rows(rows: Rows, accts, indent, line_title):
 	"""The accounts under a line, biggest first; with 'Top 15' the rest become one row that drills into them."""
 	live = [(a, v) for a, v in accts.items() if not zero(v)]
 	live.sort(key=lambda kv: (-sum(abs(x) for x in kv[1]), kv[0]))
 	shown, rest = (live, []) if rows.show_accounts == "All" else (live[:TOP_ACCOUNTS], live[TOP_ACCOUNTS:])
 	for account, vals in shown:
-		rows.add(account, vals, indent, is_account=1, accounts=[account])
+		rows.add(account, vals, indent, is_account=1, accounts=[account], drill_line=line_title)
 	if rest:
 		n = len(rows.periods)
 		pooled = [sum(v[i] for _a, v in rest) for i in range(n)]
-		rows.add(_("Other accounts (%s)") % len(rest), pooled, indent, is_account=1, accounts=sorted(a for a, _v in rest))
+		rows.add(_("Other accounts (%s)") % len(rest), pooled, indent, is_account=1, accounts=sorted(a for a, _v in rest), drill_line=line_title)
 
 
 # ─── the report ──────────────────────────────────────────────────────────────────────────────────
