@@ -64,6 +64,7 @@ class TestTheNightlyJob(FrappeTestCase):
 		query.run.return_value = list(names)
 		close = closer or MagicMock(return_value=True)
 		with patch.object(ticket, "auto_close_days", return_value=days), \
+				patch.object(ticket.frappe.db, "table_exists", return_value=True, create=True), \
 				patch.object(ticket, "due_query", return_value=query) as due, \
 				patch.object(ticket, "close_after_wait", close), \
 				patch.object(ticket.frappe.db, "commit", create=True) as commit, \
@@ -77,6 +78,12 @@ class TestTheNightlyJob(FrappeTestCase):
 		self.assertEqual(result, 2)
 		self.assertEqual([c.args for c in close.call_args_list], [("TKT-1", 5), ("TKT-2", 5)])
 		self.assertEqual(commit.call_count, 2)
+
+	def test_a_site_with_no_ticket_table_is_left_alone(self):
+		with patch.object(ticket, "auto_close_days", return_value=5), \
+				patch.object(ticket.frappe.db, "table_exists", return_value=False, create=True), \
+				patch.object(ticket, "due_query", side_effect=AssertionError("no table to read")):
+			self.assertEqual(ticket.close_resolved_tickets(), 0)
 
 	def test_switched_off_it_looks_at_nothing(self):
 		result, close, due, commit, _r, _l = self.run_job(days=0)
@@ -104,6 +111,7 @@ class TestTheNightlyJob(FrappeTestCase):
 		query = MagicMock()
 		query.run.return_value = []
 		with patch.object(ticket, "auto_close_days", return_value=5), patch.object(ticket, "now_datetime", return_value=NOW), \
+				patch.object(ticket.frappe.db, "table_exists", return_value=True, create=True), \
 				patch.object(ticket, "due_query", return_value=query) as due:
 			ticket.close_resolved_tickets()
 		self.assertEqual(due.call_args.args[0], NOW - timedelta(days=5))

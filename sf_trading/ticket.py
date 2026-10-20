@@ -602,7 +602,8 @@ def close_resolved_tickets():
 	came back is never closed on its first resolution's time. A ticket with no `resolved_on` (edited by
 	hand) counts from its last change. One failure is logged and the rest go on. Returns how many closed."""
 	days = auto_close_days()
-	if not days:
+	# a site that has not migrated the Ticket table (a sibling site on a shared bench) has nothing to close
+	if not days or not frappe.db.table_exists(DOCTYPE):
 		return 0
 	names = due_query(add_to_date(now_datetime(), days=-days)).run(pluck=True)
 
