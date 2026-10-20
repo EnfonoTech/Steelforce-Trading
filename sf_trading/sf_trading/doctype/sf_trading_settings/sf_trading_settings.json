@@ -307,14 +307,14 @@
   },
   {
    "default": "0",
-   "description": "When ticked, Purchase Receipt is closed to everyone: it cannot be opened, made or listed, and goods come in through the Purchase Invoice (Update Stock) instead. Only the roles and users below, and Administrator, still use it.",
+   "description": "When ticked, no new Purchase Receipt can be made and no existing one can be edited, submitted, cancelled or deleted, and goods come in through the Purchase Invoice (Update Stock) instead. Receipts already made stay visible everywhere (lists, links, a Purchase Order's connections, reports) and can still be billed from and costed by a Landed Cost Voucher. Only the roles and users below, and Administrator, are exempt.",
    "fieldname": "disable_purchase_receipt",
    "fieldtype": "Check",
    "label": "Disable Purchase Receipt (GRN)"
   },
   {
    "depends_on": "disable_purchase_receipt",
-   "description": "Roles or users who still see and use Purchase Receipt while it is disabled.",
+   "description": "Roles or users who may still make, change and cancel Purchase Receipts while it is disabled.",
    "fieldname": "purchase_receipt_bypass",
    "fieldtype": "Table",
    "label": "Allowed to Use Purchase Receipt",

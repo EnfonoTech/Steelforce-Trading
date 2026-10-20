@@ -156,6 +156,8 @@ doctype_js = {
 	],
 	"Purchase Receipt":   [
 		"public/js/purchase_tax_template.js",
+		# while GRN is disabled for this user the form is a viewer: no Submit / Cancel / Return buttons
+		"public/js/purchase_receipt_gate.js",
 		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
 		"public/js/document_trail.js",
 		# a Valuation charge names the expense entry that booked it
@@ -384,8 +386,6 @@ permission_query_conditions = {
 	"Ticket": "sf_trading.ticket.get_permission_query_conditions",
 	# a branch user sees the delivery people who serve one of their branches (the Branches table)
 	"Driver": "sf_trading.driver_branches.permission_query_conditions",
-	# GRN disabled in SF Trading Settings: only the bypass roster sees Purchase Receipt
-	"Purchase Receipt": "sf_trading.purchase_receipt_gate.permission_query_conditions",
 }
 
 has_permission = {
@@ -394,7 +394,8 @@ has_permission = {
 	"Purchase Receipt": "sf_trading.purchase_receipt_gate.has_permission",
 }
 
-# the desk drops Purchase Receipt for a user GRN is disabled for -- see purchase_receipt_gate.py
+# the desk drops Create / Cancel / Delete of Purchase Receipt for a user GRN is disabled for (reading stays
+# open) -- see purchase_receipt_gate.py
 boot_session = [
 	"sf_trading.purchase_receipt_gate.boot_session",
 	# which forms carry the Alternative Cost Center field, so the desk filters its picker on every one of them
