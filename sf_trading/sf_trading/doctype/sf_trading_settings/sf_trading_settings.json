@@ -244,12 +244,12 @@
    "fieldname": "small_import_section",
    "fieldtype": "Section Break",
    "label": "Small Imports",
-   "description": "A small import is let through without a Bayan document: an import Purchase Invoice whose total, in the company's currency, is below the amount set for its company needs no Landed Cost Voucher. A company with no row, or a row of 0, has no such allowance."
+   "description": "A small import is not asked for a Bayan number: an import Purchase Invoice whose total, in the company's currency, is below the amount set for its company. It still needs its Landed Cost Voucher. A company with no row, or a row of 0, has no such allowance."
   },
   {
    "fieldname": "small_import_limits",
    "fieldtype": "Table",
-   "label": "Imports Below This Amount Need No Voucher or Bayan, by Company",
+   "label": "Imports Below This Amount Need No Bayan Number, by Company",
    "options": "SF Small Import Limit"
   },
   {

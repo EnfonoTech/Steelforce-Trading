@@ -96,8 +96,8 @@ def get_data(filters):
 	imports = []
 	for i in invoices:
 		as_doc = frappe._dict(i, doctype=lcv.INVOICE, update_stock=1, is_return=0)
-		# an import marked as carrying no landed cost, or one below its company's small-import amount, is no gap
-		if lcv.is_import(as_doc) and not cint(i.get(lcv.ESCAPE_FIELD)) and not lcv.is_small_import(as_doc):
+		# an import marked as carrying no landed cost is no gap (a small import is: only its Bayan number is waived)
+		if lcv.is_import(as_doc) and not cint(i.get(lcv.ESCAPE_FIELD)):
 			imports.append(i)
 	vouchers = _vouchers_by_invoice([i.name for i in imports])
 	rows = []

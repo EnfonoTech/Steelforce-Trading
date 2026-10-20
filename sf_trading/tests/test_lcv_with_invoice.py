@@ -163,17 +163,18 @@ class TestWhatIsAnImport(FrappeTestCase):
 
 
 class TestSmallImports(FrappeTestCase):
-	"""An import below its company's allowance needs no voucher (SF Trading Settings > Small Imports)."""
+	"""An import below its company's allowance needs no Bayan number, and nothing else is waived: it still carries
+	its voucher (SF Trading Settings > Small Imports)."""
 
 	def sent(self, **values):
 		return invoice(workflow_state="Pending", _before=Doc(update_stock=1, workflow_state="Draft"), **values)
 
-	def test_an_import_below_the_limit_is_small_and_needs_no_voucher(self):
+	def test_an_import_below_the_limit_is_small_but_still_needs_its_voucher(self):
 		with Seams(limit=150.0):
 			doc = invoice(base_grand_total=149.999)
 			self.assertTrue(lcv.is_import(doc))
 			self.assertTrue(lcv.is_small_import(doc))
-			self.assertFalse(lcv.must_have_voucher(doc))
+			self.assertTrue(lcv.must_have_voucher(doc))
 
 	def test_an_import_at_or_above_the_limit_still_needs_one(self):
 		with Seams(limit=150.0):
@@ -202,26 +203,29 @@ class TestSmallImports(FrappeTestCase):
 		with Seams(limit=150.0, currency="BHD"):
 			self.assertFalse(lcv.is_small_import(invoice(currency="BHD", base_grand_total=10.0)))
 
-	def test_a_small_import_with_a_bayan_number_is_still_small(self):
+	def test_a_small_import_with_a_bayan_number_is_still_small_and_still_needs_a_voucher(self):
 		with Seams(limit=150.0, currency="BHD"):
 			doc = invoice(currency="BHD", custom_bayan_value="202623014102935", base_grand_total=40.0)
 			self.assertTrue(lcv.is_import(doc))
 			self.assertTrue(lcv.is_small_import(doc))
-			self.assertFalse(lcv.must_have_voucher(doc))
+			self.assertTrue(lcv.must_have_voucher(doc))
 
-	def test_a_small_import_goes_for_approval_with_no_voucher(self):
+	def test_a_small_import_with_no_voucher_is_stopped_like_any_other(self):
 		with Seams(drafts=[], limit=150.0):
-			lcv.validate_invoice(self.sent(base_grand_total=80.0))
+			refused(self, lcv.validate_invoice, self.sent(base_grand_total=80.0), text="needs a Landed Cost Voucher")
 
 	def test_a_big_import_with_no_voucher_is_still_stopped(self):
 		with Seams(drafts=[], limit=150.0):
 			refused(self, lcv.validate_invoice, self.sent(base_grand_total=500.0), text="needs a Landed Cost Voucher")
 
-	def test_a_small_import_is_submitted_without_one(self):
-		with Seams(drafts=[], limit=150.0):
-			lcv.require_voucher_at_submit(invoice(base_grand_total=80.0))
-		with Seams(drafts=[], limit=150.0):
-			refused(self, lcv.require_voucher_at_submit, invoice(base_grand_total=500.0), text="needs a Landed Cost Voucher")
+	def test_a_small_import_is_not_submitted_without_one_either(self):
+		for total in (80.0, 500.0):
+			with Seams(drafts=[], limit=150.0):
+				refused(self, lcv.require_voucher_at_submit, invoice(base_grand_total=total), text="needs a Landed Cost Voucher")
+
+	def test_a_small_import_with_its_voucher_goes_for_approval(self):
+		with Seams(drafts=[draft()], limit=150.0):
+			lcv.validate_invoice(self.sent(base_grand_total=80.0))
 
 	def test_a_voucher_on_a_small_import_is_still_checked(self):
 		with Seams(drafts=[draft()], problems=["it carries no charges"], limit=150.0):
@@ -252,8 +256,122 @@ class TestSmallImports(FrappeTestCase):
 			status = lcv.invoice_status("PINV-1")
 		self.assertTrue(status["is_import"])
 		self.assertTrue(status["small_import"])
-		self.assertFalse(status["required"])
+		self.assertTrue(status["required"])  # the voucher is still needed
 		self.assertEqual(status["small_limit"], 150.0)
+
+
+class TestTheBayanRule(FrappeTestCase):
+	"""What the Purchase Invoice form is told so it can decide whether a Bayan number is asked."""
+
+	def test_the_form_gets_the_company_currency_and_its_small_import_amount(self):
+		with Seams(currency="BHD", limit=150.0), patch.object(lcv.frappe, "has_permission", MagicMock(return_value=True), create=True):
+			self.assertEqual(lcv.bayan_rule("Steel Force Trading WLL"), {"company_currency": "BHD", "small_limit": 150.0})
+
+	def test_a_company_with_no_allowance_is_told_zero(self):
+		with Seams(currency="BHD", limit=0.0), patch.object(lcv.frappe, "has_permission", MagicMock(return_value=True), create=True):
+			self.assertEqual(lcv.bayan_rule("No Row Co")["small_limit"], 0.0)
+
+	def test_no_company_gets_an_empty_answer_without_a_lookup(self):
+		with Seams(), patch.object(lcv.frappe, "has_permission", MagicMock(return_value=True), create=True):
+			self.assertEqual(lcv.bayan_rule(""), {"company_currency": None, "small_limit": 0.0})
+
+	def test_it_asks_for_read_permission_on_the_invoice(self):
+		has = MagicMock(return_value=True)
+		with Seams(), patch.object(lcv.frappe, "has_permission", has, create=True):
+			lcv.bayan_rule("Steel Force Trading WLL")
+		has.assert_called_once_with("Purchase Invoice", "read", throw=True)
+
+	def test_it_is_whitelisted(self):
+		tree = ast.parse(read("landed_cost_with_invoice.py"))
+		fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "bayan_rule")
+		self.assertTrue(any("whitelist" in ast.dump(d) for d in fn.decorator_list))
+
+
+#: the Client Script as it stands on steelforce, tabs and all, trailing spaces included
+SITE_SCRIPT = """frappe.ui.form.on('Purchase Invoice', {
+    
+	refresh(frm) {
+	    toggle_bayan(frm);	
+},
+    currency(frm) {
+	    toggle_bayan(frm);	
+
+}
+
+});
+
+function toggle_bayan(frm){
+    
+    if(!frm.doc.company || !frm.doc.currency) return;
+    
+    frappe.db.get_value('Company', frm.doc.company, 'default_currency')
+    
+    .then (r=> {
+        
+        if(frm.doc.currency != r.message.default_currency){
+            
+            frm.toggle_display('custom_bayan_value',true);
+            frm.toggle_reqd('custom_bayan_value',true);
+            
+        }else{
+            
+            frm.toggle_display('custom_bayan_value',false);
+            frm.toggle_reqd('custom_bayan_value',false);
+            
+        }
+            
+        
+    });
+    
+}
+"""
+
+
+class TestTheOldBayanScriptIsRetired(FrappeTestCase):
+	"""Two scripts toggling one field would race, so the site's old one is switched off -- and only that one."""
+
+	def run_patch(self, scripts):
+		rows = [frappe._dict(name=n, script=t) for n, t in scripts]
+		set_value, clear = MagicMock(), MagicMock()
+		with patch.object(lcv.frappe.db, "get_all", MagicMock(return_value=rows), create=True), \
+				patch.object(lcv.frappe.db, "set_value", set_value, create=True), \
+				patch.object(lcv.frappe, "clear_cache", clear, create=True), \
+				patch.object(lcv.frappe, "logger", MagicMock(), create=True):
+			return lcv.retire_site_bayan_script(), set_value, clear
+
+	def test_the_exact_site_script_is_switched_off_not_deleted(self):
+		changed, set_value, clear = self.run_patch([("Bayan Field  Validation", SITE_SCRIPT)])
+		self.assertTrue(changed)
+		set_value.assert_called_once_with("Client Script", "Bayan Field  Validation", "enabled", 0)
+		clear.assert_called_once_with(doctype="Purchase Invoice")
+
+	def test_only_enabled_scripts_of_the_invoice_are_looked_at(self):
+		with patch.object(lcv.frappe.db, "get_all", MagicMock(return_value=[]), create=True) as get_all, \
+				patch.object(lcv.frappe, "clear_cache", MagicMock(), create=True):
+			lcv.retire_site_bayan_script()
+		self.assertEqual(get_all.call_args.kwargs["filters"], {"dt": "Purchase Invoice", "enabled": 1})
+
+	def test_a_script_someone_changed_is_left_on(self):
+		edited = SITE_SCRIPT.replace("toggle_reqd('custom_bayan_value',true)", "toggle_reqd('custom_bayan_value',true); extra()")
+		changed, set_value, clear = self.run_patch([("Bayan Field  Validation", edited)])
+		self.assertFalse(changed)
+		set_value.assert_not_called()
+		clear.assert_not_called()
+
+	def test_a_script_that_does_not_touch_bayan_is_never_touched(self):
+		changed, set_value, _ = self.run_patch([("Something Else", "frappe.ui.form.on('Purchase Invoice', {refresh(frm) {}});")])
+		self.assertFalse(changed)
+		set_value.assert_not_called()
+
+	def test_a_second_run_finds_nothing_to_do(self):
+		# once switched off the script is no longer in the enabled list
+		changed, set_value, _ = self.run_patch([])
+		self.assertFalse(changed)
+		set_value.assert_not_called()
+
+	def test_the_patch_is_registered_and_calls_the_function(self):
+		self.assertIn("sf_trading.patches.v0_1.bayan_follows_small_import", read("patches.txt"))
+		self.assertIn("retire_site_bayan_script", read("patches", "v0_1", "bayan_follows_small_import.py"))
 
 
 class TestDoesTheVoucherMatch(FrappeTestCase):
@@ -808,11 +926,19 @@ class TestWhatTheSystemShips(FrappeTestCase):
 		self.assertEqual((cols["limit_amount"]["fieldtype"], cols["limit_amount"]["options"]), ("Currency", "currency"))
 		self.assertEqual(cols["currency"]["fetch_from"], "company.default_currency")
 
-	def test_the_form_and_the_report_honour_small_imports(self):
-		self.assertIn("status.small_import", read("public", "js", "purchase_invoice_lcv.js"))
+	def test_the_form_waives_only_the_bayan_number_for_a_small_import(self):
+		js = read("public", "js", "purchase_invoice_lcv.js")
+		self.assertIn("status.small_import", js)  # the blue note
+		self.assertIn("sf_trading.landed_cost_with_invoice.bayan_rule", js)
+		self.assertIn('frm.toggle_reqd("custom_bayan_value", foreign && !small)', js)
+		# the red "no voucher" alert on a submitted import no longer lets small imports off
+		self.assertNotIn("!status.small_import", js)
+		for handler in ("currency: sf_bayan_refresh", "company: sf_bayan_refresh", "base_grand_total: sf_bayan_apply", "validate: sf_bayan_apply"):
+			self.assertIn(handler, js)
+
+	def test_the_report_no_longer_leaves_small_imports_out(self):
 		report = read("sf_trading", "report", "import_purchases_without_lcv", "import_purchases_without_lcv.py")
-		self.assertIn("is_small_import", report)
-		self.assertIn('"base_grand_total"', report)
+		self.assertNotIn("is_small_import", report)
 
 	def test_the_settings_refuse_a_company_twice_and_a_negative_amount(self):
 		tree = ast.parse(read("sf_trading", "doctype", "sf_trading_settings", "sf_trading_settings.py"))
