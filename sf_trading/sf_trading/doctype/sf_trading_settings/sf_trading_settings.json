@@ -46,6 +46,8 @@
   "purchase_receipt_section",
   "disable_purchase_receipt",
   "purchase_receipt_bypass",
+  "tickets_section",
+  "ticket_auto_close_days",
   "report_speed_section",
   "fast_financial_statements",
   "asset_tracking_section",
@@ -319,6 +321,19 @@
    "fieldtype": "Table",
    "label": "Allowed to Use Purchase Receipt",
    "options": "SF Override Entry"
+  },
+  {
+   "fieldname": "tickets_section",
+   "fieldtype": "Section Break",
+   "label": "Support Tickets"
+  },
+  {
+   "fieldname": "ticket_auto_close_days",
+   "fieldtype": "Int",
+   "label": "Close a Resolved Ticket After (Days)",
+   "default": "5",
+   "non_negative": 1,
+   "description": "A ticket that stays Resolved this many days without being reopened closes by itself, every night. 0 switches it off. Its reporter can still reopen it once it is closed."
   },
   {
    "fieldname": "report_speed_section",
