@@ -1,0 +1,95 @@
+{
+ "actions": [],
+ "creation": "2026-10-21 14:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "company",
+  "currency",
+  "enforce",
+  "local_quotation_above",
+  "local_min_quotations",
+  "import_min_quotations",
+  "verbal_skips_quotations"
+ ],
+ "fields": [
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1,
+   "columns": 3
+  },
+  {
+   "fetch_from": "company.default_currency",
+   "fieldname": "currency",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Currency",
+   "options": "Currency",
+   "read_only": 1,
+   "columns": 1
+  },
+  {
+   "default": "1",
+   "fieldname": "enforce",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Enforce",
+   "columns": 1,
+   "description": "Untick to keep the row but stop holding this company's Purchase Orders to the rules."
+  },
+  {
+   "default": "500",
+   "fieldname": "local_quotation_above",
+   "fieldtype": "Currency",
+   "in_list_view": 1,
+   "label": "Local Needs Quotations Above",
+   "options": "currency",
+   "columns": 2,
+   "description": "In the company's currency. A Purchase Order in the company's own currency whose Grand Total is above this amount needs the quotations below; one at or under it needs none."
+  },
+  {
+   "default": "3",
+   "fieldname": "local_min_quotations",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Local Quotations",
+   "columns": 1,
+   "description": "Different suppliers that quoted for the same item on the same Request for Quotation, the chosen one included."
+  },
+  {
+   "default": "2",
+   "fieldname": "import_min_quotations",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Import Quotations",
+   "columns": 1,
+   "description": "An import is a Purchase Order in a foreign currency. It needs this many quotations whatever the amount."
+  },
+  {
+   "default": "1",
+   "fieldname": "verbal_skips_quotations",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "Verbal Needs No Quotations",
+   "columns": 1,
+   "description": "A Purchase Order marked Verbal (No Quotation) needs no quotations, only its Material Request. Unticked, Verbal is only a label: the quotations are still demanded."
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-21 14:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "SF Purchase Order Rule",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

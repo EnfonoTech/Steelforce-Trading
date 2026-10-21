@@ -29,15 +29,16 @@ class SFTradingSettings(Document):
 		self.validate_cash_flow_account_map()
 
 	def validate_po_procurement_rules(self):
-		"""A rule that asks for fewer than one quotation, or above a negative amount, would never bite."""
-		if not cint(self.enforce_po_procurement):
-			return
-		if flt(self.po_local_quotation_above) < 0:
-			frappe.throw(_("Quotations for a local purchase cannot start above a negative amount."))
-		if cint(self.po_local_min_quotations) < 1:
-			frappe.throw(_("Quotations Needed for a Local Purchase must be at least 1."))
-		if cint(self.po_import_min_quotations) < 1:
-			frappe.throw(_("Quotations Needed for an Import must be at least 1."))
+		"""One row per company; a row that is enforced must ask for at least one quotation, above a non-negative amount."""
+		seen = set()
+		for row in self.get("purchase_order_rules") or []:
+			if row.company in seen:
+				frappe.throw(_("Row %s: %s is already listed under Purchase Order Rules.") % (row.idx, row.company))
+			seen.add(row.company)
+			if flt(row.local_quotation_above) < 0:
+				frappe.throw(_("Row %s: quotations for a local purchase cannot start above a negative amount.") % row.idx)
+			if cint(row.enforce) and (cint(row.local_min_quotations) < 1 or cint(row.import_min_quotations) < 1):
+				frappe.throw(_("Row %s: an enforced rule needs at least 1 quotation for a local purchase and for an import.") % row.idx)
 
 	def validate_small_import_limits(self):
 		"""One row per company, none negative: the allowance for small imports is read by company."""

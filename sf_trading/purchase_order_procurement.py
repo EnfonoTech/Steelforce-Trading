@@ -2,17 +2,20 @@
 """Purchase Order procurement rules: a Material Request behind every line, and enough competing quotations.
 
 A Purchase Order is meant to be the end of a chain: a Purchase Material Request, a Request for Quotation sent to
-several suppliers, their Supplier Quotations, and the order made from the winning quotation. With
-SF Trading Settings > Purchase Order Procurement Rules > Enforce ticked, an order that skips the chain cannot be
-saved or submitted:
+several suppliers, their Supplier Quotations, and the order made from the winning quotation. For a company with a row
+(Enforce ticked) in SF Trading Settings > Purchasing > Purchase Order Rules, an order that skips the chain cannot be saved
+or submitted:
 
   * every line comes from a submitted Material Request of type Purchase;
-  * unless the order is a verbal one (`custom_verbal`, and only while the settings let a verbal order skip them),
+  * unless the order is a verbal one (`custom_verbal`, and only while the company's row lets a verbal order skip them),
     every line also comes from a submitted Supplier Quotation of THIS supplier that was raised from a Request for
     Quotation, and that many different suppliers quoted the same item on that same Request for Quotation, the chosen
-    one included: an import (an order in a foreign currency) needs `po_import_min_quotations` whatever the amount, a
-    local one (in the company's own currency) needs `po_local_min_quotations` once its Grand Total is above
-    `po_local_quotation_above`, and none at or under it.
+    one included: an import (an order in a foreign currency) needs the row's `import_min_quotations` whatever the
+    amount, a local one (in the company's own currency) needs `local_min_quotations` once its Grand Total is above
+    `local_quotation_above`, and none at or under it.
+
+Each company has its own row, so each has its own amount, its own numbers and its own verbal switch. A company with no
+row, or a row with Enforce unticked, is not held to the rules at all.
 
 The chain is read from the links core writes on each line (`material_request`, `supplier_quotation`,
 `supplier_quotation_item`, and on the quotation line `request_for_quotation`). Core marks the first three no_copy, so a
@@ -22,8 +25,8 @@ passes for as long as its lines keep their links.
 
 An order to an internal (inter-company) supplier is not a purchase from the market and is not held to the rules.
 
-Off until ticked, and every value is read from the stored settings rows (a switch nobody has saved is off, a number
-nobody has saved is its default), so a pull before `bench migrate` cannot break a Purchase Order save.
+The row is read straight from its table, and a site that has not migrated the table yet reads as "no row", so a pull
+before `bench migrate` cannot break a Purchase Order save.
 """
 
 from __future__ import annotations
@@ -34,17 +37,15 @@ from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 from frappe.utils import cint, cstr, escape_html, flt, fmt_money
 
 SETTINGS = "SF Trading Settings"
+RULE_TABLE = "SF Purchase Order Rule"
+RULE_FIELD = "purchase_order_rules"
 VERBAL = "custom_verbal"
 VERBAL_COMMENT = "custom_verbal_comment"
 
-#: setting -> value while nobody has stored one
-DEFAULTS = {
-	"enforce_po_procurement": 0,
-	"po_local_quotation_above": 500,
-	"po_local_min_quotations": 3,
-	"po_import_min_quotations": 2,
-	"po_verbal_skips_quotations": 1,
-}
+#: what a new row of the table starts with (its field defaults), and what a message shows for a company with no row
+DEFAULT_ABOVE = 500.0
+DEFAULT_LOCAL_MIN = 3
+DEFAULT_IMPORT_MIN = 2
 
 
 def ensure_custom_fields():
@@ -77,33 +78,36 @@ def ensure_custom_fields():
 	)
 
 
-# ── The settings ────────────────────────────────────────────────────────────────────────────────────────────
+# ── The company's rules ─────────────────────────────────────────────────────────────────────────────────────
 
 
-def rules() -> frappe._dict:
-	"""The five settings, read from the stored rows: `get_single_value` casts a Check nobody saved to 0 and raises for a
-	field the site has not migrated in yet, and a Purchase Order save must survive both."""
-	stored = {}
-	try:
-		stored = dict(
-			frappe.db.sql(
-				"SELECT `field`, `value` FROM `tabSingles` WHERE `doctype` = %s AND `field` IN %s",
-				(SETTINGS, tuple(DEFAULTS)),
+def rules(company) -> frappe._dict:
+	"""This company's row of SF Trading Settings > Purchase Order Rules. No row, a row with Enforce unticked, or a site that
+	has not migrated the table yet: not enforced."""
+	row = None
+	if company:
+		try:
+			rows = frappe.db.sql(
+				"SELECT `enforce`, `local_quotation_above`, `local_min_quotations`, `import_min_quotations`, "
+				"`verbal_skips_quotations` FROM `tabSF Purchase Order Rule` "
+				"WHERE `parent` = %s AND `parenttype` = %s AND `parentfield` = %s AND `company` = %s "
+				"ORDER BY `idx` LIMIT 1",
+				(SETTINGS, SETTINGS, RULE_FIELD, company),
+				as_dict=True,
 			)
+			row = rows[0] if rows else None
+		except Exception:
+			row = None
+	if not row:
+		return frappe._dict(
+			enforce=False, above=DEFAULT_ABOVE, local_min=DEFAULT_LOCAL_MIN, import_min=DEFAULT_IMPORT_MIN, verbal_skips=True
 		)
-	except Exception:
-		pass
-
-	def raw(name):
-		value = stored.get(name)
-		return DEFAULTS[name] if value in (None, "") else value
-
 	return frappe._dict(
-		enforce=bool(cint(raw("enforce_po_procurement"))),
-		above=flt(raw("po_local_quotation_above")),
-		local_min=cint(raw("po_local_min_quotations")),
-		import_min=cint(raw("po_import_min_quotations")),
-		verbal_skips=bool(cint(raw("po_verbal_skips_quotations"))),
+		enforce=bool(cint(row.enforce)),
+		above=flt(row.local_quotation_above),
+		local_min=cint(row.local_min_quotations),
+		import_min=cint(row.import_min_quotations),
+		verbal_skips=bool(cint(row.verbal_skips_quotations)),
 	)
 
 
@@ -302,7 +306,7 @@ def quotation_problems(doc, lines, needed) -> list:
 def problems_for(doc, rule=None) -> list:
 	"""Everything that keeps this order from being saved, as sentences; empty when it meets the rules or they are
 	off."""
-	rule = rule or rules()
+	rule = rule or rules(doc.get("company"))
 	if not rule.enforce or is_exempt(doc):
 		return []
 	lines = lines_of(doc)
@@ -329,7 +333,7 @@ def _rule_sentence(doc, rule) -> str:
 def validate(doc, _method=None):
 	"""Purchase Order validate (on save and on submit): refuse an order that skips the Material Request ->
 	Request for Quotation -> Supplier Quotation chain."""
-	rule = rules()
+	rule = rules(doc.get("company"))
 	problems = problems_for(doc, rule)
 	if not problems:
 		return

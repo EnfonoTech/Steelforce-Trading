@@ -11,6 +11,7 @@ import importlib
 import json
 import os
 import unittest
+from types import MappingProxyType
 from unittest.mock import MagicMock, patch
 
 import frappe
@@ -103,52 +104,93 @@ class World:
 			patcher.stop()
 
 
-class TestSettings(unittest.TestCase):
-	def _read(self, rows=None, error=None):
+class TestCompanyRules(unittest.TestCase):
+	"""Each company has its own row of SF Trading Settings > Purchase Order Rules."""
+
+	def _read(self, rows=None, error=None, company="Test Trading WLL"):
 		db = MagicMock()
 		if error:
 			db.sql.side_effect = error
 		else:
-			db.sql.return_value = rows or ()
+			db.sql.return_value = rows or []
 		with patch.object(frappe, "db", db):
-			return pop.rules()
+			return pop.rules(company), db
 
-	def test_nothing_stored_is_off_with_the_defaults(self):
-		rule = self._read()
-		self.assertFalse(rule.enforce)
-		self.assertEqual((rule.above, rule.local_min, rule.import_min, rule.verbal_skips), (500.0, 3, 2, True))
-
-	def test_stored_values_are_read(self):
-		rule = self._read(
-			(
-				("enforce_po_procurement", "1"),
-				("po_local_quotation_above", "750.5"),
-				("po_local_min_quotations", "4"),
-				("po_import_min_quotations", "3"),
-				("po_verbal_skips_quotations", "0"),
-			)
+	def _row(self, **overrides):
+		row = frappe._dict(
+			enforce=1, local_quotation_above=750.5, local_min_quotations=4, import_min_quotations=3, verbal_skips_quotations=0
 		)
+		row.update(overrides)
+		return row
+
+	def test_a_company_with_no_row_is_not_enforced(self):
+		rule, _db = self._read([])
+		self.assertFalse(rule.enforce)
+
+	def test_the_companys_row_is_read(self):
+		rule, _db = self._read([self._row()])
 		self.assertTrue(rule.enforce)
 		self.assertEqual((rule.above, rule.local_min, rule.import_min, rule.verbal_skips), (750.5, 4, 3, False))
 
-	def test_an_unticked_switch_is_off_and_a_blank_number_is_its_default(self):
-		rule = self._read((("enforce_po_procurement", "0"), ("po_local_min_quotations", "")))
+	def test_a_row_with_enforce_unticked_is_not_enforced(self):
+		rule, _db = self._read([self._row(enforce=0)])
 		self.assertFalse(rule.enforce)
-		self.assertEqual(rule.local_min, 3)
 
-	def test_a_settings_read_that_fails_never_blocks_a_save(self):
-		self.assertFalse(self._read(error=Exception("Unknown column")).enforce)
+	def test_each_company_has_its_own_numbers(self):
+		rows = {"Alpha": self._row(local_min_quotations=3), "Beta": self._row(local_min_quotations=2, local_quotation_above=100)}
+		db = MagicMock()
+		db.sql.side_effect = lambda sql, values, **kw: [rows[values[3]]] if values[3] in rows else []
+		with patch.object(frappe, "db", db):
+			alpha, beta, gamma = pop.rules("Alpha"), pop.rules("Beta"), pop.rules("Gamma")
+		self.assertEqual((alpha.local_min, alpha.above), (3, 750.5))
+		self.assertEqual((beta.local_min, beta.above), (2, 100))
+		self.assertFalse(gamma.enforce)
+
+	def test_the_row_is_looked_up_by_company_in_the_settings_table(self):
+		_rule, db = self._read([], company="Alpha")
+		sql, values = db.sql.call_args[0][:2]
+		self.assertIn("`tabSF Purchase Order Rule`", sql)
+		self.assertEqual(values, ("SF Trading Settings", "SF Trading Settings", "purchase_order_rules", "Alpha"))
+
+	def test_a_document_with_no_company_asks_nothing(self):
+		rule, db = self._read([self._row()], company=None)
+		self.assertFalse(rule.enforce)
+		db.sql.assert_not_called()
+
+	def test_a_site_that_has_not_migrated_the_table_never_blocks_a_save(self):
+		rule, _db = self._read(error=Exception("Table 'tabSF Purchase Order Rule' doesn't exist"))
+		self.assertFalse(rule.enforce)
+
+	def test_the_order_is_held_to_its_own_companys_row(self):
+		doc = order([line(1, mr="", sq="")], company="Alpha")
+		with World(), patch.object(pop, "rules", side_effect=lambda company: settings(enforce=(company == "Alpha"))):
+			self.assertEqual(len(pop.problems_for(doc)), 2)
+			self.assertEqual(pop.problems_for(order([line(1, mr="", sq="")], company="Beta")), [])
 
 	def test_the_settings_form_refuses_a_rule_that_could_never_bite(self):
 		from sf_trading.sf_trading.doctype.sf_trading_settings.sf_trading_settings import SFTradingSettings
 
+		def form(*rows):
+			return frappe._dict(purchase_order_rules=list(rows))
+
+		def row(idx, company="Alpha", **kw):
+			values = dict(idx=idx, company=company, enforce=1, local_quotation_above=500, local_min_quotations=3, import_min_quotations=2)
+			values.update(kw)
+			return frappe._dict(values)
+
 		check = SFTradingSettings.validate_po_procurement_rules
-		check(frappe._dict(enforce_po_procurement=0, po_local_min_quotations=0, po_import_min_quotations=0, po_local_quotation_above=-5))
-		ok = dict(enforce_po_procurement=1, po_local_min_quotations=3, po_import_min_quotations=2, po_local_quotation_above=500)
-		check(frappe._dict(ok))
-		for bad in ({"po_local_min_quotations": 0}, {"po_import_min_quotations": 0}, {"po_local_quotation_above": -1}):
+		check(form())
+		check(form(row(1, "Alpha"), row(2, "Beta")))
+		check(form(row(1, enforce=0, local_min_quotations=0, import_min_quotations=0)))  # not enforced: nothing to ask of it
+		for bad in (
+			(row(1, "Alpha"), row(2, "Alpha")),
+			(row(1, local_min_quotations=0),),
+			(row(1, import_min_quotations=0),),
+			(row(1, local_quotation_above=-1),),
+			(row(1, enforce=0, local_quotation_above=-1),),
+		):
 			with self.assertRaises(frappe.ValidationError, msg=str(bad)):
-				check(frappe._dict({**ok, **bad}))
+				check(form(*bad))
 
 
 class TestHowManyQuotations(unittest.TestCase):
@@ -434,56 +476,123 @@ class TestWiring(unittest.TestCase):
 		self.assertEqual(fields["custom_verbal"]["label"], "Verbal (No Quotation)")
 		self.assertEqual(fields["custom_verbal_comment"]["mandatory_depends_on"], "eval:doc.custom_verbal")
 
-	def test_the_settings_doctype_carries_the_five_fields_with_their_defaults(self):
-		path = os.path.join(
-			os.path.dirname(__file__), "..", "sf_trading", "doctype", "sf_trading_settings", "sf_trading_settings.json"
-		)
-		meta = json.load(open(path))
+	def _doctype(self, *parts):
+		path = os.path.join(os.path.dirname(__file__), "..", "sf_trading", "doctype", *parts)
+		return json.load(open(path))
+
+	def test_the_rule_row_carries_the_numbers_with_their_defaults(self):
+		meta = self._doctype("sf_purchase_order_rule", "sf_purchase_order_rule.json")
+		self.assertEqual(meta["name"], pop.RULE_TABLE)
+		self.assertEqual(meta["istable"], 1)
 		fields = {f["fieldname"]: f for f in meta["fields"]}
-		for name, default in (
-			("enforce_po_procurement", "0"),
-			("po_local_quotation_above", "500"),
-			("po_local_min_quotations", "3"),
-			("po_import_min_quotations", "2"),
-			("po_verbal_skips_quotations", "1"),
-		):
-			self.assertIn(name, meta["field_order"], name)
-			self.assertEqual(fields[name]["default"], default, name)
-		# the code's fallbacks are the form's defaults
-		self.assertEqual({k: str(v) for k, v in pop.DEFAULTS.items()}, {k: fields[k]["default"] for k in pop.DEFAULTS})
+		self.assertEqual(
+			{name: fields[name].get("default") for name in ("enforce", "local_quotation_above", "local_min_quotations", "import_min_quotations", "verbal_skips_quotations")},
+			{"enforce": "1", "local_quotation_above": "500", "local_min_quotations": "3", "import_min_quotations": "2", "verbal_skips_quotations": "1"},
+		)
+		self.assertEqual(fields["company"]["reqd"], 1)
+		self.assertEqual(fields["local_quotation_above"]["options"], "currency")
+		self.assertEqual(fields["currency"]["fetch_from"], "company.default_currency")
+		# the code's fallbacks are the row's defaults
+		self.assertEqual((pop.DEFAULT_ABOVE, pop.DEFAULT_LOCAL_MIN, pop.DEFAULT_IMPORT_MIN), (500.0, 3, 2))
+		# every column the rule reads from the table exists on it
+		for column in ("enforce", "local_quotation_above", "local_min_quotations", "import_min_quotations", "verbal_skips_quotations", "company"):
+			self.assertIn(column, fields)
+
+	def test_the_settings_page_holds_the_table_and_no_longer_the_five_global_fields(self):
+		meta = self._doctype("sf_trading_settings", "sf_trading_settings.json")
+		fields = {f["fieldname"]: f for f in meta["fields"]}
+		self.assertEqual(fields["purchase_order_rules"]["fieldtype"], "Table")
+		self.assertEqual(fields["purchase_order_rules"]["options"], pop.RULE_TABLE)
+		self.assertEqual(pop.RULE_FIELD, "purchase_order_rules")
+		for gone in ("enforce_po_procurement", "po_local_quotation_above", "po_local_min_quotations", "po_import_min_quotations", "po_verbal_skips_quotations"):
+			self.assertNotIn(gone, fields)
+
+	def test_the_settings_page_is_in_tabs_and_nothing_is_lost(self):
+		meta = self._doctype("sf_trading_settings", "sf_trading_settings.json")
+		fields = {f["fieldname"]: f for f in meta["fields"]}
+		order = meta["field_order"]
+		self.assertEqual(len(order), len(set(order)), "a field is placed twice")
+		self.assertEqual(set(order), set(fields), "a field is defined but not placed, or placed but not defined")
+		self.assertEqual(fields[order[0]]["fieldtype"], "Tab Break", "the first field must open a tab")
+		tabs = [fields[n]["label"] for n in order if fields[n]["fieldtype"] == "Tab Break"]
+		self.assertEqual(tabs, ["Sales", "Purchasing", "Masters and Documents", "Accounting and Reports", "Support"])
+		# every section sits under a tab, and the purchase rules sit under Purchasing
+		tab = None
+		under = {}
+		for name in order:
+			if fields[name]["fieldtype"] == "Tab Break":
+				tab = fields[name]["label"]
+			under[name] = tab
+		self.assertEqual(under["purchase_order_rules"], "Purchasing")
+		self.assertEqual(under["disable_purchase_receipt"], "Purchasing")
+		self.assertEqual(under["restrict_sales_return"], "Sales")
+		self.assertEqual(under["fast_financial_statements"], "Accounting and Reports")
+		self.assertEqual(under["ticket_auto_close_days"], "Support")
 
 
-class TestSeedPatch(unittest.TestCase):
-	def _run(self, stored):
-		from sf_trading.patches.v0_1 import seed_po_procurement_settings as patch_module
+class TestConversionPatch(unittest.TestCase):
+	"""0.1.66 held one switch and four numbers for every company; the per-company table carries them over."""
+
+	COMPANIES = ("Alpha", "Beta")
+
+	def _run(self, stored, rows_in_table=0, table=True):
+		from sf_trading.patches.v0_1 import po_procurement_rules_by_company as patch_module
 
 		db = MagicMock()
 		db.exists.return_value = True
+		db.table_exists.return_value = table
 		db.get_singles_dict.return_value = stored
-		with patch.object(frappe, "db", db):
+		db.count.return_value = rows_in_table
+		settings_doc = MagicMock()
+		with (
+			patch.object(frappe, "db", db),
+			patch.object(frappe, "get_single", return_value=settings_doc),
+			patch.object(frappe, "get_all", return_value=list(self.COMPANIES)),
+		):
 			patch_module.execute()
-		return {call.args[1]: call.args[2] for call in db.set_single_value.call_args_list}
+		appended = [call.args for call in settings_doc.append.call_args_list]
+		return appended, settings_doc, db
 
-	def test_a_settings_page_that_never_stored_them_is_filled_with_the_defaults(self):
-		self.assertEqual(
-			self._run({}),
-			{"po_local_quotation_above": 500, "po_local_min_quotations": 3, "po_import_min_quotations": 2, "po_verbal_skips_quotations": 1},
-		)
+	ON = MappingProxyType(
+		{
+			"enforce_po_procurement": "1",
+			"po_local_quotation_above": "750",
+			"po_local_min_quotations": "4",
+			"po_import_min_quotations": "3",
+			"po_verbal_skips_quotations": "0",
+		}
+	)
 
-	def test_a_value_somebody_set_is_left_alone(self):
-		filled = self._run({"po_local_min_quotations": "4", "po_verbal_skips_quotations": "0"})
-		self.assertNotIn("po_local_min_quotations", filled)
-		self.assertNotIn("po_verbal_skips_quotations", filled)
-		self.assertIn("po_import_min_quotations", filled)
+	def test_a_ticked_switch_becomes_one_enforced_row_per_company_with_its_numbers(self):
+		appended, settings_doc, _db = self._run(dict(self.ON))
+		self.assertEqual([args[1]["company"] for args in appended], ["Alpha", "Beta"])
+		for field, row in appended:
+			self.assertEqual(field, "purchase_order_rules")
+			self.assertEqual(
+				(row["enforce"], row["local_quotation_above"], row["local_min_quotations"], row["import_min_quotations"], row["verbal_skips_quotations"]),
+				(1, 750.0, 4, 3, 0),
+			)
+		settings_doc.save.assert_called_once()
 
-	def test_enforcement_is_never_switched_on_by_it(self):
-		self.assertNotIn("enforce_po_procurement", self._run({}))
+	def test_a_value_never_stored_takes_its_default(self):
+		appended, _doc, _db = self._run({"enforce_po_procurement": "1"})
+		row = appended[0][1]
+		self.assertEqual((row["local_quotation_above"], row["local_min_quotations"], row["import_min_quotations"], row["verbal_skips_quotations"]), (500.0, 3, 2, 1))
 
-	def test_a_site_without_the_settings_is_skipped(self):
-		from sf_trading.patches.v0_1 import seed_po_procurement_settings as patch_module
+	def test_a_switch_never_ticked_adds_no_rows_but_the_old_values_still_go(self):
+		for stored in ({}, {"enforce_po_procurement": "0", "po_local_min_quotations": "4"}):
+			appended, settings_doc, db = self._run(stored)
+			self.assertEqual(appended, [])
+			settings_doc.save.assert_not_called()
+			self.assertIn("DELETE FROM `tabSingles`", db.sql.call_args[0][0])
+			self.assertIn("enforce_po_procurement", db.sql.call_args[0][1][1])
 
-		db = MagicMock()
-		db.exists.return_value = False
-		with patch.object(frappe, "db", db):
-			patch_module.execute()
-		db.set_single_value.assert_not_called()
+	def test_a_table_that_already_has_rows_is_left_alone(self):
+		appended, settings_doc, _db = self._run(dict(self.ON), rows_in_table=1)
+		self.assertEqual(appended, [])
+		settings_doc.save.assert_not_called()
+
+	def test_a_site_without_the_table_or_the_settings_is_skipped(self):
+		appended, settings_doc, db = self._run(dict(self.ON), table=False)
+		self.assertEqual(appended, [])
+		db.sql.assert_not_called()
