@@ -46,6 +46,8 @@
   "purchase_receipt_section",
   "disable_purchase_receipt",
   "purchase_receipt_bypass",
+  "tickets_section",
+  "ticket_auto_close_days",
   "report_speed_section",
   "fast_financial_statements",
   "asset_tracking_section",
@@ -244,12 +246,12 @@
    "fieldname": "small_import_section",
    "fieldtype": "Section Break",
    "label": "Small Imports",
-   "description": "A small import is let through without a Bayan document: an import Purchase Invoice whose total, in the company's currency, is below the amount set for its company needs no Landed Cost Voucher. A company with no row, or a row of 0, has no such allowance."
+   "description": "A small import is not asked for a Bayan number: an import Purchase Invoice whose total, in the company's currency, is below the amount set for its company. It still needs its Landed Cost Voucher. A company with no row, or a row of 0, has no such allowance."
   },
   {
    "fieldname": "small_import_limits",
    "fieldtype": "Table",
-   "label": "Imports Below This Amount Need No Voucher or Bayan, by Company",
+   "label": "Imports Below This Amount Need No Bayan Number, by Company",
    "options": "SF Small Import Limit"
   },
   {
@@ -307,18 +309,31 @@
   },
   {
    "default": "0",
-   "description": "When ticked, Purchase Receipt is closed to everyone: it cannot be opened, made or listed, and goods come in through the Purchase Invoice (Update Stock) instead. Only the roles and users below, and Administrator, still use it.",
+   "description": "When ticked, no new Purchase Receipt can be made and no existing one can be edited, submitted, cancelled or deleted, and goods come in through the Purchase Invoice (Update Stock) instead. Receipts already made stay visible everywhere (lists, links, a Purchase Order's connections, reports) and can still be billed from and costed by a Landed Cost Voucher. Only the roles and users below, and Administrator, are exempt.",
    "fieldname": "disable_purchase_receipt",
    "fieldtype": "Check",
    "label": "Disable Purchase Receipt (GRN)"
   },
   {
    "depends_on": "disable_purchase_receipt",
-   "description": "Roles or users who still see and use Purchase Receipt while it is disabled.",
+   "description": "Roles or users who may still make, change and cancel Purchase Receipts while it is disabled.",
    "fieldname": "purchase_receipt_bypass",
    "fieldtype": "Table",
    "label": "Allowed to Use Purchase Receipt",
    "options": "SF Override Entry"
+  },
+  {
+   "fieldname": "tickets_section",
+   "fieldtype": "Section Break",
+   "label": "Support Tickets"
+  },
+  {
+   "fieldname": "ticket_auto_close_days",
+   "fieldtype": "Int",
+   "label": "Close a Resolved Ticket After (Days)",
+   "default": "5",
+   "non_negative": 1,
+   "description": "A ticket that stays Resolved this many days without being reopened closes by itself, every night. 0 switches it off. Its reporter can still reopen it once it is closed."
   },
   {
    "fieldname": "report_speed_section",

@@ -9,6 +9,11 @@ assignee and anyone else holding an assignment for it, the people on its Keep In
 everyone who has commented on it, and everyone it was shared with -- an @mention shares it.
 Everyone involved hears about every reply, status change and hand-over, except whoever made it.
 
+**Closing**: the person it is with Resolves it; whoever raised it Closes it (or Reopens it). A ticket
+that stays Resolved for `ticket_auto_close_days` (SF Trading Settings, 5 by default, 0 = off) with
+nobody reopening it closes by itself, every night (`close_resolved_tickets`). A reopen clears the
+clock: Resolved starts it again. The Ticket Closing Efficiency report ranks who resolves and who closes.
+
 **Access**: a Ticket Manager or System Manager sees every ticket; everyone else sees only the
 tickets they are involved in. Keep Informed people and @mentioned people may read and reply,
 not edit. The role permission (Desk User may read/write/create) grants; the two hooks below
@@ -39,7 +44,8 @@ from frappe.desk.form.assign_to import _add as add_assignment
 from frappe.desk.form.assign_to import notify_assignment
 from frappe.desk.notifications import extract_mentions
 from frappe.share import add_docshare
-from frappe.utils import escape_html, get_fullname, get_url_to_form, now_datetime, nowdate, strip_html
+from frappe.query_builder.functions import Coalesce
+from frappe.utils import add_to_date, cint, escape_html, get_fullname, get_url_to_form, now_datetime, nowdate, strip_html
 
 DOCTYPE = "Ticket"
 MANAGER_ROLE = "Ticket Manager"
@@ -52,6 +58,12 @@ RESOLVED = "Resolved"
 CLOSED = "Closed"
 STATUSES = (OPEN, IN_PROGRESS, ON_HOLD, RESOLVED, CLOSED)
 DONE = (RESOLVED, CLOSED)
+
+SETTINGS = "SF Trading Settings"
+AUTO_CLOSE_FIELD = "ticket_auto_close_days"
+DEFAULT_AUTO_CLOSE_DAYS = 5
+#: one night's run closes at most this many, oldest first; the next night takes the rest
+AUTO_CLOSE_BATCH = 500
 
 # all a Keep Informed or @mentioned person may do: look at the ticket and talk about it
 READ_ONLY_PTYPES = ("read", "select", "print")
@@ -299,6 +311,8 @@ def _on_status_change(doc, previous):
 
 	if previous in DONE and doc.status not in DONE:
 		message = _("{0} reopened {1}")
+	elif doc.status == CLOSED and doc.flags.auto_closed:
+		message = _("{1} was closed automatically: it stayed Resolved and nobody reopened it")
 	else:
 		message = {
 			IN_PROGRESS: _("{0} started working on {1}"),
@@ -556,6 +570,69 @@ def _post_note(doc, note_html, quiet):
 		frappe.flags.sf_ticket_note = False
 
 
+# ── Closing a resolved ticket by itself ───────────────────────────────────────────
+
+def auto_close_days() -> int:
+	"""How long a ticket may stay Resolved before it closes by itself; 0 = never.
+
+	Read from the raw settings rows, so a site that has not saved the settings since this field was added
+	gets the default instead of 0 (`get_single_value` turns a field that was never saved into 0, which
+	would read as "switched off")."""
+	value = (frappe.db.get_singles_dict(SETTINGS) or {}).get(AUTO_CLOSE_FIELD)
+	return DEFAULT_AUTO_CLOSE_DAYS if value in (None, "") else max(cint(value), 0)
+
+
+def due_query(cutoff):
+	"""The tickets that have been Resolved since `cutoff` or earlier, oldest first, one night's worth."""
+	ticket = frappe.qb.DocType(DOCTYPE)
+	since = Coalesce(ticket.resolved_on, ticket.modified)
+	return (
+		frappe.qb.from_(ticket)
+		.select(ticket.name)
+		.where((ticket.status == RESOLVED) & (since <= cutoff))
+		.orderby(since)
+		.limit(AUTO_CLOSE_BATCH)
+	)
+
+
+def close_resolved_tickets():
+	"""daily: close every ticket that has stayed Resolved for the wait, oldest first.
+
+	The clock is `resolved_on`, which a reopen clears and the next Resolve sets again, so a ticket that
+	came back is never closed on its first resolution's time. A ticket with no `resolved_on` (edited by
+	hand) counts from its last change. One failure is logged and the rest go on. Returns how many closed."""
+	days = auto_close_days()
+	# a site that has not migrated the Ticket table (a sibling site on a shared bench) has nothing to close
+	if not days or not frappe.db.table_exists(DOCTYPE):
+		return 0
+	names = due_query(add_to_date(now_datetime(), days=-days)).run(pluck=True)
+
+	closed = 0
+	for name in names:
+		try:
+			closed += 1 if close_after_wait(name, days) else 0
+			frappe.db.commit()
+		except Exception:
+			frappe.db.rollback()
+			frappe.log_error(frappe.get_traceback(), f"sf_trading tickets: automatic close of {name} failed")
+	return closed
+
+
+def close_after_wait(name, days) -> bool:
+	"""Close one Resolved ticket as the system. False when it is no longer Resolved (reopened since the list was read)."""
+	doc = frappe.get_doc(DOCTYPE, name)
+	if doc.status != RESOLVED:
+		return False
+	note = _("Closed automatically: it stayed Resolved for {0} days and nobody reopened it.").format(days)
+	doc.flags.ignore_ticket_rules = True
+	doc.flags.auto_closed = True
+	doc.flags.status_note = escape_html(note)
+	doc.status = CLOSED
+	doc.save(ignore_permissions=True)
+	_post_note(doc, escape_html(note), quiet=True)
+	return True
+
+
 # ── Desk furniture: the Tickets workspace and the Help menu entry ────────────────────
 
 WORKSPACE = "Tickets"
@@ -564,6 +641,7 @@ NEW_TICKET_ROUTE = "/app/ticket/new"
 HELP_MENU_LABEL = "Raise a Support Ticket"
 QUICK_LIST = "Recent Tickets"
 REPORT = "My Tickets"
+EFFICIENCY_REPORT = "Ticket Closing Efficiency"
 
 _NOT_DONE = '"status": ["not in", ["Resolved", "Closed"]]'
 SHORTCUTS = (
@@ -571,6 +649,8 @@ SHORTCUTS = (
 	{"label": "Raise a Ticket", "type": "DocType", "link_to": DOCTYPE, "doc_view": "New"},
 	# everything the user raised or is part of, and what waits on them -- the report, not a list
 	{"label": REPORT, "type": "Report", "link_to": REPORT, "report_ref_doctype": DOCTYPE},
+	# who resolves and who closes -- Ticket Managers and System Managers only (the report's own roles)
+	{"label": EFFICIENCY_REPORT, "type": "Report", "link_to": EFFICIENCY_REPORT, "report_ref_doctype": DOCTYPE},
 	{
 		"label": "Assigned to Me", "type": "DocType", "link_to": DOCTYPE, "doc_view": "List",
 		"stats_filter": '{"assignee": frappe.session.user, ' + _NOT_DONE + "}", "format": "{} Pending",

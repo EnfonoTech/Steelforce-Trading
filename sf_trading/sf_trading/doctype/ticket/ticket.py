@@ -66,12 +66,14 @@ class Ticket(Document):
 			return
 
 		user = frappe.session.user
-		if before and not self.first_response_on and user not in (self.raised_by, self.owner):
+		# the automatic close (ticket.close_resolved_tickets) is the system, not somebody answering
+		if before and not self.first_response_on and user not in (self.raised_by, self.owner) and not self.flags.auto_closed:
 			self.first_response_on = now
 
 		if previous in tickets.DONE and self.status not in tickets.DONE:
 			self.reopen_count = cint(self.reopen_count) + 1
-			self.resolved_on = self.resolved_by = self.closed_on = None
+			self.resolved_on = self.resolved_by = self.closed_on = self.closed_by = None
+			self.auto_closed = 0
 			self.resolution_time = 0
 
 		if self.status == tickets.RESOLVED:
@@ -80,3 +82,6 @@ class Ticket(Document):
 			self.resolution_time = time_diff_in_seconds(now, self.opening_date)
 		elif self.status == tickets.CLOSED:
 			self.closed_on = now
+			# who closed it: the person, or nobody -- the system did, after the wait (Auto Closed)
+			self.auto_closed = 1 if self.flags.auto_closed else 0
+			self.closed_by = None if self.flags.auto_closed else user

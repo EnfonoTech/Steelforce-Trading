@@ -295,6 +295,68 @@ def ensure_operations_approval() -> bool:
 	return True
 
 
+TRANSFER_WORKFLOW = "Stock Entry - Material Transfer"
+TRANSFER_SEND = ("Draft", "Send for Acceptance")
+TRANSFER_ACCEPT = ("Pending Acceptance", "Accept")
+#: what each rewritten condition now contains, so a second run recognises its own work
+TRANSFER_SEND_MARK = '.get("s_warehouse")'
+TRANSFER_ACCEPT_MARK = 'doc.get("owner")'
+
+
+def _default_keeper_of(row_field: str) -> str:
+	"""Workflow-condition expression: the session user holds the DEFAULT Warehouse User Permission
+	of the warehouse the first item row names in `row_field` -- the same test the Accept and Reject
+	transitions already use for the receiving warehouse."""
+	return ('frappe.db.get_value("User Permission", {"user": frappe.session.user, "allow": "Warehouse", '
+		'"for_value": doc.get("items")[0].get("%s") if doc.get("items") else None, "is_default": 1}, "name")'
+		% row_field)
+
+
+def transfer_send_condition(current: str = "") -> str:
+	"""Only the source warehouse's keeper sends a transfer for acceptance."""
+	keeper = _default_keeper_of("s_warehouse")
+	return "(%s) and %s" % (current, keeper) if current else keeper
+
+
+def transfer_accept_condition(current: str = "") -> str:
+	"""Nobody accepts a transfer they created themselves: the receiving keeper accepts, never the sender."""
+	own = 'frappe.session.user != doc.get("owner")'
+	return "%s and (%s)" % (own, current) if current else own
+
+
+def ensure_transfer_segregation() -> bool:
+	"""A stock transfer is sent by the keeper of the warehouse it leaves and accepted by a different
+	person, the keeper of the warehouse it reaches (client, 2026-10-20: MAT-STE-2026-06511 was
+	created and accepted by the same user, who keeps the receiving warehouse and only holds a plain
+	permission on the source).
+
+	The "Stock Entry - Material Transfer" workflow is a site record, so the two conditions are added
+	to the transitions it already has, wrapped around whatever each carries now. Administrator is not
+	gated by transition conditions, so a stuck transfer can always be moved. Idempotent: a condition
+	that already carries its rule is left alone, and a site without the workflow is untouched.
+	Rows are written directly -- saving the PM Workflow would also stamp every blank workflow_state
+	(PMWorkflow.on_update). Returns whether it changed anything."""
+	if not frappe.db.exists("PM Workflow", TRANSFER_WORKFLOW):
+		return False
+	rows = frappe.db.get_all("PM Workflow Transition",
+		filters={"parent": TRANSFER_WORKFLOW, "parenttype": "PM Workflow"},
+		fields=["name", "state", "action", "condition"])
+	changed = False
+	for key, mark, build in ((TRANSFER_SEND, TRANSFER_SEND_MARK, transfer_send_condition),
+			(TRANSFER_ACCEPT, TRANSFER_ACCEPT_MARK, transfer_accept_condition)):
+		for row in rows:
+			current = cstr(row.condition).strip()
+			if (row.state, row.action) != key or mark in current:
+				continue
+			frappe.db.set_value("PM Workflow Transition", row.name, "condition", build(current),
+				update_modified=False)
+			changed = True
+	if changed:
+		frappe.clear_document_cache("PM Workflow", TRANSFER_WORKFLOW)
+		frappe.clear_cache(doctype="Stock Entry")
+	return changed
+
+
 def ensure_workflows():
 	"""Create the two PM Workflows if this site does not have them yet. Never overwrites one that
 	exists -- an approval someone has since adjusted on the site stays as they left it."""

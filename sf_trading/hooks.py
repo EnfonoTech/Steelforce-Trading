@@ -119,7 +119,11 @@ doctype_js = {
 		# "Quick Edit Billing Fields" -- the supplier twin of the Customer one
 		"public/js/supplier_quick_edit.js",
 	],
-	"Quotation":        "public/js/quotation.js",
+	"Quotation":        [
+		"public/js/quotation.js",
+		# a Price List on each item row, as on the Sales Invoice -- public/js/row_price_list.js
+		"public/js/row_price_list.js",
+	],
 	# Receive Payment on a submitted order — the invoice popup's twin — and the three fields the
 	# order now shares with the invoice
 	"Sales Order":      [
@@ -136,6 +140,8 @@ doctype_js = {
 		"public/js/document_trail.js",
 		# a Cash order carries no payment terms of its customer -- see cash_due_date.py
 		"public/js/cash_due_date.js",
+		# a Price List on each item row, as on the Sales Invoice -- public/js/row_price_list.js
+		"public/js/row_price_list.js",
 	],
 	# same Sales Team restriction as Sales Invoice / Sales Order -- Delivery Note carries the same
 	# child table but no other doctype-specific script of its own yet; also the SO -> DN -> SI chain
@@ -150,6 +156,8 @@ doctype_js = {
 	],
 	"Purchase Receipt":   [
 		"public/js/purchase_tax_template.js",
+		# while GRN is disabled for this user the form is a viewer: no Submit / Cancel / Return buttons
+		"public/js/purchase_receipt_gate.js",
 		# the whole Purchase Order -> Purchase Receipt -> Purchase Invoice chain
 		"public/js/document_trail.js",
 		# a Valuation charge names the expense entry that booked it
@@ -184,6 +192,8 @@ doctype_js = {
 		"public/js/landed_cost.js",
 		# Create > Landed Cost Voucher on a draft stock invoice, and what the import still needs
 		"public/js/purchase_invoice_lcv.js",
+		# Update Stock ticked and locked (Administrator excepted) on an invoice that brings the goods in
+		"public/js/purchase_invoice_update_stock.js",
 		# fix the supplier's billing-blocking details from inside the draft
 		"public/js/supplier_quick_edit.js",
 		# a popup when the customer / supplier picked on a new voucher would be refused -- see party_alert.py
@@ -376,8 +386,6 @@ permission_query_conditions = {
 	"Ticket": "sf_trading.ticket.get_permission_query_conditions",
 	# a branch user sees the delivery people who serve one of their branches (the Branches table)
 	"Driver": "sf_trading.driver_branches.permission_query_conditions",
-	# GRN disabled in SF Trading Settings: only the bypass roster sees Purchase Receipt
-	"Purchase Receipt": "sf_trading.purchase_receipt_gate.permission_query_conditions",
 }
 
 has_permission = {
@@ -386,7 +394,8 @@ has_permission = {
 	"Purchase Receipt": "sf_trading.purchase_receipt_gate.has_permission",
 }
 
-# the desk drops Purchase Receipt for a user GRN is disabled for -- see purchase_receipt_gate.py
+# the desk drops Create / Cancel / Delete of Purchase Receipt for a user GRN is disabled for (reading stays
+# open) -- see purchase_receipt_gate.py
 boot_session = [
 	"sf_trading.purchase_receipt_gate.boot_session",
 	# which forms carry the Alternative Cost Center field, so the desk filters its picker on every one of them
@@ -787,6 +796,9 @@ doc_events = {
 			# goods a receipt has already booked must not be taken into stock a second time by
 			# the bill, whoever ticked the box and whenever they ticked it
 			"sf_trading.api.purchase_order_invoice.untick_stock_when_the_goods_already_arrived",
+			# right after it: an invoice that IS the goods' arrival keeps Update Stock on, whoever
+			# but Administrator tries to turn it off -- see api/purchase_order_invoice.py
+			"sf_trading.api.purchase_order_invoice.require_stock_update",
 			_CC_HOOK,
 			_PTT_HOOK,
 			# before_validate, because the controller's own validate is what reads these
@@ -1123,6 +1135,8 @@ fixtures = [
 					"Quotation Item-project",
 					"Sales Invoice Item-custom_quotation",
 					"Sales Invoice Item-custom_price_list",
+					"Quotation Item-custom_price_list",
+					"Sales Order Item-custom_price_list",
 					"Item Group-custom_min_margin_pct",
 					"Price List-custom_enforce_min_price",
 					"Item Price-custom_branches_section",
@@ -1418,6 +1432,8 @@ scheduler_events = {
 	"daily": [
 		"sf_trading.api.overdue_notifications.notify_overdue_invoices",
 		"sf_trading.document_expiry.check_expiring_documents",
+		# a ticket that stayed Resolved for the wait closes by itself -- see ticket.py
+		"sf_trading.ticket.close_resolved_tickets",
 	],
 	# every tick: each Payment Automation Settings row names its own weekday + time,
 	# and the engine fences itself with last_execution

@@ -64,6 +64,7 @@ def make_sales_invoice_from_quotation(source_name):
 			"amount": q.amount,
 			"discount_percentage": q.discount_percentage,
 			"custom_quotation": source_name,
+			"custom_price_list": q.get("custom_price_list"),
 		})
 		for dim in ("warehouse", "branch", "cost_center", "project"):
 			val = q.get(dim)

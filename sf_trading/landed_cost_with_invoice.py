@@ -11,10 +11,12 @@ invoice is still a draft, goes for approval with it, and is submitted by the sam
   go for approval (SF Trading Settings > Landed Costs switches that on and off). A bill with no landed
   cost ticks "Import Without Landed Cost" and says why. Any other stock invoice may carry a voucher too;
   it is simply not required.
-* **Small imports.** A small import needs no voucher and no Bayan document: an import whose total
-  (`base_grand_total`, company currency) is below the amount set for its company on SF Trading Settings >
-  Small Imports. A company with no row, or a row of 0, has no allowance. A voucher drawn up for a small
-  import anyway is still checked and submitted with it; it is just not demanded.
+* **Small imports.** A small import needs no Bayan number, and nothing else is waived: an import whose
+  total (`base_grand_total`, company currency) is below the amount set for its company on SF Trading
+  Settings > Small Imports. It still carries its voucher like any other import. A company with no row,
+  or a row of 0, has no allowance. The Bayan number is only ever required by the Purchase Invoice form
+  (`bayan_rule` feeds public/js/purchase_invoice_lcv.js); the server has never refused an invoice for
+  lacking one.
 * **Core says no, so one rule is relaxed.** ERPNext refuses a voucher against a document that is not
   yet submitted. `overrides/landed_cost_voucher_class.py` relaxes exactly that, for a voucher that is
   itself a draft, names one draft stock invoice and nothing else; every other case goes to core.
@@ -120,8 +122,8 @@ def is_import(doc) -> bool:
 
 
 def small_import_limit(company) -> float:
-	"""What an import may total, in the company's currency, and still go without a voucher. 0 means the company
-	has no allowance (no row, a row of 0, or a site that has not migrated the table yet)."""
+	"""What an import may total, in the company's currency, and still go without a Bayan number. 0 means the
+	company has no allowance (no row, a row of 0, or a site that has not migrated the table yet)."""
 	if not company or not frappe.db.table_exists(LIMIT_TABLE):
 		return 0.0
 	rows = frappe.get_all(
@@ -134,7 +136,8 @@ def small_import_limit(company) -> float:
 
 
 def is_small_import(doc) -> bool:
-	"""An import whose total is below its company's allowance for small imports."""
+	"""An import whose total is below its company's allowance for small imports: no Bayan number is asked of it.
+	It is still an import, so it still needs its voucher."""
 	if not is_import(doc):
 		return False
 	limit = small_import_limit(doc.get("company"))
@@ -142,7 +145,7 @@ def is_small_import(doc) -> bool:
 
 
 def must_have_voucher(doc) -> bool:
-	return require_with_import() and is_import(doc) and not cint(doc.get(ESCAPE_FIELD)) and not is_small_import(doc)
+	return require_with_import() and is_import(doc) and not cint(doc.get(ESCAPE_FIELD))
 
 
 def has_asset_rows(doc) -> bool:
@@ -613,6 +616,61 @@ def make_landed_cost_voucher(source_name: str, target_doc=None):
 					},
 				)
 	return voucher
+
+
+#: the Purchase Invoice Client Script every steelforce-style site carries, whitespace removed: it makes the Bayan
+#: number required on any foreign-currency invoice whatever its total. public/js/purchase_invoice_lcv.js now owns
+#: that rule (small imports excepted), so the script is switched off -- and only this exact text is.
+SITE_BAYAN_SCRIPT = "".join("""
+frappe.ui.form.on('Purchase Invoice', {
+	refresh(frm) { toggle_bayan(frm); },
+	currency(frm) { toggle_bayan(frm); }
+});
+function toggle_bayan(frm){
+	if(!frm.doc.company || !frm.doc.currency) return;
+	frappe.db.get_value('Company', frm.doc.company, 'default_currency')
+	.then (r=> {
+		if(frm.doc.currency != r.message.default_currency){
+			frm.toggle_display('custom_bayan_value',true);
+			frm.toggle_reqd('custom_bayan_value',true);
+		}else{
+			frm.toggle_display('custom_bayan_value',false);
+			frm.toggle_reqd('custom_bayan_value',false);
+		}
+	});
+}
+""".split())
+
+
+def retire_site_bayan_script() -> bool:
+	"""Switch off the site's Purchase Invoice Client Script that requires the Bayan number on every foreign-currency
+	invoice (patches/v0_1/bayan_follows_small_import.py), now that the form does it with the small-import exception.
+	Two scripts toggling one field would race, so the old one must go. Only a script whose text is exactly that one
+	(whitespace aside) is touched: anything someone has since changed or added to is left as it is, and the patch
+	says so in the log. Disabled, not deleted, so it can be switched back on. Returns whether it changed anything."""
+	changed = False
+	for row in frappe.db.get_all("Client Script", filters={"dt": INVOICE, "enabled": 1}, fields=["name", "script"]):
+		if "custom_bayan_value" not in cstr(row.script):
+			continue
+		if "".join(cstr(row.script).split()) == SITE_BAYAN_SCRIPT:
+			frappe.db.set_value("Client Script", row.name, "enabled", 0)
+			changed = True
+		else:
+			frappe.logger("sf_trading").warning("Client Script %s sets the Bayan number and is not the one this app replaces; left on", row.name)
+	if changed:
+		frappe.clear_cache(doctype=INVOICE)
+	return changed
+
+
+@frappe.whitelist()
+def bayan_rule(company: str) -> dict:
+	"""For the invoice form: what decides whether a Bayan number is asked. Foreign means the invoice's currency
+	is not `company_currency`; small means its total (in the company's currency) is below `small_limit`
+	(0 = no allowance). The form compares them as the invoice is edited, so this is read once per company."""
+	frappe.has_permission(INVOICE, "read", throw=True)
+	if not company:
+		return {"company_currency": None, "small_limit": 0.0}
+	return {"company_currency": company_currency(company), "small_limit": small_import_limit(company)}
 
 
 @frappe.whitelist()

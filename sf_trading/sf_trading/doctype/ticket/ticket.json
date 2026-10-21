@@ -34,6 +34,8 @@
   "resolved_by",
   "column_break_tracking",
   "closed_on",
+  "closed_by",
+  "auto_closed",
   "resolution_time",
   "reopen_count"
  ],
@@ -245,6 +247,22 @@
    "read_only": 1
   },
   {
+   "fieldname": "closed_by",
+   "fieldtype": "Link",
+   "label": "Closed By",
+   "options": "User",
+   "read_only": 1,
+   "description": "Blank when the ticket closed by itself (Auto Closed)."
+  },
+  {
+   "fieldname": "auto_closed",
+   "fieldtype": "Check",
+   "label": "Auto Closed",
+   "read_only": 1,
+   "default": "0",
+   "description": "Closed by the system: it stayed Resolved and nobody reopened it."
+  },
+  {
    "fieldname": "resolution_time",
    "fieldtype": "Duration",
    "label": "Resolution Time",
@@ -262,7 +280,7 @@
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-10-08 00:00:00.000000",
+ "modified": "2026-10-20 23:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "Ticket",

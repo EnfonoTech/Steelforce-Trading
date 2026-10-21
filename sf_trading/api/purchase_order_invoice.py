@@ -20,6 +20,12 @@ already in the warehouse takes nothing away from the buyer -- the alternative is
 twice, or core's own refusal at submit -- and a draft raised before the receipt arrived has to be
 corrected at the moment it is saved again, not at the moment it was created.
 
+Only Administrator may leave the box off an invoice that IS the goods' arrival
+(`require_stock_update`, 2026-10-20): PI 20020000419 was approved with the box turned off and the stock
+only reached the warehouse the next day, when Administrator raised a receipt for the order. For anyone else
+the box is ticked and locked on such an invoice; Administrator can still untick it, and an invoice whose
+goods are demonstrably in already (a receipt, a part-received order) is never re-ticked.
+
 It never ticks when a receipt exists -- not a submitted one, not a draft, and not a row already
 linked on the invoice itself -- because the goods would then be counted into stock twice: once by
 the receipt and once by the invoice. Nor when the order is Closed or Cancelled, when anything has
@@ -203,6 +209,62 @@ def untick_stock_when_the_goods_already_arrived(doc, method=None):
 
 	doc.update_stock = 0
 	frappe.msgprint(message, indicator="orange", alert=True)
+
+
+def is_the_arrival(invoice) -> bool:
+	"""Whether this invoice is what takes its goods into stock: the box has to be ticked for them to arrive.
+
+	True for an invoice of stock items that no receipt stands behind. False for a return or an opening
+	entry, a bill with no stock row (service, drop-ship), a row already linked to a Purchase Receipt, an
+	order that is closed, part-received or has a receipt (even a draft one) -- the same tests the
+	un-ticking hook uses, so the two can never disagree -- and batch- or serial-tracked items, which need
+	a bundle nobody entered. An invoice made from a Goods In is the arrival by definition.
+	"""
+	if cint(invoice.get("is_return")) or invoice.get("is_opening") == "Yes":
+		return False
+	if not _stock_rows(invoice):
+		return False
+	rows = invoice.get("items") or []
+	if rows and all(row.get("custom_goods_in_item") for row in rows):
+		return True
+	if any(row.get("purchase_receipt") or row.get("pr_detail") for row in rows):
+		return False
+	orders = {row.purchase_order for row in rows if row.get("purchase_order")}
+	if orders and (not _orders_are_eligible(orders) or _has_a_receipt(orders, invoice)):
+		return False
+	return not any(_is_tracked(row.item_code) for row in _stock_rows(invoice))
+
+
+def _still_to_be_submitted(doc) -> bool:
+	"""A draft, or a draft being approved: the approver's save arrives already marked submitted, with the draft
+	as the document before the save -- and that save is where PI 20020000419 lost its box."""
+	if cint(doc.get("docstatus")) == 0:
+		return True
+	before = doc.get_doc_before_save() if hasattr(doc, "get_doc_before_save") else None
+	return cint(doc.get("docstatus")) == 1 and before is not None and cint(before.get("docstatus")) == 0
+
+
+def require_stock_update(doc, method=None):
+	"""before_validate, after the un-ticking hook: only Administrator leaves Update Stock off an invoice that IS
+	the goods' arrival. Everyone else's draft is ticked again as it is saved, approved or submitted."""
+	if frappe.session.user == "Administrator" or cint(doc.get("update_stock")):
+		return
+	if not _still_to_be_submitted(doc) or not is_the_arrival(doc):
+		return
+	doc.update_stock = 1
+	frappe.msgprint(
+		_("Update Stock has been turned on: this invoice brings the goods into stock, and only Administrator can leave it off."),
+		indicator="orange",
+		alert=True,
+	)
+
+
+@frappe.whitelist()
+def update_stock_rule(doc) -> dict:
+	"""For the invoice form: whether Update Stock is locked on for this (possibly unsaved) invoice."""
+	frappe.has_permission("Purchase Invoice", "read", throw=True)
+	invoice = frappe.get_doc(frappe.parse_json(doc))
+	return {"locked": bool(invoice.doctype == "Purchase Invoice" and is_the_arrival(invoice))}
 
 
 @frappe.whitelist()

@@ -37,7 +37,7 @@
    "options": "currency",
    "reqd": 1,
    "columns": 3,
-   "description": "An import whose total is below this, in the company's currency, needs no Landed Cost Voucher and no Bayan."
+   "description": "An import whose total is below this, in the company's currency, needs no Bayan number (its Landed Cost Voucher is still required)."
   }
  ],
  "index_web_pages_for_search": 1,
