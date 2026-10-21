@@ -24,8 +24,20 @@ class SFTradingSettings(Document):
 			if flt(self.si_return_approval_threshold) < 0:
 				frappe.throw(_("Approval Threshold cannot be negative."))
 
+		self.validate_po_procurement_rules()
 		self.validate_small_import_limits()
 		self.validate_cash_flow_account_map()
+
+	def validate_po_procurement_rules(self):
+		"""A rule that asks for fewer than one quotation, or above a negative amount, would never bite."""
+		if not cint(self.enforce_po_procurement):
+			return
+		if flt(self.po_local_quotation_above) < 0:
+			frappe.throw(_("Quotations for a local purchase cannot start above a negative amount."))
+		if cint(self.po_local_min_quotations) < 1:
+			frappe.throw(_("Quotations Needed for a Local Purchase must be at least 1."))
+		if cint(self.po_import_min_quotations) < 1:
+			frappe.throw(_("Quotations Needed for an Import must be at least 1."))
 
 	def validate_small_import_limits(self):
 		"""One row per company, none negative: the allowance for small imports is read by company."""

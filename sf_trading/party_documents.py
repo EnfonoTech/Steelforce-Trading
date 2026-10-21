@@ -68,8 +68,10 @@ APPLIES_TO_BOTH = "Customer and Supplier"
 PARTY_DOCTYPES = ("Customer", "Supplier")
 ROW_RULE_FIELDS = ("document_type", "validate_expiry", "issue_date", "expiry_date", "date_of_birth")
 
-#: buying documents and supplier payments are refused for a supplier that is not complete
-SUPPLIER_SIDE = ("Purchase Order", "Purchase Receipt", "Purchase Invoice", "Supplier Quotation", "Payment Entry")
+#: buying documents and supplier payments are refused for a supplier that is not complete. Not a Supplier Quotation
+#: (nor a Request for Quotation): a quotation is asked of a supplier before it is one, and the Purchase Order made
+#: from it holds the supplier to the rules
+SUPPLIER_SIDE = ("Purchase Order", "Purchase Receipt", "Purchase Invoice", "Payment Entry")
 #: selling documents are refused for a customer that is not complete -- receiving money never is
 CUSTOMER_SIDE = ("Sales Order", "Sales Invoice")
 

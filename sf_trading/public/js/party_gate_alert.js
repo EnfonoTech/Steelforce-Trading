@@ -17,7 +17,6 @@
 		"Purchase Order": "supplier",
 		"Purchase Receipt": "supplier",
 		"Purchase Invoice": "supplier",
-		"Supplier Quotation": "supplier",
 		"Payment Entry": "party",
 		"Sales Order": "customer",
 		"Sales Invoice": "customer",

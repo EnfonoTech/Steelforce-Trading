@@ -6,7 +6,7 @@ Purchase Receipt, so whoever is raising the document can see -- and fix, without
 stops that supplier being bought from or paid. "What blocks" is read from the very rules the gates
 run, for an old supplier as much as a new one:
 
-* party_documents (Purchase Order / Receipt / Invoice / Supplier Quotation / supplier payment): a
+* party_documents (Purchase Order / Receipt / Invoice / supplier payment): a
   supplier created on or after New-Master Rules From needs Payment Terms, a Supporting Documents row
   with its file and a mobile number; ANY supplier without Payment Terms (2026-10-13) or holding an
   expired document marked Financial Implication is refused;

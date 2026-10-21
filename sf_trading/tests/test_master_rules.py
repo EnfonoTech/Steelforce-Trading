@@ -495,7 +495,7 @@ class TestSupplierPaymentTermsRequired(FrappeTestCase):
 
 	def test_an_old_supplier_without_terms_is_refused_on_every_buying_document_and_payment(self):
 		for doctype, extra in (("Purchase Order", {}), ("Purchase Receipt", {}), ("Purchase Invoice", {}),
-				("Supplier Quotation", {}), ("Payment Entry", {"party_type": "Supplier", "payment_type": "Pay", "party": "P-1"})):
+				("Payment Entry", {"party_type": "Supplier", "payment_type": "Pay", "party": "P-1"})):
 			with self.assertRaises(frappe.ValidationError, msg=doctype) as caught:
 				self._gate(self._old(), doctype, **extra)
 			self.assertIn("Payment Terms", str(caught.exception), doctype)

@@ -23,6 +23,13 @@
   "document_expiry_after_days",
   "supplier_validation_section",
   "enforce_supplier_completeness",
+  "po_procurement_section",
+  "enforce_po_procurement",
+  "po_local_quotation_above",
+  "po_local_min_quotations",
+  "po_procurement_column_break",
+  "po_import_min_quotations",
+  "po_verbal_skips_quotations",
   "supporting_documents_section",
   "supporting_document_rules",
   "supporting_documents_column_break",
@@ -183,6 +190,54 @@
    "fieldname": "enforce_supplier_completeness",
    "fieldtype": "Check",
    "label": "Enforce Supplier Completeness"
+  },
+  {
+   "fieldname": "po_procurement_section",
+   "fieldtype": "Section Break",
+   "label": "Purchase Order Procurement Rules"
+  },
+  {
+   "default": "0",
+   "description": "When ticked, a Purchase Order cannot be saved or submitted unless every line comes from a submitted Purchase Material Request, and, unless the order is a verbal one (below), unless enough Supplier Quotations raised from a Request for Quotation back it: Material Request, then Request for Quotation, then Supplier Quotations, then the Purchase Order made from the winning quotation. A duplicated order does not keep those links, so duplicating is no way round the rule; an amended order keeps them. Orders to an internal (inter-company) supplier are not held to it. Off until ticked, so deploying this changes nothing by itself.",
+   "fieldname": "enforce_po_procurement",
+   "fieldtype": "Check",
+   "label": "Enforce Material Request and Quotations on Purchase Order"
+  },
+  {
+   "default": "500",
+   "depends_on": "enforce_po_procurement",
+   "description": "In company currency. A Purchase Order in the company's own currency whose Grand Total is above this amount needs the quotations below; one at or under it needs none. Any amount for an import (foreign currency).",
+   "fieldname": "po_local_quotation_above",
+   "fieldtype": "Currency",
+   "label": "Local Purchase Needs Quotations Above"
+  },
+  {
+   "default": "3",
+   "depends_on": "enforce_po_procurement",
+   "description": "Different suppliers that quoted for the same item on the same Request for Quotation, the chosen one included.",
+   "fieldname": "po_local_min_quotations",
+   "fieldtype": "Int",
+   "label": "Quotations Needed for a Local Purchase"
+  },
+  {
+   "fieldname": "po_procurement_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "2",
+   "depends_on": "enforce_po_procurement",
+   "description": "An import is a Purchase Order in a foreign currency. It needs this many quotations whatever the amount.",
+   "fieldname": "po_import_min_quotations",
+   "fieldtype": "Int",
+   "label": "Quotations Needed for an Import"
+  },
+  {
+   "default": "1",
+   "depends_on": "enforce_po_procurement",
+   "description": "When ticked, a Purchase Order marked Verbal (No Quotation) needs no quotations, only its Material Request. When unticked, Verbal is only a label: the quotations are still demanded and the Purchase Orders by Verbal Quotation report lists the order all the same.",
+   "fieldname": "po_verbal_skips_quotations",
+   "fieldtype": "Check",
+   "label": "A Verbal Purchase Order Needs No Quotations"
   },
   {
    "fieldname": "supporting_documents_section",
@@ -387,7 +442,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-19 14:00:00.000000",
+ "modified": "2026-10-21 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",

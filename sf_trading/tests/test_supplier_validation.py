@@ -8,6 +8,7 @@ from unittest import mock
 import frappe
 from frappe.tests.utils import FrappeTestCase
 
+from sf_trading import party_documents as pd
 from sf_trading import supplier_validation
 from sf_trading.supplier_validation import validate_supplier_at_transaction
 
@@ -33,7 +34,8 @@ def tearDownModule():
 
 
 GATE = "sf_trading.supplier_validation.validate_supplier_at_transaction"
-BUYING_DOCTYPES = ("Supplier Quotation", "Purchase Order", "Purchase Receipt", "Purchase Invoice", "Payment Entry")
+# not a Supplier Quotation: a quotation is asked of a supplier before it is one (TestQuotationsAreNotGated)
+BUYING_DOCTYPES = ("Purchase Order", "Purchase Receipt", "Purchase Invoice", "Payment Entry")
 
 
 class Enforced:
@@ -222,7 +224,7 @@ class TestSupplierAtTransaction(Enforced, FrappeTestCase):
 	def test_complete_supplier_passes(self):
 		supplier = self._supplier("Test Supplier Complete")
 		self._contact(supplier, phone="33445566", email="complete@example.com")
-		for doctype in ("Supplier Quotation", "Purchase Order", "Purchase Receipt", "Purchase Invoice", "Payment Entry"):
+		for doctype in BUYING_DOCTYPES:
 			self._check(supplier, doctype)  # must not raise
 
 	def test_missing_phone_is_refused(self):
@@ -406,3 +408,31 @@ class TestHookWiring(FrappeTestCase):
 		for path in (GATE, "sf_trading.supplier_validation.validate", "sf_trading.supplier_validation.remind_attachment"):
 			module, _, name = path.rpartition(".")
 			self.assertTrue(callable(getattr(importlib.import_module(module), name)), path)
+
+
+class TestQuotationsAreNotGated(FrappeTestCase):
+	"""A quotation is asked of a supplier before it is one, so a Supplier Quotation and a Request for Quotation are
+	held to no supplier master rule: the Purchase Order made from the quotation is."""
+
+	GATES = (
+		"sf_trading.supplier_validation.validate_supplier_at_transaction",
+		"sf_trading.party_documents.validate_party_at_transaction",
+	)
+
+	def _registered(self, doctype):
+		events = frappe.get_hooks("doc_events").get(doctype, {})
+		return " ".join(str(handlers) for handlers in events.values())
+
+	def test_no_party_gate_is_registered_on_either(self):
+		for doctype in ("Supplier Quotation", "Request for Quotation"):
+			for gate in self.GATES:
+				self.assertNotIn(gate, self._registered(doctype), doctype)
+
+	def test_the_master_rules_no_longer_name_a_quotation_as_gated(self):
+		self.assertNotIn("Supplier Quotation", pd.SUPPLIER_SIDE)
+		self.assertNotIn("Request for Quotation", pd.SUPPLIER_SIDE)
+		self.assertEqual(pd._party_of(frappe._dict(doctype="Supplier Quotation", supplier="S-1")), (None, None))
+
+	def test_the_purchase_order_still_is(self):
+		for gate in self.GATES:
+			self.assertIn(gate, self._registered("Purchase Order"))

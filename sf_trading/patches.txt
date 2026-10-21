@@ -34,3 +34,4 @@ sf_trading.patches.v0_1.seed_exempt_supplier_groups
 sf_trading.patches.v0_1.stock_transfer_segregation
 sf_trading.patches.v0_1.bayan_follows_small_import
 sf_trading.patches.v0_1.ticket_closed_by_backfill
+sf_trading.patches.v0_1.seed_po_procurement_settings

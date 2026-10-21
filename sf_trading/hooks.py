@@ -151,8 +151,6 @@ doctype_js = {
 	],
 	"Supplier Quotation": [
 		"public/js/purchase_tax_template.js",
-		# a popup when the supplier picked on a new voucher would be refused -- see party_alert.py
-		"public/js/party_gate_alert.js",
 	],
 	"Purchase Receipt":   [
 		"public/js/purchase_tax_template.js",
@@ -309,6 +307,8 @@ after_migrate = [
 	"sf_trading.sales_order_governance.ensure_custom_fields",
 	# the Purchase Order cancellation-remark field
 	"sf_trading.purchase_order_cancel.ensure_custom_fields",
+	# the Purchase Order's Verbal (No Quotation) tick and its comment -- see purchase_order_procurement.py
+	"sf_trading.purchase_order_procurement.ensure_custom_fields",
 	# GS Issue 11: cached phone field on Customer/Supplier
 	"sf_trading.party_contact_cache.ensure_custom_fields",
 	# GS Issue 25: PDC Rejected-status field
@@ -846,7 +846,16 @@ doc_events = {
 	},
 	"Purchase Order": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE, _MASTER_GATE, "sf_trading.payment_term_split.repair_term_less_schedule"],
+		"validate": [
+			_LH_HOOK,
+			_BPL_GUARD,
+			_SUPPLIER_GATE,
+			_MASTER_GATE,
+			"sf_trading.payment_term_split.repair_term_less_schedule",
+			# a Material Request behind every line and enough Request-for-Quotation quotations, unless it is a
+			# verbal order (SF Trading Settings > Purchase Order Procurement Rules) -- see purchase_order_procurement.py
+			"sf_trading.purchase_order_procurement.validate",
+		],
 		# a remark is mandatory, checked before docstatus flips -- see purchase_order_cancel.py
 		"before_cancel": "sf_trading.purchase_order_cancel.before_cancel_require_remark",
 	},
@@ -874,9 +883,11 @@ doc_events = {
 		# an alternative cost centre on a voucher is an enabled leaf of ANOTHER company -- see alternative_cost_center.py
 		"validate": "sf_trading.alternative_cost_center.validate_voucher",
 	},
+	# a quotation is asked of a supplier before it is a supplier, so neither the completeness gate nor the
+	# master gate runs here: the supplier is held to them on the Purchase Order made from the quotation
 	"Supplier Quotation": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE, _MASTER_GATE],
+		"validate": [_LH_HOOK, _BPL_GUARD],
 	},
 	# core logs the impersonation but drops the reason — put it back on the row
 	"Activity Log": {
