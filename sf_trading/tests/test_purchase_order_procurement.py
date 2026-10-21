@@ -24,9 +24,8 @@ SUPPLIER = "Alpha Steel"
 
 
 def settings(**overrides):
-	"""The rules as a company's row holds them: enforced, 500 / 3 / 2, a verbal order skips quotations but not the
-	Material Request."""
-	values = dict(enforce=True, above=500.0, local_min=3, import_min=2, verbal_skips=True, verbal_skips_mr=False)
+	"""The rules as a company's row holds them: enforced, 500 / 3 / 2, a verbal order is exempt."""
+	values = dict(enforce=True, above=500.0, local_min=3, import_min=2, verbal_skips=True)
 	values.update(overrides)
 	return frappe._dict(values)
 
@@ -55,14 +54,14 @@ class World:
 
 	`requests`  {name: (docstatus, type)}                  Material Requests
 	`quotations` {name: (docstatus, supplier)}             Supplier Quotations
-	`quote_lines` [(name, parent, item, rfq)]               Supplier Quotation lines
+	`quote_lines` [(name, parent, item, rfq, mr)]            Supplier Quotation lines
 	`competing`  {(rfq, item): {suppliers}}                  who quoted what on each Request for Quotation
 	"""
 
 	def __init__(self, requests=None, quotations=None, quote_lines=None, competing=None):
 		self.requests = {"MR-1": (1, "Purchase")} if requests is None else requests
 		self.quotations = {"SQ-1": (1, SUPPLIER)} if quotations is None else quotations
-		self.quote_lines = [("SQI-1", "SQ-1", "STEEL-1", "RFQ-1")] if quote_lines is None else quote_lines
+		self.quote_lines = [("SQI-1", "SQ-1", "STEEL-1", "RFQ-1", "MR-1")] if quote_lines is None else quote_lines
 		self.competing = (
 			{("RFQ-1", "STEEL-1"): {SUPPLIER, "Beta Metals", "Gamma Iron"}} if competing is None else competing
 		)
@@ -84,8 +83,8 @@ class World:
 		if doctype == "Supplier Quotation Item":
 			parents = filters["parent"][1]
 			return [
-				frappe._dict(name=n, parent=p, item_code=i, request_for_quotation=r)
-				for n, p, i, r in self.quote_lines
+				frappe._dict(name=n, parent=p, item_code=i, request_for_quotation=r, material_request=m)
+				for n, p, i, r, m in self.quote_lines
 				if p in parents
 			]
 		raise AssertionError(f"unexpected lookup of {doctype}")
@@ -123,8 +122,7 @@ class TestCompanyRules(unittest.TestCase):
 			local_quotation_above=750.5,
 			local_min_quotations=4,
 			import_min_quotations=3,
-			verbal_skips_quotations=0,
-			verbal_skips_material_request=1,
+			verbal_skips_rules=0,
 		)
 		row.update(overrides)
 		return row
@@ -137,18 +135,17 @@ class TestCompanyRules(unittest.TestCase):
 		rule, _db = self._read([self._row()])
 		self.assertTrue(rule.enforce)
 		self.assertEqual((rule.above, rule.local_min, rule.import_min, rule.verbal_skips), (750.5, 4, 3, False))
-		self.assertTrue(rule.verbal_skips_mr)
 
-	def test_a_row_that_never_ticked_the_material_request_tick_demands_it(self):
-		rule, _db = self._read([self._row(verbal_skips_material_request=None)])
-		self.assertFalse(rule.verbal_skips_mr)
-		rule, _db = self._read([self._row(verbal_skips_material_request=0)])
-		self.assertFalse(rule.verbal_skips_mr)
+	def test_the_verbal_tick_is_read_from_the_row(self):
+		rule, _db = self._read([self._row(verbal_skips_rules=1)])
+		self.assertTrue(rule.verbal_skips)
+		rule, _db = self._read([self._row(verbal_skips_rules=0)])
+		self.assertFalse(rule.verbal_skips)
 
-	def test_the_query_reads_both_verbal_ticks(self):
+	def test_the_query_reads_the_one_verbal_tick(self):
 		_rule, db = self._read([self._row()])
-		self.assertIn("`verbal_skips_quotations`", db.sql.call_args[0][0])
-		self.assertIn("`verbal_skips_material_request`", db.sql.call_args[0][0])
+		self.assertIn("`verbal_skips_rules`", db.sql.call_args[0][0])
+		self.assertNotIn("verbal_skips_material_request", db.sql.call_args[0][0])
 
 	def test_a_row_with_enforce_unticked_is_not_enforced(self):
 		rule, _db = self._read([self._row(enforce=0)])
@@ -308,12 +305,12 @@ class TestQuotations(unittest.TestCase):
 		self.assertIn(SUPPLIER, problems[0])
 
 	def test_a_quotation_not_raised_from_a_request_for_quotation_does_not_count(self):
-		problems = self._problems(World(quote_lines=[("SQI-1", "SQ-1", "STEEL-1", None)]))
+		problems = self._problems(World(quote_lines=[("SQI-1", "SQ-1", "STEEL-1", None, "MR-1")]))
 		self.assertIn("was not raised from a Request for Quotation", problems[0])
 
 	def test_the_line_the_order_names_decides_which_request_for_quotation(self):
 		world = World(
-			quote_lines=[("SQI-0", "SQ-1", "STEEL-1", None), ("SQI-1", "SQ-1", "STEEL-1", "RFQ-1")],
+			quote_lines=[("SQI-0", "SQ-1", "STEEL-1", None, "MR-1"), ("SQI-1", "SQ-1", "STEEL-1", "RFQ-1", "MR-1")],
 		)
 		self.assertEqual(self._problems(world), [])
 
@@ -322,7 +319,7 @@ class TestQuotations(unittest.TestCase):
 
 	def test_each_item_is_counted_on_its_own(self):
 		world = World(
-			quote_lines=[("SQI-1", "SQ-1", "STEEL-1", "RFQ-1"), ("SQI-2", "SQ-1", "PIPE-1", "RFQ-1")],
+			quote_lines=[("SQI-1", "SQ-1", "STEEL-1", "RFQ-1", "MR-1"), ("SQI-2", "SQ-1", "PIPE-1", "RFQ-1", "MR-1")],
 			competing={
 				("RFQ-1", "STEEL-1"): {SUPPLIER, "Beta Metals", "Gamma Iron"},
 				("RFQ-1", "PIPE-1"): {SUPPLIER},
@@ -333,6 +330,25 @@ class TestQuotations(unittest.TestCase):
 		self.assertEqual(len(problems), 1)
 		self.assertIn("PIPE-1", problems[0])
 		self.assertIn("1 of the 3", problems[0])
+
+	def test_the_quotation_must_come_from_this_lines_material_request(self):
+		world = World(quote_lines=[("SQI-1", "SQ-1", "STEEL-1", "RFQ-1", "MR-9")])
+		problems = self._problems(world)
+		self.assertEqual(len(problems), 1)
+		self.assertIn("was not raised from Material Request", problems[0])
+		self.assertIn("MR-1", problems[0])
+		self.assertIn("Row 1", problems[0])
+
+	def test_a_quotation_whose_request_for_quotation_has_no_material_request_is_not_connected(self):
+		world = World(quote_lines=[("SQI-1", "SQ-1", "STEEL-1", "RFQ-1", None)])
+		problems = self._problems(world)
+		self.assertEqual(len(problems), 1)
+		self.assertIn("was not raised from Material Request", problems[0])
+
+	def test_a_line_with_no_material_request_is_not_also_told_the_quotation_does_not_match(self):
+		world = World(quote_lines=[("SQI-1", "SQ-1", "STEEL-1", "RFQ-1", "MR-9")])
+		problems = self._problems(world, order([line(1, mr="")]))
+		self.assertEqual(problems, [])
 
 	def test_one_bad_quotation_is_reported_once_however_many_lines_it_has(self):
 		world = World(quotations={"SQ-1": (0, SUPPLIER)})
@@ -356,14 +372,20 @@ class TestWhatIsChecked(unittest.TestCase):
 		self.assertIn("no Material Request", problems[0])
 		self.assertIn("no Supplier Quotation", problems[1])
 
-	def test_a_small_local_order_needs_a_material_request_but_no_quotations(self):
-		problems = self._problems(order([line(1, sq="")], total=400))
-		self.assertEqual(len(problems), 0)
-		problems = self._problems(order([line(1, mr="", sq="")], total=400))
-		self.assertEqual(len(problems), 1)
-		self.assertIn("no Material Request", problems[0])
+	def test_a_local_order_up_to_the_amount_is_held_to_nothing(self):
+		# no Material Request, no quotation, nothing: the chain starts above the amount
+		self.assertEqual(self._problems(order([line(1, mr="", sq="", sqi="")], total=400)), [])
+		self.assertEqual(self._problems(order([line(1, mr="", sq="", sqi="")], total=500)), [])
+		problems = self._problems(order([line(1, mr="", sq="", sqi="")], total=500.01))
+		self.assertEqual(len(problems), 2)
 
-	def test_an_import_of_any_size_needs_quotations(self):
+	def test_an_import_of_any_size_needs_the_whole_chain(self):
+		problems = self._problems(order([line(1, mr="", sq="", sqi="")], currency="USD", total=5))
+		self.assertEqual(len(problems), 2)
+		self.assertIn("no Material Request", problems[0])
+		self.assertIn("no Supplier Quotation", problems[1])
+
+	def test_an_import_with_its_request_but_no_quotation_is_refused_for_the_quotation(self):
 		problems = self._problems(order([line(1, sq="")], currency="USD", total=5))
 		self.assertEqual(len(problems), 1)
 		self.assertIn("no Supplier Quotation", problems[0])
@@ -371,41 +393,21 @@ class TestWhatIsChecked(unittest.TestCase):
 	def test_a_compliant_order_passes(self):
 		self.assertEqual(self._problems(order(total=900)), [])
 
-	def test_a_verbal_order_skips_the_quotations_but_not_the_material_request(self):
-		self.assertEqual(self._problems(order([line(1, sq="")], verbal=1)), [])
-		problems = self._problems(order([line(1, mr="", sq="")], verbal=1))
-		self.assertEqual(len(problems), 1)
-		self.assertIn("no Material Request", problems[0])
-
-	def test_a_verbal_order_skips_the_material_request_too_when_the_row_says_so(self):
-		rule = settings(verbal_skips_mr=True)
-		self.assertEqual(self._problems(order([line(1, mr="", sq="")], verbal=1), rule), [])
-		# typed in directly, with no links at all, yet nothing to refuse
+	def test_a_verbal_order_needs_no_material_request_and_no_quotations(self):
+		rule = settings()
 		self.assertEqual(self._problems(order([line(1, mr="", sq="", sqi="")], verbal=1, total=10**6), rule), [])
+		self.assertEqual(self._problems(order([line(1, sq="")], verbal=1), rule), [])
 
-	def test_excusing_the_request_does_not_excuse_the_quotations(self):
-		rule = settings(verbal_skips_mr=True, verbal_skips=False)
-		problems = self._problems(order([line(1, mr="", sq="")], verbal=1), rule)
-		self.assertEqual(len(problems), 1)
-		self.assertIn("no Supplier Quotation", problems[0])
+	def test_a_verbal_import_needs_nothing_either(self):
+		self.assertEqual(self._problems(order([line(1, mr="", sq="", sqi="")], currency="USD", verbal=1)), [])
 
-	def test_the_material_request_tick_does_nothing_for_an_order_not_ticked_verbal(self):
-		rule = settings(verbal_skips_mr=True)
-		problems = self._problems(order([line(1, mr="", sq="")], verbal=0), rule)
+	def test_with_the_row_not_exempting_verbal_it_is_only_a_label(self):
+		problems = self._problems(order([line(1, mr="", sq="", sqi="")], verbal=1), settings(verbal_skips=False))
 		self.assertEqual(len(problems), 2)
 
-	def test_a_verbal_order_is_still_refused_its_missing_request_while_the_row_does_not_excuse_it(self):
-		problems = self._problems(order([line(1, mr="", sq="")], verbal=1), settings(verbal_skips_mr=False))
-		self.assertEqual(len(problems), 1)
-		self.assertIn("no Material Request", problems[0])
-
-	def test_a_verbal_import_skips_them_too(self):
-		self.assertEqual(self._problems(order([line(1, sq="")], currency="USD", verbal=1)), [])
-
-	def test_with_the_setting_off_verbal_is_only_a_label(self):
-		problems = self._problems(order([line(1, sq="")], verbal=1), settings(verbal_skips=False))
-		self.assertEqual(len(problems), 1)
-		self.assertIn("no Supplier Quotation", problems[0])
+	def test_the_verbal_tick_does_nothing_for_an_order_not_marked_verbal(self):
+		problems = self._problems(order([line(1, mr="", sq="", sqi="")], verbal=0), settings(verbal_skips=True))
+		self.assertEqual(len(problems), 2)
 
 	def test_an_internal_suppliers_order_is_not_held_to_them(self):
 		self.assertEqual(self._problems(order([line(1, mr="", sq="")], is_internal_supplier=1)), [])
@@ -458,45 +460,32 @@ class TestTheRefusal(unittest.TestCase):
 
 	def test_the_refusal_names_the_rule_the_problems_and_the_way_to_comply(self):
 		with self.assertRaises(frappe.ValidationError) as caught:
-			self._validate(order([line(1, mr="", sq="")], total=900), settings())
+			self._validate(order([line(1, mr="", sq="", sqi="")], total=900), settings())
 		message = str(caught.exception)
 		self.assertIn("no Material Request", message)
 		self.assertIn("no Supplier Quotation", message)
 		self.assertIn("a local order above", message)
-		self.assertIn("3 Supplier Quotations", message)
-		self.assertIn("Request for Quotation", message)
+		self.assertIn("a Material Request, one Request for Quotation raised from it and 3 Supplier Quotations on it", message)
 
-	def test_an_import_is_told_it_needs_them_whatever_the_amount(self):
+	def test_an_import_is_told_it_needs_the_chain_whatever_the_amount(self):
 		with self.assertRaises(frappe.ValidationError) as caught:
 			self._validate(order([line(1, sq="")], currency="USD", total=5), settings())
 		self.assertIn("whatever the amount", str(caught.exception))
-		self.assertIn("2 Supplier Quotations", str(caught.exception))
+		self.assertIn("a Material Request, one Request for Quotation raised from it and 2 Supplier Quotations on it", str(caught.exception))
 
-	def test_a_small_order_is_told_only_about_the_material_request(self):
-		with self.assertRaises(frappe.ValidationError) as caught:
-			self._validate(order([line(1, mr="")], total=100), settings())
-		self.assertIn("needs no quotations", str(caught.exception))
+	def test_a_small_local_order_is_let_through_with_nothing(self):
+		self._validate(order([line(1, mr="", sq="", sqi="")], total=100), settings())
 
 	def test_the_verbal_way_out_is_offered_only_while_it_works(self):
 		with self.assertRaises(frappe.ValidationError) as caught:
 			self._validate(order([line(1, mr="")]), settings(verbal_skips=True))
-		self.assertIn("Verbal (No Quotation)", str(caught.exception))
+		self.assertIn("ticks Verbal (No Quotation) instead", str(caught.exception))
 		with self.assertRaises(frappe.ValidationError) as caught:
 			self._validate(order([line(1, mr="")]), settings(verbal_skips=False))
 		self.assertNotIn("Verbal (No Quotation)", str(caught.exception))
 
-	def test_the_verbal_way_out_says_what_it_excuses(self):
-		def told(**kw):
-			with self.assertRaises(frappe.ValidationError) as caught:
-				self._validate(order([line(1, mr="")]), settings(**kw))
-			return str(caught.exception)
-
-		self.assertIn("instead of quotations.", told(verbal_skips=True, verbal_skips_mr=False))
-		self.assertIn("instead of a Material Request and quotations", told(verbal_skips=True, verbal_skips_mr=True))
-		self.assertIn("instead of a Material Request.", told(verbal_skips=False, verbal_skips_mr=True))
-
-	def test_a_verbal_order_the_row_excuses_entirely_is_let_through(self):
-		self._validate(order([line(1, mr="", sq="")], verbal=1), settings(verbal_skips_mr=True))
+	def test_a_verbal_order_the_row_exempts_is_let_through(self):
+		self._validate(order([line(1, mr="", sq="", sqi="")], verbal=1), settings())
 
 
 class TestCompetingQuotationsQuery(unittest.TestCase):
@@ -539,42 +528,20 @@ class TestWiring(unittest.TestCase):
 		self.assertEqual(meta["istable"], 1)
 		fields = {f["fieldname"]: f for f in meta["fields"]}
 		self.assertEqual(
-			{
-				name: fields[name].get("default")
-				for name in (
-					"enforce",
-					"local_quotation_above",
-					"local_min_quotations",
-					"import_min_quotations",
-					"verbal_skips_quotations",
-					"verbal_skips_material_request",
-				)
-			},
-			{
-				"enforce": "1",
-				"local_quotation_above": "500",
-				"local_min_quotations": "3",
-				"import_min_quotations": "2",
-				"verbal_skips_quotations": "1",
-				"verbal_skips_material_request": "0",
-			},
+			{name: fields[name].get("default") for name in ("enforce", "local_quotation_above", "local_min_quotations", "import_min_quotations", "verbal_skips_rules")},
+			{"enforce": "1", "local_quotation_above": "500", "local_min_quotations": "3", "import_min_quotations": "2", "verbal_skips_rules": "1"},
 		)
 		self.assertEqual(fields["company"]["reqd"], 1)
 		self.assertEqual(fields["local_quotation_above"]["options"], "currency")
 		self.assertEqual(fields["currency"]["fetch_from"], "company.default_currency")
 		# the code's fallbacks are the row's defaults
 		self.assertEqual((pop.DEFAULT_ABOVE, pop.DEFAULT_LOCAL_MIN, pop.DEFAULT_IMPORT_MIN), (500.0, 3, 2))
-		# every column the rule reads from the table exists on it
-		for column in (
-			"enforce",
-			"local_quotation_above",
-			"local_min_quotations",
-			"import_min_quotations",
-			"verbal_skips_quotations",
-			"verbal_skips_material_request",
-			"company",
-		):
-			self.assertIn(column, fields)
+		# the row has exactly these columns, one verbal tick among them, and no leftover of the two earlier ticks
+		self.assertEqual(
+			set(fields),
+			{"company", "currency", "enforce", "local_quotation_above", "local_min_quotations", "import_min_quotations", "verbal_skips_rules"},
+		)
+		self.assertEqual(set(meta["field_order"]), set(fields))
 		# the grid is ten columns wide: every column in the list view fits
 		self.assertLessEqual(sum(f.get("columns", 0) for f in meta["fields"] if f.get("in_list_view")), 10)
 
@@ -654,17 +621,16 @@ class TestConversionPatch(unittest.TestCase):
 					row["local_quotation_above"],
 					row["local_min_quotations"],
 					row["import_min_quotations"],
-					row["verbal_skips_quotations"],
-					row["verbal_skips_material_request"],
+					row["verbal_skips_rules"],
 				),
-				(1, 750.0, 4, 3, 0, 0),
+				(1, 750.0, 4, 3, 0),
 			)
 		settings_doc.save.assert_called_once()
 
 	def test_a_value_never_stored_takes_its_default(self):
 		appended, _doc, _db = self._run({"enforce_po_procurement": "1"})
 		row = appended[0][1]
-		self.assertEqual((row["local_quotation_above"], row["local_min_quotations"], row["import_min_quotations"], row["verbal_skips_quotations"]), (500.0, 3, 2, 1))
+		self.assertEqual((row["local_quotation_above"], row["local_min_quotations"], row["import_min_quotations"], row["verbal_skips_rules"]), (500.0, 3, 2, 1))
 
 	def test_a_switch_never_ticked_adds_no_rows_but_the_old_values_still_go(self):
 		for stored in ({}, {"enforce_po_procurement": "0", "po_local_min_quotations": "4"}):
@@ -683,3 +649,28 @@ class TestConversionPatch(unittest.TestCase):
 		appended, settings_doc, db = self._run(dict(self.ON), table=False)
 		self.assertEqual(appended, [])
 		db.sql.assert_not_called()
+
+
+class TestVerbalExemptPatch(unittest.TestCase):
+	def _run(self, table=True, column=True):
+		from sf_trading.patches.v0_1 import po_rule_verbal_exempt as patch_module
+
+		db = MagicMock()
+		db.table_exists.return_value = table
+		db.has_column.return_value = column
+		with patch.object(frappe, "db", db):
+			patch_module.execute()
+		return db
+
+	def test_a_row_with_no_value_stored_is_ticked(self):
+		db = self._run()
+		sql = db.sql.call_args[0][0]
+		self.assertIn("SET `verbal_skips_rules` = 1 WHERE `verbal_skips_rules` IS NULL", sql)
+
+	def test_a_value_somebody_set_is_not_touched(self):
+		self.assertNotIn("UPDATE `tabSF Purchase Order Rule` SET `verbal_skips_rules` = 1;", self._run().sql.call_args[0][0])
+		self.assertIn("IS NULL", self._run().sql.call_args[0][0])
+
+	def test_a_site_without_the_table_or_the_column_is_skipped(self):
+		self._run(table=False).sql.assert_not_called()
+		self._run(column=False).sql.assert_not_called()

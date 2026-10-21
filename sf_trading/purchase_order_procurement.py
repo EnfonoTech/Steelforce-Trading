@@ -1,19 +1,25 @@
 # sf_trading/purchase_order_procurement.py
-"""Purchase Order procurement rules: a Material Request behind every line, and enough competing quotations.
+"""Purchase Order procurement rules: a Purchase Order above the line is the end of one Material Request -> Request for
+Quotation -> Supplier Quotations chain.
 
-A Purchase Order is meant to be the end of a chain: a Purchase Material Request, a Request for Quotation sent to
-several suppliers, their Supplier Quotations, and the order made from the winning quotation. For a company with a row
-(Enforce ticked) in SF Trading Settings > Purchasing > Purchase Order Rules, an order that skips the chain cannot be saved
-or submitted:
+For a company with a row (Enforce ticked) in SF Trading Settings > Purchasing > Purchase Order Rules, a Purchase Order is
+held to the chain when it is
 
-  * every line comes from a submitted Material Request of type Purchase, unless the order is a verbal one
-    (`custom_verbal`) and the company's row ticks `verbal_skips_material_request`;
-  * unless the order is a verbal one (`custom_verbal`, and only while the company's row ticks `verbal_skips_quotations`),
-    every line also comes from a submitted Supplier Quotation of THIS supplier that was raised from a Request for
-    Quotation, and that many different suppliers quoted the same item on that same Request for Quotation, the chosen
-    one included: an import (an order in a foreign currency) needs the row's `import_min_quotations` whatever the
-    amount, a local one (in the company's own currency) needs `local_min_quotations` once its Grand Total is above
-    `local_quotation_above`, and none at or under it.
+  * an import (an order in a foreign currency): whatever the amount, with the row's `import_min_quotations`, or
+  * a local order (in the company's own currency) whose Grand Total is above the row's `local_quotation_above`, with
+    `local_min_quotations`;
+
+a local order up to that amount is held to nothing. Held to the chain, an order cannot be saved or submitted unless every
+line
+
+  * comes from a submitted Material Request of type Purchase, and
+  * from a submitted Supplier Quotation of THIS supplier that was raised from a Request for Quotation, which in turn was
+    raised from that same Material Request (the quotation line carries the Material Request core copied from the request),
+    and
+  * that many different suppliers quoted the same item on that same Request for Quotation, the chosen one included.
+
+An order marked Verbal (`custom_verbal`) is held to nothing when the company's row ticks `verbal_skips_rules`: it needs no
+Material Request and no quotations.
 
 Each company has its own row, so each has its own amount, its own numbers and its own verbal switch. A company with no
 row, or a row with Enforce unticked, is not held to the rules at all.
@@ -90,7 +96,7 @@ def rules(company) -> frappe._dict:
 		try:
 			rows = frappe.db.sql(
 				"SELECT `enforce`, `local_quotation_above`, `local_min_quotations`, `import_min_quotations`, "
-				"`verbal_skips_quotations`, `verbal_skips_material_request` FROM `tabSF Purchase Order Rule` "
+				"`verbal_skips_rules` FROM `tabSF Purchase Order Rule` "
 				"WHERE `parent` = %s AND `parenttype` = %s AND `parentfield` = %s AND `company` = %s "
 				"ORDER BY `idx` LIMIT 1",
 				(SETTINGS, SETTINGS, RULE_FIELD, company),
@@ -106,15 +112,13 @@ def rules(company) -> frappe._dict:
 			local_min=DEFAULT_LOCAL_MIN,
 			import_min=DEFAULT_IMPORT_MIN,
 			verbal_skips=True,
-			verbal_skips_mr=False,
 		)
 	return frappe._dict(
 		enforce=bool(cint(row.enforce)),
 		above=flt(row.local_quotation_above),
 		local_min=cint(row.local_min_quotations),
 		import_min=cint(row.import_min_quotations),
-		verbal_skips=bool(cint(row.verbal_skips_quotations)),
-		verbal_skips_mr=bool(cint(row.verbal_skips_material_request)),
+		verbal_skips=bool(cint(row.verbal_skips_rules)),
 	)
 
 
@@ -133,8 +137,8 @@ def is_import(doc) -> bool:
 
 
 def required_quotations(doc, rule) -> int:
-	"""How many quotations this order needs: the import number whatever the amount, the local one above the amount,
-	none at or under it."""
+	"""How many quotations this order needs, and so whether it is held to the chain at all: the import number whatever
+	the amount, the local one above the amount, none (not held) at or under it."""
 	if is_import(doc):
 		return rule.import_min
 	if flt(doc.get("base_grand_total")) > rule.above:
@@ -142,13 +146,9 @@ def required_quotations(doc, rule) -> int:
 	return 0
 
 
-def skips_quotations(doc, rule) -> bool:
+def skips_rules(doc, rule) -> bool:
+	"""A verbal order needs no Material Request and no quotations, when the company's row says so."""
 	return bool(rule.verbal_skips and cint(doc.get(VERBAL)))
-
-
-def skips_material_request(doc, rule) -> bool:
-	"""A verbal order needs no Material Request either, when the company's row says so."""
-	return bool(rule.get("verbal_skips_mr") and cint(doc.get(VERBAL)))
 
 
 # ── The lines, with the links that make the case for each ─────────────────────────────────────────────────
@@ -217,7 +217,7 @@ def _quotation_items(names) -> list:
 	return frappe.get_all(
 		"Supplier Quotation Item",
 		filters={"parent": ["in", sorted(names)], "parenttype": "Supplier Quotation"},
-		fields=["name", "parent", "item_code", "request_for_quotation"],
+		fields=["name", "parent", "item_code", "request_for_quotation", "material_request"],
 	)
 
 
@@ -254,8 +254,8 @@ def competing_suppliers(rfqs, items) -> dict:
 
 
 def quotation_problems(doc, lines, needed) -> list:
-	"""Every line from a submitted quotation of this supplier, raised from a Request for Quotation that `needed`
-	different suppliers quoted that item on."""
+	"""Every line from a submitted quotation of this supplier, raised from a Request for Quotation that was raised from
+	the line's own Material Request, and that `needed` different suppliers quoted that item on."""
 	problems = []
 	without = [line.idx for line in lines if not line.supplier_quotation]
 	if without:
@@ -301,6 +301,15 @@ def quotation_problems(doc, lines, needed) -> list:
 			reported.add(name)
 			problems.append(_("Supplier Quotation {0} was not raised from a Request for Quotation.").format(_name(name)))
 			continue
+		# one chain: the request the quotation was raised from is the request this line comes from
+		if line.material_request and cstr(evidence.material_request).strip() != line.material_request:
+			reported.add(name)
+			problems.append(
+				_("{0}: Supplier Quotation {1} was not raised from Material Request {2}.").format(
+					_rows([x.idx for x in lines if x.supplier_quotation == name]), _name(name), _name(line.material_request)
+				)
+			)
+			continue
 		groups.setdefault((rfq, line.item), []).append(line.idx)
 
 	competing = competing_suppliers({rfq for rfq, _item in groups}, {item for _rfq, item in groups})
@@ -316,17 +325,16 @@ def quotation_problems(doc, lines, needed) -> list:
 
 
 def problems_for(doc, rule=None) -> list:
-	"""Everything that keeps this order from being saved, as sentences; empty when it meets the rules or they are
-	off."""
+	"""Everything that keeps this order from being saved, as sentences; empty when it meets the rules, is not held to
+	them (rules off, a local order up to the amount, a verbal order the row excuses) or they are off."""
 	rule = rule or rules(doc.get("company"))
 	if not rule.enforce or is_exempt(doc):
 		return []
-	lines = lines_of(doc)
-	problems = [] if skips_material_request(doc, rule) else material_request_problems(lines)
 	needed = required_quotations(doc, rule)
-	if needed and not skips_quotations(doc, rule):
-		problems += quotation_problems(doc, lines, needed)
-	return problems
+	if not needed or skips_rules(doc, rule):
+		return []
+	lines = lines_of(doc)
+	return material_request_problems(lines) + quotation_problems(doc, lines, needed)
 
 
 # ── The hook ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -334,16 +342,20 @@ def problems_for(doc, rule=None) -> list:
 
 def _rule_sentence(doc, rule) -> str:
 	needed = required_quotations(doc, rule)
-	above = fmt_money(rule.above, currency=frappe.get_cached_value("Company", doc.company, "default_currency"))
-	if not needed:
-		return _("every line needs a Material Request; a local order up to {0} needs no quotations").format(above)
 	if is_import(doc):
-		return _("an import needs {0} Supplier Quotations from a Request for Quotation, whatever the amount").format(needed)
-	return _("a local order above {0} needs {1} Supplier Quotations from a Request for Quotation").format(above, needed)
+		return _(
+			"an import needs a Material Request, one Request for Quotation raised from it and {0} Supplier Quotations on it, "
+			"whatever the amount"
+		).format(needed)
+	above = fmt_money(rule.above, currency=frappe.get_cached_value("Company", doc.company, "default_currency"))
+	return _(
+		"a local order above {0} needs a Material Request, one Request for Quotation raised from it and {1} Supplier "
+		"Quotations on it"
+	).format(above, needed)
 
 
 def validate(doc, _method=None):
-	"""Purchase Order validate (on save and on submit): refuse an order that skips the Material Request ->
+	"""Purchase Order validate (on save and on submit): refuse an order above the line that skips the Material Request ->
 	Request for Quotation -> Supplier Quotation chain."""
 	rule = rules(doc.get("company"))
 	problems = problems_for(doc, rule)
@@ -351,15 +363,11 @@ def validate(doc, _method=None):
 		return
 
 	steps = _(
-		"Raise a Material Request of type Purchase, send a Request for Quotation from it, enter each supplier's "
-		"Supplier Quotation against that request, then create the Purchase Order from the chosen quotation."
+		"Raise a Material Request of type Purchase, send one Request for Quotation from it to the suppliers, enter each "
+		"supplier's Supplier Quotation against that request, then create the Purchase Order from the chosen quotation."
 	)
-	if rule.verbal_skips and rule.verbal_skips_mr:
-		steps += " " + _("An order based on a verbal quote ticks Verbal (No Quotation) instead of a Material Request and quotations.")
-	elif rule.verbal_skips:
-		steps += " " + _("An order based on a verbal quote ticks Verbal (No Quotation) instead of quotations.")
-	elif rule.verbal_skips_mr:
-		steps += " " + _("An order based on a verbal quote ticks Verbal (No Quotation) instead of a Material Request.")
+	if rule.verbal_skips:
+		steps += " " + _("An order based on a verbal quote ticks Verbal (No Quotation) instead.")
 	frappe.throw(
 		"<p>{}</p><ul>{}</ul><p>{}</p>".format(
 			_("This Purchase Order does not meet the procurement rules ({0}):").format(_rule_sentence(doc, rule)),

@@ -45,9 +45,7 @@ def execute():
 					"local_quotation_above": flt(_number(stored, "po_local_quotation_above", 500)),
 					"local_min_quotations": cint(_number(stored, "po_local_min_quotations", 3)),
 					"import_min_quotations": cint(_number(stored, "po_import_min_quotations", 2)),
-					"verbal_skips_quotations": cint(_number(stored, "po_verbal_skips_quotations", 1)),
-					# 0.1.66 never excused a verbal order its Material Request
-					"verbal_skips_material_request": 0,
+					"verbal_skips_rules": cint(_number(stored, "po_verbal_skips_quotations", 1)),
 				},
 			)
 		settings.save(ignore_permissions=True)

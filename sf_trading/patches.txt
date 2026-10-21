@@ -35,3 +35,4 @@ sf_trading.patches.v0_1.stock_transfer_segregation
 sf_trading.patches.v0_1.bayan_follows_small_import
 sf_trading.patches.v0_1.ticket_closed_by_backfill
 sf_trading.patches.v0_1.po_procurement_rules_by_company
+sf_trading.patches.v0_1.po_rule_verbal_exempt

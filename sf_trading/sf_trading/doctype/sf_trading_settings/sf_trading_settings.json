@@ -201,7 +201,7 @@
    "fieldtype": "Table",
    "label": "Purchase Order Rules, by Company",
    "options": "SF Purchase Order Rule",
-   "description": "A Purchase Order cannot be saved or submitted unless every line comes from a submitted Purchase Material Request and, unless the order is a verbal one, enough Supplier Quotations raised from a Request for Quotation back it: Material Request, then Request for Quotation, then Supplier Quotations, then the Purchase Order made from the winning quotation. One row per company: a company with no row, or a row with Enforce unticked, is not held to the rules, so adding a row is what switches them on. A duplicated order does not keep those links, so duplicating is no way round the rule; an amended order keeps them. Orders to an internal (inter-company) supplier are not held to it."
+   "description": "A local Purchase Order above the row's amount, and an import (a foreign currency) of any amount, cannot be saved or submitted unless every line comes from a submitted Purchase Material Request that has one Request for Quotation raised from it, with enough Supplier Quotations on it (3 for a local order, 2 for an import, as set in the row): Material Request, then Request for Quotation, then Supplier Quotations, then the Purchase Order made from the chosen quotation. A local order up to the amount needs none of that. An order marked Verbal (No Quotation) is exempt from all of it while the row's Verbal Exempt is ticked. One row per company: a company with no row, or a row with Enforce unticked, is not held to the rules, so adding a row is what switches them on. A duplicated order does not keep its links, so duplicating is no way round the rule; an amended order keeps them. Orders to an internal (inter-company) supplier are not held to it."
   },
   {
    "fieldname": "sales_tab",
@@ -431,7 +431,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-21 15:00:00.000000",
+ "modified": "2026-10-21 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",

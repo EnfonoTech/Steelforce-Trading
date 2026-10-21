@@ -11,8 +11,7 @@
   "local_quotation_above",
   "local_min_quotations",
   "import_min_quotations",
-  "verbal_skips_quotations",
-  "verbal_skips_material_request"
+  "verbal_skips_rules"
  ],
  "fields": [
   {
@@ -22,7 +21,7 @@
    "label": "Company",
    "options": "Company",
    "reqd": 1,
-   "columns": 2
+   "columns": 3
   },
   {
    "fetch_from": "company.default_currency",
@@ -48,10 +47,10 @@
    "fieldname": "local_quotation_above",
    "fieldtype": "Currency",
    "in_list_view": 1,
-   "label": "Local Needs Quotations Above",
+   "label": "Local Needs Chain Above",
    "options": "currency",
    "columns": 2,
-   "description": "In the company's currency. A Purchase Order in the company's own currency whose Grand Total is above this amount needs the quotations below; one at or under it needs none."
+   "description": "In the company's currency. A Purchase Order in the company's own currency whose Grand Total is above this amount needs a Material Request, one Request for Quotation raised from it and the quotations below on it; one at or under it needs none of that."
   },
   {
    "default": "3",
@@ -60,7 +59,7 @@
    "in_list_view": 1,
    "label": "Local Quotations",
    "columns": 1,
-   "description": "Different suppliers that quoted for the same item on the same Request for Quotation, the chosen one included."
+   "description": "Different suppliers that quoted for the same item on the Request for Quotation, the chosen one included."
   },
   {
    "default": "2",
@@ -69,31 +68,22 @@
    "in_list_view": 1,
    "label": "Import Quotations",
    "columns": 1,
-   "description": "An import is a Purchase Order in a foreign currency. It needs this many quotations whatever the amount."
+   "description": "An import is a Purchase Order in a foreign currency. It needs a Material Request, one Request for Quotation raised from it and this many quotations on it, whatever the amount."
   },
   {
    "default": "1",
-   "fieldname": "verbal_skips_quotations",
+   "fieldname": "verbal_skips_rules",
    "fieldtype": "Check",
    "in_list_view": 1,
-   "label": "Verbal Needs No Quotations",
+   "label": "Verbal Exempt",
    "columns": 1,
-   "description": "A Purchase Order marked Verbal (No Quotation) needs no quotations. Unticked, Verbal does not excuse the quotations: they are still demanded."
-  },
-  {
-   "default": "0",
-   "fieldname": "verbal_skips_material_request",
-   "fieldtype": "Check",
-   "in_list_view": 1,
-   "label": "Verbal Needs No Material Request",
-   "columns": 1,
-   "description": "A Purchase Order marked Verbal (No Quotation) needs no Material Request either, so it can be entered directly. Unticked, a verbal order still has to come from a submitted Purchase Material Request."
+   "description": "A Purchase Order marked Verbal (No Quotation) needs no Material Request and no quotations. Unticked, Verbal excuses nothing: the order is held to the rules like any other."
   }
  ],
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-10-21 16:30:00.000000",
+ "modified": "2026-10-21 18:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Purchase Order Rule",
