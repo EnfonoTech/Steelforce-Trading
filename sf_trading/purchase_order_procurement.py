@@ -6,8 +6,9 @@ several suppliers, their Supplier Quotations, and the order made from the winnin
 (Enforce ticked) in SF Trading Settings > Purchasing > Purchase Order Rules, an order that skips the chain cannot be saved
 or submitted:
 
-  * every line comes from a submitted Material Request of type Purchase;
-  * unless the order is a verbal one (`custom_verbal`, and only while the company's row lets a verbal order skip them),
+  * every line comes from a submitted Material Request of type Purchase, unless the order is a verbal one
+    (`custom_verbal`) and the company's row ticks `verbal_skips_material_request`;
+  * unless the order is a verbal one (`custom_verbal`, and only while the company's row ticks `verbal_skips_quotations`),
     every line also comes from a submitted Supplier Quotation of THIS supplier that was raised from a Request for
     Quotation, and that many different suppliers quoted the same item on that same Request for Quotation, the chosen
     one included: an import (an order in a foreign currency) needs the row's `import_min_quotations` whatever the
@@ -89,7 +90,7 @@ def rules(company) -> frappe._dict:
 		try:
 			rows = frappe.db.sql(
 				"SELECT `enforce`, `local_quotation_above`, `local_min_quotations`, `import_min_quotations`, "
-				"`verbal_skips_quotations` FROM `tabSF Purchase Order Rule` "
+				"`verbal_skips_quotations`, `verbal_skips_material_request` FROM `tabSF Purchase Order Rule` "
 				"WHERE `parent` = %s AND `parenttype` = %s AND `parentfield` = %s AND `company` = %s "
 				"ORDER BY `idx` LIMIT 1",
 				(SETTINGS, SETTINGS, RULE_FIELD, company),
@@ -100,7 +101,12 @@ def rules(company) -> frappe._dict:
 			row = None
 	if not row:
 		return frappe._dict(
-			enforce=False, above=DEFAULT_ABOVE, local_min=DEFAULT_LOCAL_MIN, import_min=DEFAULT_IMPORT_MIN, verbal_skips=True
+			enforce=False,
+			above=DEFAULT_ABOVE,
+			local_min=DEFAULT_LOCAL_MIN,
+			import_min=DEFAULT_IMPORT_MIN,
+			verbal_skips=True,
+			verbal_skips_mr=False,
 		)
 	return frappe._dict(
 		enforce=bool(cint(row.enforce)),
@@ -108,6 +114,7 @@ def rules(company) -> frappe._dict:
 		local_min=cint(row.local_min_quotations),
 		import_min=cint(row.import_min_quotations),
 		verbal_skips=bool(cint(row.verbal_skips_quotations)),
+		verbal_skips_mr=bool(cint(row.verbal_skips_material_request)),
 	)
 
 
@@ -137,6 +144,11 @@ def required_quotations(doc, rule) -> int:
 
 def skips_quotations(doc, rule) -> bool:
 	return bool(rule.verbal_skips and cint(doc.get(VERBAL)))
+
+
+def skips_material_request(doc, rule) -> bool:
+	"""A verbal order needs no Material Request either, when the company's row says so."""
+	return bool(rule.get("verbal_skips_mr") and cint(doc.get(VERBAL)))
 
 
 # ── The lines, with the links that make the case for each ─────────────────────────────────────────────────
@@ -310,7 +322,7 @@ def problems_for(doc, rule=None) -> list:
 	if not rule.enforce or is_exempt(doc):
 		return []
 	lines = lines_of(doc)
-	problems = material_request_problems(lines)
+	problems = [] if skips_material_request(doc, rule) else material_request_problems(lines)
 	needed = required_quotations(doc, rule)
 	if needed and not skips_quotations(doc, rule):
 		problems += quotation_problems(doc, lines, needed)
@@ -342,8 +354,12 @@ def validate(doc, _method=None):
 		"Raise a Material Request of type Purchase, send a Request for Quotation from it, enter each supplier's "
 		"Supplier Quotation against that request, then create the Purchase Order from the chosen quotation."
 	)
-	if rule.verbal_skips:
+	if rule.verbal_skips and rule.verbal_skips_mr:
+		steps += " " + _("An order based on a verbal quote ticks Verbal (No Quotation) instead of a Material Request and quotations.")
+	elif rule.verbal_skips:
 		steps += " " + _("An order based on a verbal quote ticks Verbal (No Quotation) instead of quotations.")
+	elif rule.verbal_skips_mr:
+		steps += " " + _("An order based on a verbal quote ticks Verbal (No Quotation) instead of a Material Request.")
 	frappe.throw(
 		"<p>{}</p><ul>{}</ul><p>{}</p>".format(
 			_("This Purchase Order does not meet the procurement rules ({0}):").format(_rule_sentence(doc, rule)),
