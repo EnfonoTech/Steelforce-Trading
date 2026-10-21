@@ -47,6 +47,17 @@
        (accounts_receivable.py set_ageing), so
        NOT DUE = outstanding - total_due, and the two add back to outstanding.
      Advance is reported separately and has ALREADY been taken out of paid.
+
+     Zero and credit balances are not listed
+     ---------------------------------------
+     Only a party whose Outstanding is above zero gets a line. A party that owes nothing, and
+     one whose net balance is a credit (an advance or an unallocated receipt sitting on the
+     account), are left out. The Total row, the party count and the Ageing Distribution are
+     summed from the lines that ARE listed, so the page always adds up to itself.
+     The figures are therefore what customers owe, not the receivable ledger: the ledger also
+     carries the credit balances left out here. Half a thousandth is the floor, so rounding
+     dust (a balance of 0.0004) does not count as owing. Nothing is hidden on the report
+     itself, only on this print.
 -->
 <style>
     /* wkhtmltopdf reads page setup from rules on .print-format (see
@@ -219,8 +230,11 @@
 </style>
 
 {%
-    /* ---- the party lines; a total row injected by the report, if any, has no party ---- */
-    var rows = (data || []).filter(function (row) { return row && row.party; });
+    /* ---- the party lines; a total row injected by the report, if any, has no party.
+            Only a party that owes something is printed: zero and credit (negative) balances
+            are left out, and every total below is summed from the lines that remain ---- */
+    var MIN_DUE = 0.0005;
+    var rows = (data || []).filter(function (row) { return row && row.party && flt(row.outstanding) > MIN_DUE; });
 
     var ccy = rows.length ? (rows[0].currency || "") : "";
     var nf = get_number_format(ccy);
