@@ -60,6 +60,8 @@
   "cash_flow_account_map",
   "report_speed_section",
   "fast_financial_statements",
+  "system_entries_section",
+  "skip_approval_for_system_entries",
   "support_tab",
   "tickets_section",
   "ticket_auto_close_days"
@@ -392,6 +394,18 @@
    "label": "Faster Balance Sheet, Profit and Loss and Cash Flow"
   },
   {
+   "fieldname": "system_entries_section",
+   "fieldtype": "Section Break",
+   "label": "System-generated Entries"
+  },
+  {
+   "default": "1",
+   "description": "A journal ERPNext makes by itself - the monthly asset depreciation entry (scheduled, or from Make Depreciation Entry on the schedule), its reversal, an asset scrap, an exchange gain or loss, the credit note behind a Payment Reconciliation - has no author to send it for approval and no approver to give it, so it is posted straight away instead of being stopped with 'Approval Required'. Such an entry is also not held to the backdate rule, because its date is the schedule's, not the user's. Untick it to route these entries through the approval workflow again, at once, no restart needed.",
+   "fieldname": "skip_approval_for_system_entries",
+   "fieldtype": "Check",
+   "label": "No approval workflow for system-generated entries"
+  },
+  {
    "fieldname": "asset_tracking_section",
    "fieldtype": "Section Break",
    "label": "Asset Tracking"
@@ -431,7 +445,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-21 18:00:00.000000",
+ "modified": "2026-10-22 12:30:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",

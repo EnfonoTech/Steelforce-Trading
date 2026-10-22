@@ -548,6 +548,10 @@ doc_events = {
 		"on_update_after_submit": "sf_trading.payment_entry_reference_date.fill_missing_reference_dates",
 	},
 	"Journal Entry": {
+		# a journal core raises and submits itself (asset depreciation, its reversal, Scrap Asset) is
+		# marked system-generated before anything validates, so permission_manager lets it through
+		# -- see sf_trading/system_entries.py
+		"before_validate": "sf_trading.system_entries.mark_system_generated",
 		# validate, not before_validate: the controller fills `debit` from
 		# debit_in_account_currency * exchange_rate during its own validate, and a hooked
 		# handler runs after it, so the debit rows are already known here
@@ -1435,6 +1439,8 @@ pm_workflow_applicability = [
 	"sf_trading.sales_return.workflow_applicability",
 	# Sales Order cancellation + Stock Reconciliation approval -- see sf_trading/approval_routing.py
 	"sf_trading.approval_routing.workflow_applicability",
+	# a system-generated journal (asset depreciation and the like) is governed by no workflow
+	"sf_trading.system_entries.workflow_applicability",
 ]
 
 
