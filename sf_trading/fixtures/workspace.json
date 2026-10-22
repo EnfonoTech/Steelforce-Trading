@@ -1,7 +1,7 @@
 [
  {
   "charts": [],
-  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Supplier Payments</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Advice\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Advice Builder\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Automation Settings\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"SF Trading User Guide\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Reports</b></span>\", \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Payables\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cash & Cheques\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Masters\", \"col\": 4}}]",
+  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Supplier Payments</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Advice\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Advice Builder\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Payment Automation Settings\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"SF Trading User Guide\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Branch-wise Payable Outstanding\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Supplier and Customer Advance Report\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Reports</b></span>\", \"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Payables\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cash & Cheques\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Masters\", \"col\": 4}}]",
   "creation": "2026-07-26 12:30:00.000000",
   "docstatus": 0,
   "doctype": "Workspace",
@@ -38,6 +38,28 @@
     "label": "Supplier Due Payment Report",
     "link_count": 0,
     "link_to": "Supplier Due Payment Report",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Branch-wise Payable Outstanding",
+    "link_count": 0,
+    "link_to": "Branch-wise Payable Outstanding",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "is_query_report": 1,
+    "label": "Supplier and Customer Advance Report",
+    "link_count": 0,
+    "link_to": "Supplier and Customer Advance Report",
     "link_type": "Report",
     "onboard": 0,
     "type": "Link"
@@ -136,7 +158,7 @@
     "type": "Link"
    }
   ],
-  "modified": "2026-07-26 12:30:00.000000",
+  "modified": "2026-10-22 15:00:00.000000",
   "modified_by": "Administrator",
   "module": "Sf Trading",
   "name": "Supplier Payments",
@@ -174,6 +196,20 @@
     "label": "SF Trading User Guide",
     "link_to": "sf-trading-user-guide",
     "type": "Page"
+   },
+   {
+    "color": "Blue",
+    "doc_view": "",
+    "label": "Branch-wise Payable Outstanding",
+    "link_to": "Branch-wise Payable Outstanding",
+    "type": "Report"
+   },
+   {
+    "color": "Green",
+    "doc_view": "",
+    "label": "Supplier and Customer Advance Report",
+    "link_to": "Supplier and Customer Advance Report",
+    "type": "Report"
    }
   ],
   "title": "Supplier Payments"
@@ -436,7 +472,7 @@
  },
  {
   "charts": [],
-  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Credit &amp; Collections</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Branch-wise Credit Outstanding\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivery Person Payment Pending\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Cash Flow Detail\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Item-wise Cash Flow\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"PDC Report\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Mode of Payment Invoice Wise\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Pending Supporting Documents\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Landed Cost Reconciliation\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Master Data Completeness\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Receivables\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cash Flow\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cheques & Payments\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Accounting Controls\", \"col\": 4}}]",
+  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Credit &amp; Collections</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Branch-wise Credit Outstanding\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Supplier and Customer Advance Report\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivery Person Payment Pending\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Cash Flow Detail\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Item-wise Cash Flow\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"PDC Report\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Mode of Payment Invoice Wise\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Pending Supporting Documents\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Landed Cost Reconciliation\", \"col\": 4}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Master Data Completeness\", \"col\": 4}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Receivables\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cash Flow\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Cheques & Payments\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Accounting Controls\", \"col\": 4}}]",
   "creation": "2026-10-10 12:00:00.000000",
   "docstatus": 0,
   "doctype": "Workspace",
@@ -453,7 +489,7 @@
     "idx": 1,
     "is_query_report": 0,
     "label": "Receivables",
-    "link_count": 4,
+    "link_count": 5,
     "link_to": null,
     "link_type": null,
     "onboard": 0,
@@ -476,6 +512,18 @@
     "hidden": 0,
     "idx": 3,
     "is_query_report": 1,
+    "label": "Supplier and Customer Advance Report",
+    "link_count": 0,
+    "link_to": "Supplier and Customer Advance Report",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 4,
+    "is_query_report": 1,
     "label": "Delivery Person Payment Pending",
     "link_count": 0,
     "link_to": "Delivery Person Payment Pending",
@@ -486,7 +534,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 4,
+    "idx": 5,
     "is_query_report": 1,
     "label": "Mode of Payment Invoice Wise",
     "link_count": 0,
@@ -498,7 +546,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 5,
+    "idx": 6,
     "is_query_report": 0,
     "label": "Customer",
     "link_count": 0,
@@ -510,7 +558,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 6,
+    "idx": 7,
     "is_query_report": 0,
     "label": "Cash Flow",
     "link_count": 3,
@@ -522,7 +570,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 7,
+    "idx": 8,
     "is_query_report": 1,
     "label": "Cash Flow Detail",
     "link_count": 0,
@@ -534,7 +582,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 8,
+    "idx": 9,
     "is_query_report": 1,
     "label": "Cash Flow Money In vs Money Out",
     "link_count": 0,
@@ -546,7 +594,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 9,
+    "idx": 10,
     "is_query_report": 1,
     "label": "Item-wise Cash Flow",
     "link_count": 0,
@@ -558,7 +606,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 10,
+    "idx": 11,
     "is_query_report": 0,
     "label": "Cheques & Payments",
     "link_count": 3,
@@ -570,7 +618,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 11,
+    "idx": 12,
     "is_query_report": 1,
     "label": "PDC Report",
     "link_count": 0,
@@ -582,7 +630,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 12,
+    "idx": 13,
     "is_query_report": 0,
     "label": "Payment Entry",
     "link_count": 0,
@@ -594,7 +642,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 13,
+    "idx": 14,
     "is_query_report": 0,
     "label": "Payment Advice",
     "link_count": 0,
@@ -606,7 +654,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 14,
+    "idx": 15,
     "is_query_report": 0,
     "label": "Accounting Controls",
     "link_count": 7,
@@ -618,7 +666,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 15,
+    "idx": 16,
     "is_query_report": 1,
     "label": "Pending Supporting Documents",
     "link_count": 0,
@@ -630,7 +678,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 16,
+    "idx": 17,
     "is_query_report": 1,
     "label": "Landed Cost Reconciliation",
     "link_count": 0,
@@ -642,7 +690,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 17,
+    "idx": 18,
     "is_query_report": 0,
     "label": "Landed Cost Voucher",
     "link_count": 0,
@@ -654,7 +702,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 18,
+    "idx": 19,
     "is_query_report": 0,
     "label": "SF Trading Settings",
     "link_count": 0,
@@ -666,7 +714,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 19,
+    "idx": 20,
     "is_query_report": 1,
     "label": "Master Data Completeness",
     "link_count": 0,
@@ -678,7 +726,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 20,
+    "idx": 21,
     "is_query_report": 0,
     "label": "Supporting Document Type",
     "link_count": 0,
@@ -690,7 +738,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 21,
+    "idx": 22,
     "is_query_report": 0,
     "label": "Order Cancellation Reason",
     "link_count": 0,
@@ -700,7 +748,7 @@
     "type": "Link"
    }
   ],
-  "modified": "2026-10-11 10:00:00.000000",
+  "modified": "2026-10-22 15:00:00.000000",
   "modified_by": "Administrator",
   "module": "Sf Trading",
   "name": "Credit & Collections",
@@ -773,6 +821,13 @@
     "doc_view": "",
     "label": "Master Data Completeness",
     "link_to": "Master Data Completeness",
+    "type": "Report"
+   },
+   {
+    "color": "Green",
+    "doc_view": "",
+    "label": "Supplier and Customer Advance Report",
+    "link_to": "Supplier and Customer Advance Report",
     "type": "Report"
    }
   ],
