@@ -178,6 +178,8 @@ doctype_js = {
 		"public/js/party_gate_alert.js",
 		# Create -> Goods In: arrival recorded for quantity only (sf_trading/goods_in.py)
 		"public/js/purchase_order_goods_in.js",
+		# the physical stock count's flag and variance as it is typed (sf_trading/po_stock_count.py)
+		"public/js/po_stock_count.js",
 		# no Create -> Purchase Receipt while GRN is disabled for this user (purchase_receipt_gate.py)
 		"public/js/purchase_order_grn.js",
 	],
@@ -340,6 +342,8 @@ after_migrate = [
 	"sf_trading.strict_stock_reservation.ensure_custom_fields",
 	# the Goods In link on a Purchase Invoice row
 	"sf_trading.goods_in.ensure_custom_fields",
+	# the physical stock count, system stock and variance on a Purchase Order row
+	"sf_trading.po_stock_count.ensure_custom_fields",
 ]
 
 after_install = [
@@ -859,7 +863,11 @@ doc_events = {
 			# a Material Request behind every line and enough Request-for-Quotation quotations, unless it is a
 			# verbal order (SF Trading Settings > Purchase Order Procurement Rules) -- see purchase_order_procurement.py
 			"sf_trading.purchase_order_procurement.validate",
+			# the physical stock count's system stock and variance, row by row -- see po_stock_count.py
+			"sf_trading.po_stock_count.refresh",
 		],
+		# every stock row counted before submit, while SF Trading Settings asks for it
+		"before_submit": "sf_trading.po_stock_count.require_count",
 		# a remark is mandatory, checked before docstatus flips -- see purchase_order_cancel.py
 		"before_cancel": "sf_trading.purchase_order_cancel.before_cancel_require_remark",
 	},

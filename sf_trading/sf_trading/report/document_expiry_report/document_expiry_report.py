@@ -1,11 +1,22 @@
 # Copyright (c) 2026, Enfono Technologies and contributors
 # For license information, please see license.txt
 
+"""Document Expiry Report: the supporting documents on Customer and Supplier masters, by expiry date.
+
+Filters: Period -- Daily (expiring today), Weekly (today and the next 7 days), Monthly (today and the next
+30 days) or Date Range (From / To Date); blank lists every document. Master (Customer / Supplier) and one
+Party of it, Document Type and Status narrow it further.
+"""
+
 import frappe
 from frappe import _
-from frappe.utils import cint, date_diff, getdate, nowdate
+from frappe.utils import add_days, cint, date_diff, getdate, nowdate
 
 PARTY_NAME_FIELD = {"Customer": "customer_name", "Supplier": "supplier_name"}
+
+DAILY, WEEKLY, MONTHLY, DATE_RANGE = "Daily", "Weekly", "Monthly", "Date Range"
+#: how many days after today each period reaches (today itself included)
+PERIOD_DAYS = {DAILY: 0, WEEKLY: 7, MONTHLY: 30}
 
 
 def execute(filters=None):
@@ -18,7 +29,8 @@ def execute(filters=None):
 def _get_columns():
 	return [
 		{"label": _("Party Type"), "fieldname": "parenttype", "fieldtype": "Data", "width": 90},
-		{"label": _("Party"), "fieldname": "party", "fieldtype": "Dynamic Link", "options": "parenttype", "width": 220},
+		{"label": _("Party"), "fieldname": "party", "fieldtype": "Dynamic Link", "options": "parenttype", "width": 160},
+		{"label": _("Party Name"), "fieldname": "party_name", "fieldtype": "Data", "width": 220},
 		{"label": _("Document Type"), "fieldname": "document_type", "fieldtype": "Data", "width": 160},
 		{"label": _("Document Number"), "fieldname": "document_number", "fieldtype": "Data", "width": 140},
 		{"label": _("Issue Date"), "fieldname": "issue_date", "fieldtype": "Date", "width": 100},
@@ -29,6 +41,20 @@ def _get_columns():
 		{"label": _("Days To Expiry"), "fieldname": "days_to_expiry", "fieldtype": "Int", "width": 110},
 		{"label": _("Status"), "fieldname": "status", "fieldtype": "Data", "width": 110},
 	]
+
+
+def _period_range(filters, today):
+	"""The expiry dates the Period filter covers: from today for Daily / Weekly / Monthly, the From / To
+	Date for Date Range (or when no period is picked but dates are), nothing for neither."""
+	period = filters.get("period")
+	if period in PERIOD_DAYS:
+		return today, add_days(today, PERIOD_DAYS[period])
+	if period == DATE_RANGE or not period:
+		from_date, to_date = filters.get("from_date"), filters.get("to_date")
+		if from_date and to_date and getdate(from_date) > getdate(to_date):
+			frappe.throw(_("From Date cannot be after To Date."))
+		return from_date, to_date
+	return None, None
 
 
 def _get_data(filters):
@@ -44,12 +70,20 @@ def _get_data(filters):
 	else:
 		conditions.append("csd.parenttype IN ('Customer', 'Supplier')")
 
-	if filters.get("from_date"):
+	if filters.get("party"):
+		conditions.append("csd.parent = %s")
+		values.append(filters["party"])
+	if filters.get("document_type"):
+		conditions.append("csd.document_type = %s")
+		values.append(filters["document_type"])
+
+	from_date, to_date = _period_range(filters, today)
+	if from_date:
 		conditions.append("csd.expiry_date >= %s")
-		values.append(filters["from_date"])
-	if filters.get("to_date"):
+		values.append(from_date)
+	if to_date:
 		conditions.append("csd.expiry_date <= %s")
-		values.append(filters["to_date"])
+		values.append(to_date)
 
 	rows = frappe.db.sql(
 		f"""
@@ -77,9 +111,10 @@ def _get_data(filters):
 	for r in rows:
 		days = date_diff(r.expiry_date, today)
 		# within its grace days a document still counts as valid, though past its date
-		status = (_("Expired") if days + cint(r.grace_days) < 0
-			else _("In Grace Period") if days < 0
-			else _("Expiring Soon") if days <= 30 else _("Valid"))
+		status = ("Expired" if days + cint(r.grace_days) < 0
+			else "In Grace Period" if days < 0
+			else "Expiring Soon" if days <= 30 else "Valid")
+		# the filter holds the untranslated value; the row shows it translated
 		if status_filter and status_filter != status:
 			continue
 		out.append(
@@ -95,7 +130,7 @@ def _get_data(filters):
 				"financial_implication": cint(r.financial_implication),
 				"attachment": r.attachment,
 				"days_to_expiry": cint(days),
-				"status": status,
+				"status": _(status),
 			}
 		)
 	return out
