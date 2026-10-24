@@ -97,7 +97,12 @@ doctype_js = {
 	],
 	"Stock Entry":      "public/js/stock_entry.js",
 	# Item Code and Item Name are typed in capitals on the form -- the server enforces it, see item_case.py
-	"Item":             "public/js/item_uppercase.js",
+	"Item":             [
+		"public/js/item_uppercase.js",
+		# Print Label for a stock / fixed-asset item -- see item_label.py
+		"public/js/item_label.js",
+		"public/js/item_label_form.js",
+	],
 	# "Items Without Price" button: opens that report on this list
 	"Price List":       "public/js/price_list.js",
 	"Company":          "public/js/company_stock_reco_account.js",
@@ -231,6 +236,8 @@ doctype_js = {
 # include js in doctype views
 # doctype_js = {"doctype" : "public/js/doctype.js"}
 doctype_list_js = {
+	# a Print Label button on each stock / fixed-asset item row -- see item_label.py
+	"Item": ["public/js/item_label.js", "public/js/item_label_list.js"],
 	"Purchase Invoice": ["public/js/payment_advice_list_action.js", "public/js/purchase_invoice_list.js"],
 	"Sales Invoice": ["public/js/payment_advice_list_action.js", "public/js/sales_invoice_list.js"],
 	"Purchase Order": ["public/js/payment_advice_list_action.js", "public/js/purchase_order_list.js"],
@@ -266,6 +273,9 @@ doctype_list_js = {
 # ----------
 
 # add methods and filters to jinja environment
+# the Item Label print format reads its barcode, price and text from here -- see item_label.py
+jinja = {"methods": ["sf_trading.item_label.label_context"]}
+
 # jinja = {
 # 	"methods": "sf_trading.utils.jinja_methods",
 # 	"filters": "sf_trading.utils.jinja_filters"
