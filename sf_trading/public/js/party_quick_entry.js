@@ -86,8 +86,42 @@ window.sf_vat_document_sync = function (d, cfg, source) {
 				.filter((df) => !ADDRESS_PICKERS.includes(df.fieldname))
 				// the dialog's own Mobile Number below fills this one
 				.filter((df) => !(is_supplier && df.fieldname === "custom_mobile_no"));
+			// a new Customer only: quick edit opens a master that already has its group
+			const add_group = !is_supplier && this.doc && this.doc.__islocal;
+			if (add_group) this.sf_add_customer_group();
 			super.render_dialog();
 			this.sf_mark_required(is_supplier);
+			if (add_group) this.sf_default_customer_group();
+		}
+
+		// A new Customer carries the site's default Customer Group, and the dialog drew no field for
+		// it (the doctype does not require one), so the default was saved as it stood. Here that default
+		// is the root, "All Customer Groups" (Selling Settings), a group node core refuses
+		// (Customer.validate_customer_group: "Invalid Customer Group"). The full form never gets there:
+		// the field's link filter hides group nodes and the user picks one. So the dialog asks too,
+		// leaf nodes only. The field is an alias, like the contact fields in get_variant_fields: the
+		// dialog swaps a field it shares with the doctype for the doctype's own definition, which would
+		// drop the required mark.
+		sf_add_customer_group() {
+			const at = this.mandatory.findIndex((df) => df.fieldname === "customer_type");
+			this.mandatory.splice(at + 1, 0, {
+				fieldname: "sf_customer_group",
+				fieldtype: "Link",
+				options: "Customer Group",
+				label: __("Customer Group"),
+				reqd: 1,
+				get_query: () => ({ filters: { is_group: 0 } }),
+			});
+		}
+
+		// A default that is already a leaf is kept; a group node (the root) is left for the user to pick
+		sf_default_customer_group() {
+			const group = this.doc.customer_group;
+			if (!group) return;
+			frappe.db.get_value("Customer Group", group, "is_group").then((r) => {
+				const is_group = cint(r && r.message && r.message.is_group);
+				if (!is_group && this.dialog) this.dialog.set_value("sf_customer_group", group);
+			});
 		}
 
 		sf_mark_required(is_supplier) {
@@ -168,6 +202,10 @@ window.sf_vat_document_sync = function (d, cfg, source) {
 			const doc = this.dialog.doc;
 			if (this.doctype === "Supplier" && doc.mobile_number) {
 				doc.custom_mobile_no = doc.mobile_number;
+			}
+			if (this.dialog.fields_dict.sf_customer_group) {
+				// the picked leaf replaces the default the new document carried, the root group
+				doc.customer_group = this.dialog.get_value("sf_customer_group") || null;
 			}
 			const file = doc.sf_document_attachment;
 			if (!file) return super.insert();
