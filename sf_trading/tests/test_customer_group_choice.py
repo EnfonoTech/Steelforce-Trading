@@ -28,3 +28,20 @@ class TestCustomerGroupChoice(FrappeTestCase):
 		"""An old dialog still cached in a browser sends no group: it must not start failing."""
 		group = _resolve_customer_group(None)
 		self.assertFalse(frappe.db.get_value("Customer Group", group, "is_group"))
+
+	def test_no_group_asked_for_follows_the_customer_type_when_a_group_is_named_after_it(self):
+		"""Company and Individual are Customer Groups on Steel Force; where a site has a leaf of
+		the type's name, that is the group, not whatever sorts first."""
+		for customer_type in ("Company", "Individual"):
+			is_group = frappe.db.get_value("Customer Group", customer_type, "is_group")
+			if is_group is None or is_group:
+				continue
+			self.assertEqual(_resolve_customer_group(None, customer_type), customer_type)
+
+	def test_a_type_with_no_group_of_its_name_falls_to_the_default(self):
+		group = _resolve_customer_group(None, "Partnership")
+		self.assertFalse(frappe.db.get_value("Customer Group", group, "is_group"))
+
+	def test_a_group_asked_for_beats_the_type(self):
+		leaf = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
+		self.assertEqual(_resolve_customer_group(leaf, "Company"), leaf)

@@ -71,6 +71,33 @@ window.sf_vat_document_sync = function (d, cfg, source) {
 	}
 };
 
+// A new Customer's Customer Group follows its type: the group named after the type (Company,
+// Individual) goes into `group_field` of `dialog` when the site has one. A group picked by hand stays,
+// and a type with no group of its name (Partnership) takes back only what an earlier type put there.
+// Used by this quick entry and by Create New Customer (create_customer.js). Resolves true when it set
+// a group.
+window.sf_customer_group_for_type = function (dialog, group_field, type) {
+	if (!dialog || !dialog.fields_dict || !dialog.fields_dict[group_field] || !type) {
+		return Promise.resolve(false);
+	}
+	return frappe.db.get_value("Customer Group", type, "is_group").then((r) => {
+		const row = (r && r.message) || {};
+		const current = dialog.get_value(group_field);
+		const ours = !!current && current === dialog._sf_group_auto;
+		if (row.is_group === undefined || cint(row.is_group)) {
+			if (ours) {
+				dialog._sf_group_auto = null;
+				dialog.set_value(group_field, "");
+			}
+			return false;
+		}
+		if (current && !ours) return false;
+		dialog._sf_group_auto = type;
+		dialog.set_value(group_field, type);
+		return true;
+	});
+};
+
 (function () {
 	const Base = frappe.ui.form.ContactAddressQuickEntryForm;
 	if (!Base) return;
@@ -114,13 +141,27 @@ window.sf_vat_document_sync = function (d, cfg, source) {
 			});
 		}
 
-		// A default that is already a leaf is kept; a group node (the root) is left for the user to pick
+		// The group follows the customer type (Company, Individual), now and whenever the type is changed.
+		// A type with no group of its name leaves the site default when that is already a leaf; a group
+		// node (the root) is left for the user to pick.
 		sf_default_customer_group() {
-			const group = this.doc.customer_group;
-			if (!group) return;
-			frappe.db.get_value("Customer Group", group, "is_group").then((r) => {
-				const is_group = cint(r && r.message && r.message.is_group);
-				if (!is_group && this.dialog) this.dialog.set_value("sf_customer_group", group);
+			const dialog = this.dialog;
+			const for_type = () =>
+				window.sf_customer_group_for_type(dialog, "sf_customer_group", dialog.get_value("customer_type"));
+			// the dialog's own element: the field's definition is the doctype's, shared with the full form
+			const type = dialog.fields_dict.customer_type;
+			if (type && type.$input) type.$input.on("change", for_type);
+
+			for_type().then((set) => {
+				const group = this.doc.customer_group;
+				if (set || !group || dialog.get_value("sf_customer_group")) return;
+				frappe.db.get_value("Customer Group", group, "is_group").then((r) => {
+					const is_group = cint(r && r.message && r.message.is_group);
+					if (is_group || dialog.get_value("sf_customer_group")) return;
+					// ours, so a later change of type may still replace it
+					dialog._sf_group_auto = group;
+					dialog.set_value("sf_customer_group", group);
+				});
 			});
 		}
 

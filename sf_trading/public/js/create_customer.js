@@ -79,6 +79,11 @@ function sf_open_create_customer_dialog(frm, field_name) {
         var default_currency = (r && r.default_currency) || null;
         var is_saudi = company_country === "Saudi Arabia";
 
+        // the customer type the server gives the master (api/customer.py): Company for B2B, else Individual
+        var group_type = function (kind) {
+            return (kind || "").indexOf("B2B") === 0 ? "Company" : "Individual";
+        };
+
         var b2b = "eval:doc.buyer_kind === 'B2B (Company)'";
         var b2b_saudi = is_saudi ? b2b : "";
 
@@ -91,6 +96,9 @@ function sf_open_create_customer_dialog(frm, field_name) {
                 default: "B2C (Individual)",
                 reqd: 1,
                 description: __("B2C: Name + Mobile only. B2B: VAT and address details."),
+                onchange() {
+                    window.sf_customer_group_for_type(d, "customer_group", group_type(d.get_value("buyer_kind")));
+                },
             }
             : {
                 fieldname: "buyer_kind",
@@ -390,15 +398,20 @@ function sf_open_create_customer_dialog(frm, field_name) {
             d.set_value("country", company_country);
         }
 
-        // a site default that is already a leaf is kept; the root group is left for the user to pick
-        var default_group = frappe.defaults.get_user_default("Customer Group");
-        if (default_group) {
+        // The group follows the customer kind -- Individual for B2C, Company for B2B -- now and whenever
+        // the kind is changed (party_quick_entry.js). A site with no group of that name keeps its default
+        // when that is already a leaf; the root group is left for the user to pick.
+        window.sf_customer_group_for_type(d, "customer_group", group_type(d.get_value("buyer_kind"))).then(function (set) {
+            var default_group = frappe.defaults.get_user_default("Customer Group");
+            if (set || !default_group || d.get_value("customer_group")) return;
             frappe.db.get_value("Customer Group", default_group, "is_group").then(function (res) {
-                if (!cint(res && res.message && res.message.is_group)) {
+                if (!cint(res && res.message && res.message.is_group) && !d.get_value("customer_group")) {
+                    // ours, so a later change of kind may still replace it
+                    d._sf_group_auto = default_group;
                     d.set_value("customer_group", default_group);
                 }
             });
-        }
+        });
 
         // Digit masks
         d.fields_dict.mobile_no.$input.on("input", function () {

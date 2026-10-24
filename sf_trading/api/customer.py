@@ -14,7 +14,13 @@ def _can_override_vat_duplicate():
     return bool(set(frappe.get_roles(user)) & VAT_OVERRIDE_ROLES)
 
 
-def _get_default_customer_group():
+def _get_default_customer_group(customer_type=None):
+    # a leaf group named after the customer type (Company, Individual) is the natural one
+    if customer_type:
+        named = frappe.db.get_value("Customer Group", customer_type, "is_group")
+        if named is not None and not cint(named):
+            return customer_type
+
     cg = frappe.db.get_single_value("Selling Settings", "customer_group")
     if cg and not cint(frappe.db.get_value("Customer Group", cg, "is_group")):
         return cg
@@ -24,15 +30,16 @@ def _get_default_customer_group():
     return (leaf[0] if leaf else None) or "All Customer Groups"
 
 
-def _resolve_customer_group(customer_group=None):
+def _resolve_customer_group(customer_group=None, customer_type=None):
     """The group the Create New Customer dialog asked for, which must be a leaf.
 
     Core refuses a group node (Customer.validate_customer_group), but only after the address and
     attachment work is half done, so it is checked here first. No group asked for -- a client that
-    still has the old dialog cached -- falls to the site default, as before.
+    still has the old dialog cached -- falls to the group named after the customer type, else the
+    site default.
     """
     if not customer_group:
-        return _get_default_customer_group()
+        return _get_default_customer_group(customer_type)
 
     is_group = frappe.db.get_value("Customer Group", customer_group, "is_group")
     if is_group is None:
@@ -157,7 +164,7 @@ def create_customer_with_address(
         "doctype": "Customer",
         "customer_name": customer_name,
         "customer_type": customer_type,
-        "customer_group": _resolve_customer_group(customer_group),
+        "customer_group": _resolve_customer_group(customer_group, customer_type),
         "territory": _get_default_territory(),
         "default_currency": default_currency,
         "tax_id": tax_id or None,
