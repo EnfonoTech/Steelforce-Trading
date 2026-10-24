@@ -24,6 +24,27 @@ def _get_default_customer_group():
     return (leaf[0] if leaf else None) or "All Customer Groups"
 
 
+def _resolve_customer_group(customer_group=None):
+    """The group the Create New Customer dialog asked for, which must be a leaf.
+
+    Core refuses a group node (Customer.validate_customer_group), but only after the address and
+    attachment work is half done, so it is checked here first. No group asked for -- a client that
+    still has the old dialog cached -- falls to the site default, as before.
+    """
+    if not customer_group:
+        return _get_default_customer_group()
+
+    is_group = frappe.db.get_value("Customer Group", customer_group, "is_group")
+    if is_group is None:
+        frappe.throw(_("Customer Group {0} does not exist.").format(frappe.bold(customer_group)))
+    if cint(is_group):
+        frappe.throw(
+            _("Cannot select a Group type Customer Group. Please select a non-group Customer Group."),
+            title=_("Invalid Customer Group"),
+        )
+    return customer_group
+
+
 def _get_default_territory():
     return (
         frappe.db.get_single_value("Selling Settings", "territory") or "All Territories"
@@ -56,6 +77,7 @@ def create_customer_with_address(
     document_type=None,
     document_number=None,
     expiry_date=None,
+    customer_group=None,
 ):
     from sf_trading.party_documents import dialog_document_row
 
@@ -135,7 +157,7 @@ def create_customer_with_address(
         "doctype": "Customer",
         "customer_name": customer_name,
         "customer_type": customer_type,
-        "customer_group": _get_default_customer_group(),
+        "customer_group": _resolve_customer_group(customer_group),
         "territory": _get_default_territory(),
         "default_currency": default_currency,
         "tax_id": tax_id or None,

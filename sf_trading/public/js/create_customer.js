@@ -114,6 +114,15 @@ function sf_open_create_customer_dialog(frm, field_name) {
                     reqd: 1,
                 },
                 {
+                    // leaf groups only: core refuses a group node, and the site default is the root
+                    fieldname: "customer_group",
+                    fieldtype: "Link",
+                    options: "Customer Group",
+                    label: __("Customer Group"),
+                    reqd: 1,
+                    get_query: () => ({ filters: { is_group: 0 } }),
+                },
+                {
                     fieldname: "mobile_no",
                     fieldtype: "Data",
                     label: __("Mobile No"),
@@ -339,6 +348,7 @@ function sf_open_create_customer_dialog(frm, field_name) {
                         method: "sf_trading.api.customer.create_customer_with_address",
                         args: {
                             customer_name:                values.customer_name,
+                            customer_group:               values.customer_group,
                             mobile_no:                    values.mobile_no,
                             email_id:                     values.email_id || null,
                             buyer_kind:                   values.buyer_kind,
@@ -378,6 +388,16 @@ function sf_open_create_customer_dialog(frm, field_name) {
         d.show();
         if (company_country) {
             d.set_value("country", company_country);
+        }
+
+        // a site default that is already a leaf is kept; the root group is left for the user to pick
+        var default_group = frappe.defaults.get_user_default("Customer Group");
+        if (default_group) {
+            frappe.db.get_value("Customer Group", default_group, "is_group").then(function (res) {
+                if (!cint(res && res.message && res.message.is_group)) {
+                    d.set_value("customer_group", default_group);
+                }
+            });
         }
 
         // Digit masks
