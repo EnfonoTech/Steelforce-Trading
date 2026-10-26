@@ -112,6 +112,14 @@ def create_supplier_with_address(
         vat = (tax_id or "").strip()
         if not vat and not no_terms_or_tax_id:
             frappe.throw(_("Tax ID is required for B2B (Company) suppliers."))
+        # every B2B supplier carries an address; the Saudi extras follow below
+        for label, value in (
+            (_("Address Line 1"), address_line1),
+            (_("City"), city),
+            (_("Country"), country),
+        ):
+            if not value:
+                frappe.throw(_("{0} is required for a Company (B2B) supplier.").format(label))
         if is_saudi and vat:
             if not re.match(r"^3\d{13}3$", vat):
                 frappe.throw(

@@ -238,7 +238,7 @@ function sf_open_create_supplier_dialog(frm) {
                     fieldtype: "Data",
                     label: __("Address Line 1"),
                     depends_on: b2b,
-                    mandatory_depends_on: b2b_saudi,
+                    mandatory_depends_on: b2b,
                 },
                 {
                     fieldname: "address_line2",
@@ -265,7 +265,7 @@ function sf_open_create_supplier_dialog(frm) {
                     fieldtype: "Data",
                     label: __("City"),
                     depends_on: b2b,
-                    mandatory_depends_on: b2b_saudi,
+                    mandatory_depends_on: b2b,
                 },
                 {
                     fieldname: "country",
@@ -274,7 +274,7 @@ function sf_open_create_supplier_dialog(frm) {
                     label: __("Country"),
                     default: company_country,
                     depends_on: b2b,
-                    mandatory_depends_on: b2b_saudi,
+                    mandatory_depends_on: b2b,
                 },
                 {
                     fieldname: "pincode",
@@ -306,6 +306,10 @@ function sf_open_create_supplier_dialog(frm) {
                     return;
                 }
 
+                if (is_b2b && !((values.address_line1 || "").trim() && (values.city || "").trim() && (values.country || "").trim())) {
+                    frappe.msgprint(__("Address Line 1, City and Country are required for a Company (B2B) supplier."));
+                    return;
+                }
                 var no_tax_id = ["govt", "w/o vat"].indexOf(String(values.supplier_group || "").trim().toLowerCase()) !== -1;
                 if (is_b2b && !vat && !no_tax_id) {
                     frappe.msgprint(__("Tax ID is required for B2B (Company) suppliers."));

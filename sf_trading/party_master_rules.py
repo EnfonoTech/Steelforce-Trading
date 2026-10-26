@@ -187,6 +187,9 @@ def validate_contact_phones(doc, _method=None):
 
 
 def _is_b2b(doctype: str, name: str) -> bool:
+	"""A Company supplier; a customer with a VAT number on file."""
+	if doctype == "Supplier":
+		return frappe.db.get_value("Supplier", name, "supplier_type") == "Company"
 	vat = cstr(frappe.db.get_value(doctype, name, VAT_FIELD[doctype])).strip()
 	return bool(vat) and vat != "0"
 

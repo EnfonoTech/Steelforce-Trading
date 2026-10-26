@@ -183,6 +183,13 @@ def has_email(doc) -> bool:
 	return bool(party_email_addresses(doc.doctype, doc.name))
 
 
+def has_address(doc) -> bool:
+	"""An Address linked to this master (core makes it after the master's own insert)."""
+	if doc.is_new() or not doc.get("name"):
+		return False
+	return bool(frappe.db.exists("Dynamic Link", {"parenttype": "Address", "link_doctype": doc.doctype, "link_name": doc.name}))
+
+
 def missing_details(doc, after_insert: bool) -> list:
 	"""What a governed new master still lacks. `after_insert` adds what only an existing master can
 	carry (an attached supporting document, a supplier's mobile)."""
@@ -196,6 +203,9 @@ def missing_details(doc, after_insert: bool) -> list:
 			missing.append(_("Mobile Number"))
 		if doc.doctype == "Supplier" and not has_email(doc):
 			missing.append(_("Email"))
+		# every B2B (Company) supplier carries an address, wherever it was made
+		if doc.doctype == "Supplier" and doc.get("supplier_type") == "Company" and not has_address(doc):
+			missing.append(_("an Address"))
 	return missing
 
 

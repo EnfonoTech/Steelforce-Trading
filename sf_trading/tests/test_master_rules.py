@@ -469,6 +469,36 @@ class TestOtherSupplierHoldsNoDocument(FrappeTestCase):
 		self.assertFalse(pd.documents_exempt(Party("Customer", supplier_group="Other Supplier")))
 
 
+class TestNewCompanySupplierNeedsAnAddress(FrappeTestCase):
+	"""Every B2B (Company) supplier carries an address, wherever it was made."""
+
+	def _asked(self, supplier, has_address):
+		with patch.object(pd, "has_mobile", return_value=True), patch.object(pd, "has_email", return_value=True), \
+				patch.object(pd, "has_address", return_value=has_address):
+			return pd.missing_details(supplier, after_insert=True)
+
+	def test_a_company_supplier_without_one_is_told(self):
+		supplier = Party("Supplier", supplier_type="Company", payment_terms="Net 30", rows=[{"attachment": "/f.pdf"}])
+		self.assertEqual(self._asked(supplier, False), ["an Address"])
+		self.assertEqual(self._asked(supplier, True), [])
+
+	def test_an_individual_supplier_is_not_asked(self):
+		supplier = Party("Supplier", supplier_type="Individual", payment_terms="Net 30", rows=[{"attachment": "/f.pdf"}])
+		self.assertEqual(self._asked(supplier, False), [])
+
+	def test_a_customer_is_not_asked(self):
+		customer = Party("Customer", payment_terms="Net 30", rows=[{"attachment": "/f.pdf"}])
+		self.assertEqual(self._asked(customer, False), [])
+
+	def test_the_first_save_cannot_carry_one(self):
+		supplier = Party("Supplier", supplier_type="Company", payment_terms="Net 30", rows=[{"attachment": "/f.pdf"}])
+		with patch.object(pd, "has_address", return_value=False):
+			self.assertEqual(pd.missing_details(supplier, after_insert=False), [])
+
+	def test_a_new_unsaved_master_has_none(self):
+		self.assertFalse(pd.has_address(Party("Supplier", new=True)))
+
+
 class TestNewSupplierNeedsAnEmail(FrappeTestCase):
 	"""A new supplier carries an email as well as a mobile (the Create Supplier dialog asks for both)."""
 

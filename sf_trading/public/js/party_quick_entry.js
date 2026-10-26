@@ -174,7 +174,7 @@ window.sf_customer_group_for_type = function (dialog, group_field, type) {
 			if (is_supplier) {
 				mark("payment_terms", "mandatory_depends_on", "eval:" + SF_NOT_COMPLETENESS_EXEMPT);
 				mark("tax_id", "mandatory_depends_on", "eval:doc.supplier_type=='Company' && " + SF_NOT_COMPLETENESS_EXEMPT);
-				mark("country", "reqd", 1);
+				mark("country", "mandatory_depends_on", "eval:doc.supplier_type=='Company'");
 			} else {
 				// Payment Terms follow credit status (party_documents.is_governed), which the quick entry
 				// never sets: only CR is asked of a VAT-registered customer here
@@ -191,11 +191,15 @@ window.sf_customer_group_for_type = function (dialog, group_field, type) {
 
 		get_variant_fields() {
 			const is_supplier = this.doctype === "Supplier";
-			const required = is_supplier
-				? ["mobile_number", "email_address", "address_line1", "city", "country"]
-				: ["mobile_number"];
+			const required = is_supplier ? ["mobile_number", "email_address"] : ["mobile_number"];
+			// every B2B (Company) supplier carries an address (party_documents.missing_details)
+			const company_only = is_supplier ? ["address_line1", "city"] : [];
 			const fields = super.get_variant_fields().map((df) =>
-				required.includes(df.fieldname) ? Object.assign({}, df, { reqd: 1 }) : df
+				required.includes(df.fieldname)
+					? Object.assign({}, df, { reqd: 1 })
+					: company_only.includes(df.fieldname)
+					? Object.assign({}, df, { mandatory_depends_on: "eval:doc.supplier_type=='Company'" })
+					: df
 			);
 			const doctype = this.doctype;
 			return fields.concat([
