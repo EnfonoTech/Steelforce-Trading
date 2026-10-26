@@ -180,6 +180,15 @@ window.sf_customer_group_for_type = function (dialog, group_field, type) {
 				// never sets: only CR is asked of a VAT-registered customer here
 				mark("custom_commercial_registration_number", "mandatory_depends_on", B2B);
 			}
+			// A Link value reaches the dialog's document after its own async validation, later than the
+			// dialog's debounced re-check of the required marks: picking Govt left Tax ID and Payment Terms
+			// marked, as for a blank group. Re-check once the value is in, and when the type changes.
+			if (is_supplier) {
+				["supplier_group", "supplier_type"].forEach((fieldname) => {
+					const field = dialog.fields_dict[fieldname];
+					if (field) field.df.onchange = () => dialog.refresh_dependency();
+				});
+			}
 			dialog.refresh_dependency();
 			// the number typed here defaults the document below (sf_vat_document_sync)
 			const vat_field = is_supplier ? "tax_id" : "custom_vat_registration_number";
