@@ -38,6 +38,9 @@ class Party(frappe._dict):
 	def append(self, table, row):
 		self[table].append(Row(idx=len(self[table]) + 1, **row))
 
+	def remove(self, row):
+		self[pd.TABLE].remove(row)
+
 
 def _values(answers):
 	"""get_value answering {(doctype, fieldname-or-None): value}; everything else goes to the database."""
@@ -391,6 +394,24 @@ class TestVatNumberIsADocument(FrappeTestCase):
 			rows=[{"document_type": "VAT Certificate", "attachment": "/f.pdf"}])
 		pd.ensure_vat_row(party)
 		self.assertEqual(self.rows(party), [("VAT Certificate", "300000000000003")])
+
+	def test_a_changed_number_retypes_the_row_that_only_held_the_old_one(self):
+		party = VatParty("Customer", new=True, custom_vat_registration_number="300000000000003",
+			rows=[{"document_type": "VAT Certificate", "document_number": "22"}])
+		pd.ensure_vat_row(party)
+		self.assertEqual(self.rows(party), [("VAT Certificate", "300000000000003")])
+
+	def test_stacked_placeholder_rows_collapse_to_one(self):
+		party = VatParty("Customer", new=True, custom_vat_registration_number="300000000000003",
+			rows=[{"document_type": "VAT Certificate", "document_number": n} for n in ("22", "2200", "22000", "300000000000003")])
+		pd.ensure_vat_row(party)
+		self.assertEqual(self.rows(party), [("VAT Certificate", "300000000000003")])
+
+	def test_a_real_certificate_row_for_an_old_number_is_kept(self):
+		party = VatParty("Customer", new=True, custom_vat_registration_number="300000000000003",
+			rows=[{"document_type": "VAT Certificate", "document_number": "22", "attachment": "/old.pdf"}])
+		pd.ensure_vat_row(party)
+		self.assertEqual(self.rows(party), [("VAT Certificate", "22"), ("VAT Certificate", "300000000000003")])
 
 	def test_another_document_type_still_gets_the_vat_row_as_well(self):
 		party = VatParty("Customer", new=True, custom_vat_registration_number="300000000000003",

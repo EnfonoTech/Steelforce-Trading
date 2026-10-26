@@ -175,6 +175,9 @@ def create_customer_with_address(
         "custom_commercial_registration_number": commercial_registration_number or None,
         "payment_terms": payment_terms or None,
     })
+    # the manager override above already checked role + reason; let the master's own unique-VAT
+    # check (party_master_rules.validate_unique_vat) through for this one insert
+    customer.flags.allow_duplicate_vat = bool(allow_duplicate_vat)
     # an upload is the customer's first supporting document (sf_trading/party_documents.py); the
     # document and Payment Terms rules themselves follow credit status, set later on the master
     if attachment:

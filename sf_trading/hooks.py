@@ -589,6 +589,8 @@ doc_events = {
 			"sf_trading.title_case.title_case_party",
 			# only a credit approver may switch "Allow Cash Sales Without Credit Documents"
 			"sf_trading.sales_order_governance.validate_cash_override_change",
+			# the Create Customer dialog's VAT format / duplicate VAT / mobile rules, on every way of saving
+			"sf_trading.party_master_rules.validate_master",
 			# supporting-document rows, and what a new B2B customer must carry
 			"sf_trading.party_documents.validate_master",
 			# one row per branch, and the Branch Cash Limits may not add up to more than the Cash Collection Limit
@@ -620,6 +622,8 @@ doc_events = {
 			# ones too -- see sf_trading/supplier_validation.py
 			"sf_trading.supplier_validation.validate",
 			"sf_trading.title_case.title_case_party",
+			# the Create Supplier dialog's Tax ID format / duplicate / mobile rules, on every way of saving
+			"sf_trading.party_master_rules.validate_master",
 			# supporting-document rows, and what a new supplier must carry
 			"sf_trading.party_documents.validate_master",
 		],
@@ -901,6 +905,8 @@ doc_events = {
 	# Not on Customer/Supplier's own hooks -- a Contact created alongside a brand new party does
 	# not exist yet at that party's own save time, only afterwards, on the Contact's own insert.
 	"Contact": {
+		# a phone added to a Saudi party's Contact has at least 10 digits (party_master_rules.py)
+		"validate": "sf_trading.party_master_rules.validate_contact_phones",
 		"on_update": "sf_trading.party_contact_cache.sync_from_contact",
 		"on_trash": "sf_trading.party_contact_cache.clear_on_contact_trash",
 	},
@@ -908,6 +914,8 @@ doc_events = {
 	# migrated with a phone on their Address and no Contact record at all -- see
 	# party_contact_cache.py's module docstring.
 	"Address": {
+		# a Saudi B2B party's address is complete: Line 1, Building No, District, City, 5-digit Postal Code
+		"validate": "sf_trading.party_master_rules.validate_b2b_address",
 		"on_update": "sf_trading.party_contact_cache.sync_from_address",
 		"on_trash": "sf_trading.party_contact_cache.clear_on_address_trash",
 	},

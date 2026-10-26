@@ -83,6 +83,13 @@ function sf_party_vat_row(frm) {
 		frappe.model.set_value(blank.doctype, blank.name, "document_number", vat);
 		return;
 	}
+	// a VAT row holding only a number (no file, dates or remarks) is retyped: the field fires on every
+	// edit of the number, and each one used to add a row (22, 2200, 22000, ...)
+	const loose = rows.find((r) => !["attachment", "issue_date", "expiry_date", "remarks", "date_of_birth"].some((f) => r[f]));
+	if (loose) {
+		frappe.model.set_value(loose.doctype, loose.name, "document_number", vat);
+		return;
+	}
 	const row = frm.add_child("custom_supporting_documents");
 	// setting the type fills Validate / Days Ahead / Grace Days from it (handler below)
 	frappe.model.set_value(row.doctype, row.name, "document_type", SF_VAT_TYPE);

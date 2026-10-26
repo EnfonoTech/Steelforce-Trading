@@ -161,6 +161,19 @@ Permissions per user.
       duplicate_vat_reason).
     - Creates the primary Address record and links it to the new party.
 
+- The same Saudi rules on the master itself (party_master_rules.py), so they hold on the
+  Customer / Supplier form, ERPNext's "+ Create a new ..." link popup, Quick Edit and the
+  two dialogs alike:
+    - VAT Registration Number / Tax ID format (new or changed number, Saudi company).
+    - Duplicate VAT / Tax ID refused on every Customer and Supplier save (new or changed
+      number); the manager-and-reason override stays in the two dialogs only.
+    - A B2B customer's Commercial Registration number unique among enabled customers (new or
+      changed; the dialog's duplicate-VAT override covers it too).
+    - Mobile >= 10 digits, on the master's own field and on the Contact core makes for it.
+    - A B2B (VAT-bearing) party's Address: Line 1, Building Number, District, City and a
+      5-digit Postal Code, on the Address core makes for it.
+  Only new values are checked, so an old master that already breaks a rule stays editable.
+
 - Customer attachment enforcement (customer_override.py): if a Customer has a VAT
   Registration Number set, at least one file attachment is required (skipped on the
   very first save, since the attachment UI only appears post-insert).
