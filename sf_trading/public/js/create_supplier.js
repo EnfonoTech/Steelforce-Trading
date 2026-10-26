@@ -40,6 +40,11 @@ function sf_add_create_supplier_btn(frm) {
     $field.before($btn);
 }
 
+// Supplier Groups Govt / W/O VAT are asked for no Payment Terms, document or Tax ID, and Other Supplier
+// for no document (mirrors party_documents.py; the lists live in party_quick_entry.js)
+var SF_NO_TERMS_OR_TAX_ID = "!(window.SF_COMPLETENESS_EXEMPT_SUPPLIER_GROUPS || ['govt', 'w/o vat']).includes(String(doc.supplier_group || '').trim().toLowerCase())";
+var SF_NEEDS_DOCUMENT = "!(window.SF_DOCUMENT_EXEMPT_SUPPLIER_GROUPS || ['other supplier', 'govt', 'w/o vat']).includes(String(doc.supplier_group || '').trim().toLowerCase())";
+
 var SF_VAT_DOCUMENT_SUPPLIER = { vat: "tax_id", type: "document_type", number: "document_number" };
 
 // the document's expiry is required when its Supporting Document Type validates expiry
@@ -105,6 +110,17 @@ function sf_open_create_supplier_dialog(frm) {
                     reqd: 1,
                 },
                 {
+                    fieldname: "supplier_group",
+                    fieldtype: "Link",
+                    options: "Supplier Group",
+                    label: __("Supplier Group"),
+                    get_query: () => ({ filters: { is_group: 0 } }),
+                    description: __("Govt and W/O VAT: no Tax ID, document or Payment Terms. Other Supplier: no document."),
+                    onchange() {
+                        d.refresh_dependency();
+                    },
+                },
+                {
                     fieldname: "mobile_no",
                     fieldtype: "Data",
                     label: __("Mobile No"),
@@ -125,7 +141,7 @@ function sf_open_create_supplier_dialog(frm) {
                     fieldname: "tax_id",
                     fieldtype: "Data",
                     label: __("Tax ID / VAT Registration Number"),
-                    mandatory_depends_on: b2b,
+                    mandatory_depends_on: b2b + " && " + SF_NO_TERMS_OR_TAX_ID,
                     description: is_saudi
                         ? __("Exactly 15 digits, starting and ending with 3.")
                         : __("Foreign suppliers: their own country's tax number."),
@@ -139,14 +155,14 @@ function sf_open_create_supplier_dialog(frm) {
                     fieldname: "attachment",
                     fieldtype: "Attach",
                     label: __("Document Attachment"),
-                    reqd: 1,
+                    mandatory_depends_on: "eval:" + SF_NEEDS_DOCUMENT,
                 },
                 {
                     fieldname: "payment_terms",
                     fieldtype: "Link",
                     options: "Payment Terms Template",
                     label: __("Payment Terms"),
-                    reqd: 1,
+                    mandatory_depends_on: "eval:" + SF_NO_TERMS_OR_TAX_ID,
                 },
                 {
                     fieldname: "document_type",
@@ -289,11 +305,12 @@ function sf_open_create_supplier_dialog(frm) {
                     return;
                 }
 
-                if (is_b2b && !vat) {
+                var no_tax_id = ["govt", "w/o vat"].indexOf(String(values.supplier_group || "").trim().toLowerCase()) !== -1;
+                if (is_b2b && !vat && !no_tax_id) {
                     frappe.msgprint(__("Tax ID is required for B2B (Company) suppliers."));
                     return;
                 }
-                if (is_b2b && is_saudi) {
+                if (is_b2b && is_saudi && vat) {
                     if (!/^3\d{13}3$/.test(vat)) {
                         frappe.msgprint(__("VAT must be exactly 15 digits, starting and ending with 3."));
                         return;
@@ -351,6 +368,7 @@ function sf_open_create_supplier_dialog(frm) {
                             document_type:                values.document_type || null,
                             document_number:              values.document_number || null,
                             expiry_date:                  values.expiry_date || null,
+                            supplier_group:               values.supplier_group || null,
                         },
                         callback: function (r) {
                             if (r.message) {

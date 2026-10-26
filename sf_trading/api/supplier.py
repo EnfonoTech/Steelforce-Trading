@@ -24,6 +24,22 @@ def _get_default_supplier_group():
     return (leaf[0] if leaf else None) or "All Supplier Groups"
 
 
+def _resolve_supplier_group(supplier_group=None):
+    """The group the Create New Supplier dialog asked for, which must be a leaf; none asked for (a
+    dialog cached in a browser) falls to the site default."""
+    if not supplier_group:
+        return _get_default_supplier_group()
+    is_group = frappe.db.get_value("Supplier Group", supplier_group, "is_group")
+    if is_group is None:
+        frappe.throw(_("Supplier Group {0} does not exist.").format(frappe.bold(supplier_group)))
+    if cint(is_group):
+        frappe.throw(
+            _("Cannot select a Group type Supplier Group. Please select a non-group Supplier Group."),
+            title=_("Invalid Supplier Group"),
+        )
+    return supplier_group
+
+
 @frappe.whitelist()
 def create_supplier_with_address(
     supplier_name,
@@ -49,8 +65,14 @@ def create_supplier_with_address(
     document_type=None,
     document_number=None,
     expiry_date=None,
+    supplier_group=None,
 ):
-    from sf_trading.party_documents import dialog_document_row, rules_from
+    from sf_trading.party_documents import (
+        completeness_exempt_group,
+        dialog_document_row,
+        document_exempt_group,
+        rules_from,
+    )
 
     if not supplier_name:
         frappe.throw(_("Supplier Name is required"))
@@ -58,9 +80,14 @@ def create_supplier_with_address(
         frappe.throw(_("Mobile No is required"))
     if not (email_id or "").strip():
         frappe.throw(_("Email ID is required for every supplier."))
-    if not attachment:
+    group = _resolve_supplier_group(supplier_group)
+    # Govt / W/O VAT: no Payment Terms, document or Tax ID; Other Supplier: no document
+    # (party_documents.COMPLETENESS_EXEMPT_SUPPLIER_GROUPS / DOCUMENT_EXEMPT_SUPPLIER_GROUPS)
+    no_document = document_exempt_group(group)
+    no_terms_or_tax_id = completeness_exempt_group(group)
+    if not attachment and not no_document:
         frappe.throw(_("A document attachment is required for every supplier."))
-    if rules_from() and not payment_terms:
+    if rules_from() and not payment_terms and not no_terms_or_tax_id:
         frappe.throw(_("Payment Terms are required for every new supplier."))
 
     allow_duplicate_vat = int(allow_duplicate_vat or 0)
@@ -83,9 +110,9 @@ def create_supplier_with_address(
     # B2B validations
     if is_b2b:
         vat = (tax_id or "").strip()
-        if not vat:
+        if not vat and not no_terms_or_tax_id:
             frappe.throw(_("Tax ID is required for B2B (Company) suppliers."))
-        if is_saudi:
+        if is_saudi and vat:
             if not re.match(r"^3\d{13}3$", vat):
                 frappe.throw(
                     _("VAT Registration Number must be exactly 15 digits, starting and ending with 3.")
@@ -128,7 +155,7 @@ def create_supplier_with_address(
         "doctype": "Supplier",
         "supplier_name": supplier_name,
         "supplier_type": supplier_type,
-        "supplier_group": _get_default_supplier_group(),
+        "supplier_group": group,
         "country": country or None,
         "mobile_no": mobile_no,
         "email_id": email_id or None,
@@ -137,8 +164,9 @@ def create_supplier_with_address(
         "payment_terms": payment_terms or None,
     })
     # the upload is the supplier's first supporting document (sf_trading/party_documents.py)
-    supplier.append("custom_supporting_documents",
-        dialog_document_row("Supplier", document_type, document_number, expiry_date, attachment))
+    if attachment:
+        supplier.append("custom_supporting_documents",
+            dialog_document_row("Supplier", document_type, document_number, expiry_date, attachment))
     # the manager override above already checked role + reason; let the master's own unique
     # check (supplier_validation.validate_unique_tax_id) through for this one insert
     supplier.flags.allow_duplicate_tax_id = bool(allow_duplicate_vat)
@@ -147,7 +175,9 @@ def create_supplier_with_address(
 
     # link the dialog's upload right after the insert, before the supplier.save() below (primary
     # address), which supplier_validation.validate_attachment would otherwise refuse
-    file_rec = frappe.db.get_value("File", {"file_url": attachment, "attached_to_name": ["is", "not set"]}, "name")
+    file_rec = attachment and frappe.db.get_value(
+        "File", {"file_url": attachment, "attached_to_name": ["is", "not set"]}, "name"
+    )
     if file_rec:
         frappe.db.set_value("File", file_rec, {
             "attached_to_doctype": "Supplier",
