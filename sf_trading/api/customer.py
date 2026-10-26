@@ -117,6 +117,9 @@ def create_customer_with_address(
         vat = (tax_id or "").strip()
         if not vat:
             frappe.throw(_("VAT Registration Number is required for B2B customers."))
+        # the master refuses a B2B customer without one (party_completeness.validate_company_fields)
+        if not (commercial_registration_number or "").strip():
+            frappe.throw(_("Commercial Registration Number is required for B2B customers."))
         if is_saudi:
             if not re.match(r"^3\d{13}3$", vat):
                 frappe.throw(

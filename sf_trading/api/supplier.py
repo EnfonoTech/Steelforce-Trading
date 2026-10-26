@@ -85,8 +85,8 @@ def create_supplier_with_address(
     # (party_documents.COMPLETENESS_EXEMPT_SUPPLIER_GROUPS / DOCUMENT_EXEMPT_SUPPLIER_GROUPS)
     no_document = document_exempt_group(group)
     no_terms_or_tax_id = completeness_exempt_group(group)
-    if not attachment and not no_document:
-        frappe.throw(_("A document attachment is required for every supplier."))
+    if not attachment and not no_document and (buyer_kind or "").startswith("B2B"):
+        frappe.throw(_("A document attachment is required for a Company (B2B) supplier."))
     if rules_from() and not payment_terms and not no_terms_or_tax_id:
         frappe.throw(_("Payment Terms are required for every new supplier."))
 

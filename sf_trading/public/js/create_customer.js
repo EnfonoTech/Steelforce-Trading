@@ -166,6 +166,8 @@ function sf_open_create_customer_dialog(frm, field_name) {
                     fieldtype: "Data",
                     label: __("Commercial Registration Number"),
                     depends_on: b2b,
+                    // the master refuses a B2B customer without one (party_completeness.py)
+                    mandatory_depends_on: b2b,
                 },
                 {
                     fieldname: "b2b_attachment",
@@ -312,6 +314,10 @@ function sf_open_create_customer_dialog(frm, field_name) {
 
                 if (is_b2b && !vat) {
                     frappe.msgprint(__("VAT Registration Number is required for B2B customers."));
+                    return;
+                }
+                if (is_b2b && !(values.commercial_registration_number || "").trim()) {
+                    frappe.msgprint(__("Commercial Registration Number is required for B2B customers."));
                     return;
                 }
                 if (is_b2b && !values.b2b_attachment) {

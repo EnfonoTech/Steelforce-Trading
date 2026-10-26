@@ -155,7 +155,8 @@ function sf_open_create_supplier_dialog(frm) {
                     fieldname: "attachment",
                     fieldtype: "Attach",
                     label: __("Document Attachment"),
-                    mandatory_depends_on: "eval:" + SF_NEEDS_DOCUMENT,
+                    // a Company supplier outside the exempt groups, as the master asks (party_documents.needs_document)
+                    mandatory_depends_on: b2b + " && " + SF_NEEDS_DOCUMENT,
                 },
                 {
                     fieldname: "payment_terms",
