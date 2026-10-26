@@ -19,7 +19,7 @@
   "open_items_cutover_date",
   "credit_approval_section",
   "credit_customer_approval_overrides",
-  "document_expiry_column_break",
+  "document_expiry_section",
   "document_expiry_before_days",
   "document_expiry_after_days",
   "purchasing_tab",
@@ -164,8 +164,9 @@
    "options": "SF Override Entry"
   },
   {
-   "fieldname": "document_expiry_column_break",
-   "fieldtype": "Column Break"
+   "fieldname": "document_expiry_section",
+   "fieldtype": "Section Break",
+   "label": "Supporting Document Expiry Reminders"
   },
   {
    "default": "30",
