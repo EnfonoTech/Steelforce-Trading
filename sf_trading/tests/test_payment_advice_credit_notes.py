@@ -230,7 +230,7 @@ class TestWarnWhenNotesAreLeftOpen(FrappeTestCase):
 		advice = self._advice([("PI-1", 100)])
 		notes = [frappe._dict(name="DN-1", outstanding_amount=-8.8)]
 		with patch.object(pa, "open_credit_notes", return_value=notes), \
-				patch.object(frappe, "get_all", return_value=[frappe._dict(reference_record="DN-1")]), \
+				patch.object(pa, "live_advice_holds", return_value={"DN-1": ("PA-26-0001", "Approved")}), \
 				patch.object(frappe, "msgprint") as shown:
 			advice.warn_unnetted_credit_notes()
 		shown.assert_not_called()

@@ -228,20 +228,7 @@ class PaymentAdvice(Document):
         names = [n.name for n in notes if n.name not in here]
         if not names:
             return
-        elsewhere = {
-            r.reference_record
-            for r in frappe.get_all(
-                "Payment Advice Reference",
-                filters={
-                    "reference_record": ["in", names],
-                    "parenttype": "Payment Advice",
-                    "docstatus": ["!=", 2],
-                    "allocated_amount": ["!=", 0],
-                    "parent": ["!=", self.name or ""],
-                },
-                fields=["reference_record"],
-            )
-        }
+        elsewhere = set(live_advice_holds(names, self.party_type, self.party, exclude=self.name))
         left = [n for n in notes if n.name in names and n.name not in elsewhere]
         if not left:
             return
@@ -440,36 +427,22 @@ class PaymentAdvice(Document):
         if not records:
             return
 
-        clashes = frappe.get_all(
-            "Payment Advice Reference",
-            filters={
-                "reference_record": ["in", records],
-                "parenttype": "Payment Advice",
-                "parent": ["!=", self.name or ""],
-                # anything not cancelled holds the voucher — a draft advice counts, which is
-                # what the builder already assumed. Submitted-only would let a hand-typed
-                # advice duplicate an invoice already sitting on someone's draft.
-                "docstatus": ["!=", 2],
-            },
-            fields=["parent", "reference_record", "allocated_amount"],
-        )
-
-        for clash in clashes:
-            # a debit note is held by its negative allocation just as an invoice is by its own
-            if abs(flt(clash.allocated_amount)) < TOLERANCE:
-                continue
-            advice_status = frappe.db.get_value("Payment Advice", clash.parent, "status")
-            if advice_status == STATUS_CANCELLED:
-                continue
-            frappe.throw(
-                _("%(name)s is already allocated on Payment Advice %(advice)s (%(status)s). "
-                  "Cancel or remove it there first.")
-                % {
-                    "name": frappe.bold(clash.reference_record),
-                    "advice": frappe.bold(clash.parent),
-                    "status": advice_status or _("Draft"),
-                }
-            )
+        # a draft advice holds the voucher as much as an approved one -- submitted-only would let a
+        # hand-typed advice duplicate an invoice already sitting on someone's draft -- and a paid
+        # one holds nothing any more (live_advice_holds)
+        held = live_advice_holds(records, self.party_type, self.party, exclude=self.name)
+        for record in records:
+            if record in held:
+                advice, advice_status = held[record]
+                frappe.throw(
+                    _("%(name)s is already allocated on Payment Advice %(advice)s (%(status)s). "
+                      "Cancel or remove it there first.")
+                    % {
+                        "name": frappe.bold(record),
+                        "advice": frappe.bold(advice),
+                        "status": advice_status or _("Draft"),
+                    }
+                )
 
     # ── derivation ───────────────────────────────────────────────────────────────
     def set_party_name(self):
@@ -1285,24 +1258,13 @@ def billed_order_allocation(advice, row, invoices, used):
         frappe.get_all(invoice_doctype, filters={"name": ("in", names), party_field: advice.party}, pluck="name")
     )
 
-    held = {}
-    for clash in frappe.get_all(
-        "Payment Advice Reference",
-        filters={
-            "reference_record": ("in", names),
-            "parenttype": "Payment Advice",
-            "parent": ("!=", advice.name or ""),
-            "docstatus": ("!=", 2),
-        },
-        fields=["parent", "reference_record", "allocated_amount"],
-    ):
-        # the same tests validate_not_advised_elsewhere applies: a zero row or a cancelled advice
-        # holds nothing
-        if abs(flt(clash.allocated_amount)) < TOLERANCE:
-            continue
-        if frappe.db.get_value("Payment Advice", clash.parent, "status") == STATUS_CANCELLED:
-            continue
-        held.setdefault(clash.reference_record, clash.parent)
+    # the same rule validate_not_advised_elsewhere applies
+    held = {
+        invoice: holder
+        for invoice, (holder, _status) in live_advice_holds(
+            names, advice.get("party_type"), advice.party, exclude=advice.name
+        ).items()
+    }
 
     remaining, parts = wanted, []
     for invoice in invoices:
@@ -1855,22 +1817,12 @@ def get_reference_details(reference_doctype: str, reference_record: str, company
                     }
                 )
 
-    # already spoken for?
-    clash = frappe.get_all(
-        "Payment Advice Reference",
-        filters={
-            "reference_record": reference_record,
-            "parenttype": "Payment Advice",
-            "docstatus": ["!=", 2],
-            "allocated_amount": ["!=", 0],
-        },
-        fields=["parent"],
-        limit=1,
-    )
-    if clash:
+    # already spoken for? (by an advice not yet paid, for this party -- live_advice_holds)
+    held = live_advice_holds([reference_record], party_type, party)
+    if reference_record in held:
         frappe.throw(
             _("%(name)s is already allocated on Payment Advice %(advice)s.")
-            % {"name": frappe.bold(reference_record), "advice": frappe.bold(clash[0].parent)}
+            % {"name": frappe.bold(reference_record), "advice": frappe.bold(held[reference_record][0])}
         )
 
     if reference_doctype in ORDER_DOCTYPES:
@@ -2108,6 +2060,59 @@ def refresh_reference_status(advice_name):
 def get_due_cutoff(days=0):
     """Cut-off date for "due within N days" — used by the automation layer."""
     return add_days(getdate(nowdate()), cint(days))
+
+
+def live_advice_holds(records, party_type=None, party=None, exclude=None):
+    """Which of these vouchers another advice still holds: {voucher: (advice, status)}.
+
+    The one rule every "already on an advice" check uses, so that nothing is paid twice through
+    two advices. An advice holds a voucher it allocates to (a debit note by its negative
+    allocation) from the moment it names it until its Payment Entry is submitted -- and not
+    after. An advice makes one payment; once that is in the ledger, the voucher's outstanding
+    already shows it, and whatever is left belongs to the next advice. PA-26-0065 paid 934.788 of
+    a 9,137.422 opening balance and, as "Partly Paid", went on blocking the other 8,202.634 for
+    good.
+
+    Held per voucher AND party when the party is given: one Journal Entry can carry many parties'
+    balances -- ACC-JV-2026-03433, the opening balances, carries 55 suppliers -- and one
+    supplier's advice on it must not block another's.
+    """
+    records = [r for r in dict.fromkeys(records or []) if r]
+    if not records:
+        return {}
+
+    rows = frappe.get_all(
+        "Payment Advice Reference",
+        filters={
+            "reference_record": ["in", records],
+            "parenttype": "Payment Advice",
+            "parent": ["!=", exclude or ""],
+            "docstatus": ["!=", 2],
+        },
+        fields=["parent", "reference_record", "allocated_amount"],
+    )
+    rows = [r for r in rows if abs(flt(r.allocated_amount)) >= TOLERANCE]
+    if not rows:
+        return {}
+
+    advices = {
+        a.name: a
+        for a in frappe.get_all(
+            "Payment Advice",
+            filters={"name": ["in", list({r.parent for r in rows})]},
+            fields=["name", "status", "party_type", "party", "payment_entry"],
+        )
+    }
+
+    held = {}
+    for row in rows:
+        advice = advices.get(row.parent)
+        if not advice or advice.status == STATUS_CANCELLED or advice.payment_entry:
+            continue
+        if party and (advice.party_type, advice.party) != (party_type, party):
+            continue
+        held.setdefault(row.reference_record, (advice.name, advice.status))
+    return held
 
 def get_advice_map(records, include_cancelled=False):
     """Map voucher name -> the Payment Advice holding it, for reports and list views.

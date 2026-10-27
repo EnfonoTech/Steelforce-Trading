@@ -864,16 +864,12 @@ class TestBilledOrderPaidOnItsInvoice(FrappeTestCase):
 
         self.pa = pa
         self.own = {"20020000449", "PINV-2"}
-        self.clashes = []
-        # only the advice's status is faked: flt(x, precision) reads the site's rounding method
-        # through the same get_value, and a blanket fake rounds every amount to 0
-        real_get_value = pa.frappe.db.get_value
+        self.holds = {}
         self.patches = [
             patch.object(pa.frappe, "get_all", side_effect=self.get_all),
-            patch.object(
-                pa.frappe.db, "get_value",
-                side_effect=lambda dt, *a, **k: "Approved" if dt == "Payment Advice" else real_get_value(dt, *a, **k),
-            ),
+            patch.object(pa, "live_advice_holds", side_effect=lambda records, *a, **k: {
+                r: h for r, h in self.holds.items() if r in records
+            }),
         ]
         for p in self.patches:
             p.start()
@@ -885,12 +881,10 @@ class TestBilledOrderPaidOnItsInvoice(FrappeTestCase):
     def get_all(self, doctype, filters=None, fields=None, pluck=None, **kwargs):
         if doctype == "Purchase Invoice":
             return [n for n in filters["name"][1] if n in self.own]
-        if doctype == "Payment Advice Reference":
-            return [c for c in self.clashes if c.reference_record in filters["reference_record"][1]]
         raise AssertionError("unexpected read of %s" % doctype)
 
     def advice(self):
-        return frappe._dict(name="PA-26-0102", party="Tylos Building Material Establishment Wll")
+        return frappe._dict(name="PA-26-0102", party_type="Supplier", party="Tylos Building Material Establishment Wll")
 
     def row(self, amount=540.54, idx=1):
         return frappe._dict(idx=idx, reference_doctype="Purchase Order",
@@ -923,7 +917,7 @@ class TestBilledOrderPaidOnItsInvoice(FrappeTestCase):
         self.assertIn("Cancel this advice and amend it", text)
 
     def test_an_invoice_another_advice_holds_is_left_to_it(self):
-        self.clashes = [frappe._dict(parent="PA-26-0200", reference_record="20020000449", allocated_amount=540.54)]
+        self.holds = {"20020000449": ("PA-26-0200", "Approved")}
         parts, held = self.pa.billed_order_allocation(self.advice(), self.row(), [self.invoice()], {})
         self.assertIsNone(parts)
         self.assertEqual(held, {"20020000449": "PA-26-0200"})
@@ -955,3 +949,82 @@ class TestBilledOrderPaidOnItsInvoice(FrappeTestCase):
         )
         self.assertIn("pays the invoice instead", body)
         self.assertNotIn("cancel it and amend", body)
+
+
+class TestLiveAdviceHolds(FrappeTestCase):
+    """The one "already on an advice" rule. PA-26-0065 paid 934.788 of a 9,137.422 opening balance on
+    ACC-JV-2026-03433 and, as Partly Paid, blocked the other 8,202.634 for good -- and, that journal
+    carrying 55 suppliers' balances, blocked every other supplier's advice on it too."""
+
+    JV = "ACC-JV-2026-03433"
+    SUPPLIER = "Abdul Rahman Abu Obaid Plastic Factory."
+
+    def holds(self, rows, advices, records=None, party=SUPPLIER, exclude=None):
+        from unittest.mock import patch
+
+        from sf_trading.sf_trading.doctype.payment_advice import payment_advice as pa
+
+        def get_all(doctype, filters=None, fields=None, **kwargs):
+            if doctype == "Payment Advice Reference":
+                return [r for r in rows if r.reference_record in filters["reference_record"][1]
+                        and r.parent != filters["parent"][1]]
+            if doctype == "Payment Advice":
+                return [a for a in advices if a.name in filters["name"][1]]
+            raise AssertionError("unexpected read of %s" % doctype)
+
+        with patch.object(pa.frappe, "get_all", side_effect=get_all):
+            return pa.live_advice_holds(records or [self.JV], "Supplier" if party else None, party, exclude)
+
+    def ref(self, parent, amount=9137.422, record=JV):
+        return frappe._dict(parent=parent, reference_record=record, allocated_amount=amount)
+
+    def advice(self, name, status="Approved", party=SUPPLIER, payment_entry=None):
+        return frappe._dict(name=name, status=status, party_type="Supplier", party=party, payment_entry=payment_entry)
+
+    def test_an_unpaid_advice_holds_the_voucher(self):
+        held = self.holds([self.ref("PA-1")], [self.advice("PA-1")])
+        self.assertEqual(held, {self.JV: ("PA-1", "Approved")})
+
+    def test_a_draft_holds_it_too(self):
+        held = self.holds([self.ref("PA-1")], [self.advice("PA-1", status="Draft")])
+        self.assertIn(self.JV, held)
+
+    def test_a_paid_advice_no_longer_holds_what_is_left(self):
+        # PA-26-0065: its Payment Entry paid part; the rest belongs to the next advice
+        paid = self.advice("PA-26-0065", status="Partly Paid", payment_entry="ACC-PAY-2026-09073-1")
+        self.assertEqual(self.holds([self.ref("PA-26-0065")], [paid]), {})
+        fully = self.advice("PA-2", status="Paid", payment_entry="ACC-PAY-1")
+        self.assertEqual(self.holds([self.ref("PA-2")], [fully]), {})
+
+    def test_another_suppliers_advice_on_a_shared_journal_does_not_hold(self):
+        other = self.advice("PA-1", party="Crescent East Business Est. (Cebe)")
+        self.assertEqual(self.holds([self.ref("PA-1")], [other]), {})
+        # asked without a party, any live advice still holds it
+        self.assertIn(self.JV, self.holds([self.ref("PA-1")], [other], party=None))
+
+    def test_cancelled_advices_and_zero_rows_hold_nothing(self):
+        self.assertEqual(self.holds([self.ref("PA-1")], [self.advice("PA-1", status="Cancelled")]), {})
+        self.assertEqual(self.holds([self.ref("PA-1", amount=0)], [self.advice("PA-1")]), {})
+
+    def test_a_debit_note_is_held_by_its_negative_allocation(self):
+        held = self.holds([self.ref("PA-1", amount=-8.8, record="DN-1")], [self.advice("PA-1")], records=["DN-1"])
+        self.assertIn("DN-1", held)
+
+    def test_the_advice_being_saved_does_not_hold_against_itself(self):
+        self.assertEqual(self.holds([self.ref("PA-1")], [self.advice("PA-1")], exclude="PA-1"), {})
+
+    def test_on_this_site_a_paid_advice_never_holds_its_vouchers(self):
+        """Real data: every reference of a submitted advice that has its Payment Entry is free."""
+        from sf_trading.sf_trading.doctype.payment_advice.payment_advice import live_advice_holds
+
+        row = frappe.db.sql(
+            """select r.reference_record, a.name, a.party_type, a.party from `tabPayment Advice Reference` r
+               join `tabPayment Advice` a on a.name = r.parent
+               where a.docstatus = 1 and coalesce(a.payment_entry, '') != '' and r.allocated_amount != 0
+               limit 1""",
+            as_dict=True,
+        )
+        if not row:
+            self.skipTest("no paid advice on this site")
+        held = live_advice_holds([row[0].reference_record], row[0].party_type, row[0].party)
+        self.assertNotEqual(held.get(row[0].reference_record, (None,))[0], row[0].name)

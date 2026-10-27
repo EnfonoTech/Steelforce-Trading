@@ -35,6 +35,7 @@ from sf_trading.sf_trading.doctype.payment_advice.payment_advice import (
     get_party_account,
     get_reference_amounts,
     is_credit_row,
+    live_advice_holds,
     order_payment_block,
     shape_reference_rows,
 )
@@ -150,23 +151,10 @@ def _party_state(party_type, party):
     return state
 
 
-def _already_advised(records):
-    """Vouchers already carrying an allocation on a live (non-cancelled) advice."""
-    if not records:
-        return set()
-
-    rows = frappe.get_all(
-        "Payment Advice Reference",
-        filters={
-            "reference_record": ["in", records],
-            "parenttype": "Payment Advice",
-            "docstatus": ["!=", 2],
-            # a debit note is held by its negative allocation
-            "allocated_amount": ["!=", 0],
-        },
-        fields=["reference_record", "parent"],
-    )
-    return {r.reference_record for r in rows}
+def _already_advised(records, party_type=None, party=None):
+    """Vouchers another advice still holds: allocated on it and not yet paid, for this party when
+    one is given (payment_advice.live_advice_holds -- the rule the advice's own save applies)."""
+    return set(live_advice_holds(records, party_type, party))
 
 
 # ── preview ──────────────────────────────────────────────────────────────────────
@@ -217,7 +205,7 @@ def _build_group(party_type, party, filters, floor, min_ageing):
     party_account = get_party_account(party_type, party, filters.get("company"))
 
     rows = _outstanding_rows(party_type, party, filters, party_account, min_ageing)
-    advised = _already_advised([r["reference_record"] for r in rows])
+    advised = _already_advised([r["reference_record"] for r in rows], party_type, party)
 
     fresh = [r for r in rows if r["reference_record"] not in advised]
     total = flt(sum(flt(r["net_payable_amount"]) for r in fresh), 3)
@@ -466,7 +454,7 @@ def _open_credit_note_rows(party_type, party, company, excluded):
         for r in _outstanding_rows(party_type, party, frappe._dict(company=company), account, 0)
         if is_credit_row(r) and r["reference_record"] not in excluded
     ]
-    held = _already_advised([r["reference_record"] for r in rows])
+    held = _already_advised([r["reference_record"] for r in rows], party_type, party)
     return [r for r in rows if r["reference_record"] not in held]
 
 
