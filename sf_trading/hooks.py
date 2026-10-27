@@ -606,12 +606,13 @@ doc_events = {
 			"sf_trading.sales_order_governance.validate_cash_override_change",
 			# the Create Customer dialog's VAT format / duplicate VAT / mobile rules, on every way of saving
 			"sf_trading.party_master_rules.validate_master",
+			# the Approval Status moves by the approval only, and into Pending / Approved only when complete; before
+			# the next rule, so a master sent for approval hears everything it lacks at once
+			"sf_trading.master_approval.validate_master",
 			# supporting-document rows, and what a new B2B customer must carry
 			"sf_trading.party_documents.validate_master",
 			# one row per branch, and the Branch Cash Limits may not add up to more than the Cash Collection Limit
 			"sf_trading.sales_order_limits.validate_branch_cash_limit_allocation",
-			# the Approval Status moves by the approval only, and into Pending / Approved only when complete
-			"sf_trading.master_approval.validate_master",
 		],
 		"on_update": "sf_trading.party_documents.relink_attachments",
 		"onload": "sf_trading.party_documents.set_onload",
@@ -640,10 +641,11 @@ doc_events = {
 			"sf_trading.title_case.title_case_party",
 			# the Create Supplier dialog's Tax ID format / duplicate / mobile rules, on every way of saving
 			"sf_trading.party_master_rules.validate_master",
+			# the Approval Status moves by the approval only, and into Pending / Approved only when complete; before
+			# the next rule, so a master sent for approval hears everything it lacks at once
+			"sf_trading.master_approval.validate_master",
 			# supporting-document rows, and what a new supplier must carry
 			"sf_trading.party_documents.validate_master",
-			# the Approval Status moves by the approval only, and into Pending / Approved only when complete
-			"sf_trading.master_approval.validate_master",
 		],
 		"on_update": "sf_trading.party_documents.relink_attachments",
 		"onload": "sf_trading.party_documents.set_onload",

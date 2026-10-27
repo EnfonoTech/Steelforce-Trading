@@ -538,15 +538,23 @@ def workflow_definition(doctype: str) -> dict:
 		"document_type": doctype,
 		"is_active": 1,
 		"workflow_state_field": STATUS_FIELD,
+		# PM opens an Approvals inbox entry for a transition whose NEXT state is not optional. Only Approved is
+		# not: a master waiting in Pending Approval reaches its approvers' inbox, and sending one for approval
+		# (into Pending Approval, allowed to everyone) puts nothing in everyone's inbox
 		"states": [
-			# nobody is waiting on a draft, an approved or a rejected master: no inbox entry for them
 			_state(DRAFT, 0, EVERYONE, optional=1),
-			_state(PENDING, 0, EVERYONE),
-			_state(APPROVED, 0, EVERYONE, optional=1),
+			_state(PENDING, 0, EVERYONE, optional=1),
+			_state(APPROVED, 0, EVERYONE),
 			_state(REJECTED, 0, EVERYONE, optional=1),
 		],
 		"transitions": transitions,
 	}
+
+
+def _scope_fields() -> list:
+	"""The PM Workflow fields that narrow it to a company, user, project, cost centre or dimension."""
+	return [df.fieldname for df in frappe.get_meta("PM Workflow").fields
+		if df.fieldtype == "Link" and df.fieldname != "document_type"]
 
 
 def ensure_workflows() -> list:
@@ -566,6 +574,9 @@ def ensure_workflows() -> list:
 		# saving a PM Workflow stamps its first state on every document with none, so every existing master
 		# would read Draft. The older ones are not new masters: they keep no state until one is given.
 		workflow.update_default_workflow_status = lambda: None
+		# a master has no company: a workflow scoped to the inserting user's default Company (or Cost Center,
+		# Project...) would be found only by users with that same default
+		workflow.dont_update_if_missing = _scope_fields()
 		workflow.insert(ignore_permissions=True)
 		created.append(definition["workflow_name"])
 	return created

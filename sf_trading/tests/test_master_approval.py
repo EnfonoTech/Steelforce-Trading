@@ -132,6 +132,8 @@ class Workflow(FrappeTestCase):
 		# only a master the earlier approval marked Approved, without a stamp, may be sent again
 		resend = [t for t in wf["transitions"] if t["state"] == ma.APPROVED]
 		self.assertEqual([t.get("condition") for t in resend], [ma.LEGACY_APPROVED_CONDITION])
+		# PM's inbox entry follows the NEXT state: only Approved opens one, so only approvers get it
+		self.assertEqual([s["state"] for s in wf["states"] if not s["is_optional_state"]], [ma.APPROVED])
 
 	def test_each_master_has_its_own_approver(self):
 		self.assertIn("Supplier Approver", ma.workflow_approver_roles("Supplier"))
