@@ -39,11 +39,15 @@ PARTY_FIELD = {
 	**{doctype: "supplier" for doctype in pd.SUPPLIER_SIDE},
 	"Payment Entry": "party",
 	**{doctype: "customer" for doctype in pd.CUSTOMER_SIDE},
+	"Delivery Note": "customer",
 }
 
+#: a customer or supplier not approved where the Customer / Supplier approval covers it (master_approval.py)
+APPROVAL_GATE = "sf_trading.master_approval.validate_master_approval_at_transaction"
 _SUPPLIER_GATES = (
 	"sf_trading.supplier_validation.validate_supplier_at_transaction",
 	"sf_trading.party_documents.validate_party_at_transaction",
+	APPROVAL_GATE,
 )
 #: the one customer gate that depends on the Payment Mode, through the cash-sale exception
 CREDIT_GATE = "sf_trading.sales_order_governance.validate_credit_customer_requirements_at_transaction"
@@ -51,14 +55,16 @@ _CUSTOMER_GATES = (
 	"sf_trading.sales_order_governance.validate_customer_contact_at_transaction",
 	CREDIT_GATE,
 	"sf_trading.party_documents.validate_party_at_transaction",
+	APPROVAL_GATE,
 )
 
 #: the party gates registered on each voucher, in hooks.py doc_events
 GATES = {
 	**{doctype: _SUPPLIER_GATES for doctype in pd.SUPPLIER_SIDE},
 	"Sales Order": _CUSTOMER_GATES,
-	# an invoice is also held back while its customer is not approved
-	"Sales Invoice": _CUSTOMER_GATES + ("sf_trading.credit_customer_approval.validate_customer_approved_for_invoicing",),
+	"Sales Invoice": _CUSTOMER_GATES,
+	# a delivery is held back only while its customer is not approved
+	"Delivery Note": (APPROVAL_GATE,),
 }
 
 
@@ -118,7 +124,7 @@ def get_party_alert(doctype: str, doc) -> dict:
 
 	voucher = _voucher(doctype, doc)
 	party = voucher.get(PARTY_FIELD[doctype])
-	party_type = "Customer" if doctype in pd.CUSTOMER_SIDE else "Supplier"
+	party_type = "Customer" if PARTY_FIELD[doctype] == "customer" else "Supplier"
 	if not party or not frappe.db.exists(party_type, party):
 		return {"party": None, "problems": []}
 	# a payment entry only answers to a supplier it pays; its other parties are nobody's business here

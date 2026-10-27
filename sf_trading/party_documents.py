@@ -568,12 +568,15 @@ def validate_party_at_transaction(doc, _method=None):
 
 	problems = []
 	master = frappe.get_doc(party_type, party)
-	if is_governed(master) and is_new_master(master) and not _cash_sale_allowed(doc, party_type):
+	# a master an admin bypassed (master_approval.py) is let through what it lacks; an expired document
+	# that carries a Financial Implication still holds it back
+	bypassed = cint(master.get("custom_approval_bypassed"))
+	if not bypassed and is_governed(master) and is_new_master(master) and not _cash_sale_allowed(doc, party_type):
 		problems += missing_details(master, after_insert=True)
-	if _("Payment Terms") not in problems:
+	if not bypassed and _("Payment Terms") not in problems:
 		# old suppliers too (a new one's are already named above)
 		problems += missing_payment_terms(master)
-	if not any("Supporting Document" in p for p in problems):
+	if not bypassed and not any("Supporting Document" in p for p in problems):
 		# old masters too: a Company supplier / a VAT-registered customer holds a document
 		problems += missing_document(master)
 	for row in expired_financial_rows(party_type, party):

@@ -17,8 +17,6 @@
   "si_return_requires_workflow",
   "open_items_section",
   "open_items_cutover_date",
-  "credit_approval_section",
-  "credit_customer_approval_overrides",
   "purchasing_tab",
   "supplier_validation_section",
   "enforce_supplier_completeness",
@@ -37,6 +35,14 @@
   "masters_tab",
   "master_rules_section",
   "master_rules_from",
+  "master_approval_section",
+  "master_approval_customer",
+  "master_approval_supplier",
+  "master_approval_item",
+  "master_approval_column_break",
+  "master_approval_strict",
+  "master_approval_from",
+  "credit_customer_approval_overrides",
   "document_expiry_section",
   "document_expiry_before_days",
   "document_expiry_after_days",
@@ -152,15 +158,10 @@
    "label": "Consider Open Items From"
   },
   {
-   "fieldname": "credit_approval_section",
-   "fieldtype": "Section Break",
-   "label": "Credit Customer Approval"
-  },
-  {
-   "description": "Roles or users who may make a Customer available for Sales Invoice without going through the normal Pending Verification -> Approved step. Administrator always may. Every use is logged as a comment on the Customer.",
+   "description": "Roles or users who may bypass the Customer, Supplier or Item approval from the master's form or list, as well as System Manager: a bypassed master is usable at once, without the approval and its requirements. Every use is logged on the master with its reason.",
    "fieldname": "credit_customer_approval_overrides",
    "fieldtype": "Table",
-   "label": "Allowed to Bypass Approval",
+   "label": "Allowed to Bypass Master Approval",
    "options": "SF Override Entry"
   },
   {
@@ -326,6 +327,48 @@
    "description": "Masters created at or after this moment are held to the rules. Blank switches them off."
   },
   {
+   "description": "A master is approved through its PM Workflow (Customer Approval, Supplier Approval, Item Approval): Send for Approval, then Approve or Reject by a Customer Approver / Supplier Approver / Item Master Approver. It is sent and approved only once complete (a credit customer's and a supplier's details and supporting documents). Until approved it cannot be used on a Sales Order, Delivery Note, Sales Invoice, Purchase Order, Purchase Receipt, Purchase Invoice or supplier payment.",
+   "fieldname": "master_approval_section",
+   "fieldtype": "Section Break",
+   "label": "Customer, Supplier and Item Approval"
+  },
+  {
+   "default": "1",
+   "fieldname": "master_approval_customer",
+   "fieldtype": "Check",
+   "label": "Customer Approval"
+  },
+  {
+   "default": "0",
+   "fieldname": "master_approval_supplier",
+   "fieldtype": "Check",
+   "label": "Supplier Approval"
+  },
+  {
+   "default": "0",
+   "description": "Assign the Customer Approver, Supplier Approver and Item Master Approver roles before ticking these.",
+   "fieldname": "master_approval_item",
+   "fieldtype": "Check",
+   "label": "Item Approval"
+  },
+  {
+   "fieldname": "master_approval_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "Unticked: only masters created from the moment below need approval; older ones stay usable (unless one is waiting for approval or was rejected). Ticked: older masters need an approval as well -- an approver approves them in bulk from the Customer / Supplier / Item list (Actions > Approve); an incomplete one is skipped and says what it lacks.",
+   "fieldname": "master_approval_strict",
+   "fieldtype": "Check",
+   "label": "Strict Validation (Existing Masters Too)"
+  },
+  {
+   "description": "Set the first time the approval is installed. Masters created at or after this moment are new masters.",
+   "fieldname": "master_approval_from",
+   "fieldtype": "Datetime",
+   "label": "Approval Applies to Masters Created From"
+  },
+  {
    "fieldname": "names_and_numbers_section",
    "fieldtype": "Section Break",
    "label": "Names and Account Numbers",
@@ -446,7 +489,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-22 12:30:00.000000",
+ "modified": "2026-10-28 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",

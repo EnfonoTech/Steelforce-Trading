@@ -116,13 +116,20 @@ def missing_contact_phone(party_doctype: str, party_name: str) -> bool:
 	return not party_phone_numbers(party_doctype, party_name)
 
 
+def _bypassed(customer: str) -> bool:
+	"""A customer an admin bypassed is let through the requirement checks (master_approval.py)."""
+	from sf_trading.master_approval import is_master_bypassed
+
+	return is_master_bypassed("Customer", customer)
+
+
 def validate_customer_contact_at_transaction(doc, _method=None):
 	"""Sales Invoice / Sales Order validate: block on a customer with no phone on file.
 
 	Runs for a document against an EXISTING customer exactly as much as a brand new one -- there is
 	no is_new()/is_new customer guard -- which is the "for existing records too" half of GS Issue 20.
 	"""
-	if not doc.get("customer"):
+	if not doc.get("customer") or _bypassed(doc.customer):
 		return
 	if missing_contact_phone("Customer", doc.customer):
 		frappe.throw(
@@ -183,7 +190,7 @@ def validate_credit_customer_requirements_at_transaction(doc, _method=None):
 	"""Sales Invoice / Sales Order validate: a credit customer additionally needs 2 contacts +
 	an attachment on file (GS Issue 13's field/validation half; the approval-workflow half -- who
 	is "credit dept" vs "accounts" -- is still blocked on the client naming those roles)."""
-	if not doc.get("customer"):
+	if not doc.get("customer") or _bypassed(doc.customer):
 		return
 	if cash_sale_overrides_credit_documents(doc):
 		return

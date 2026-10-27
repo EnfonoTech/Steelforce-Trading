@@ -136,8 +136,8 @@ class TestOpenItems(FrappeTestCase):
 		"""Make a test customer billable on a site that has rules about who may be invoiced.
 
 		Both rules postdate these fixtures and live in sf_trading.sales_order_governance /
-		credit_customer_approval: a customer needs a Contact carrying a phone number (GS Issue
-		20), and a customer created from here on starts Pending Verification. Without them every
+		master_approval: a customer needs a Contact carrying a phone number (GS Issue
+		20), and a customer created from here on starts as a Draft of the Customer approval. Without them every
 		invoice or order below dies in before_submit, whatever the engine under test does.
 		"""
 		from sf_trading.party_contact_cache import party_phone_numbers
@@ -152,7 +152,11 @@ class TestOpenItems(FrappeTestCase):
 				}
 			).insert(ignore_permissions=True)
 		if frappe.get_meta("Customer").get_field("custom_approval_status"):
-			frappe.db.set_value("Customer", customer, "custom_approval_status", "Approved")
+			values = {"custom_approval_status": "Approved"}
+			# the Customer approval counts a customer approved once it carries its approval stamp
+			if frappe.get_meta("Customer").get_field("custom_approved_on"):
+				values["custom_approved_on"] = frappe.utils.now_datetime()
+			frappe.db.set_value("Customer", customer, values)
 
 	# ------------------------------------------------------------------
 	# document helpers

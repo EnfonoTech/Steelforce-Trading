@@ -20,6 +20,7 @@
 		"Payment Entry": "party",
 		"Sales Order": "customer",
 		"Sales Invoice": "customer",
+		"Delivery Note": "customer",
 	};
 	const SELLING = ["Sales Order", "Sales Invoice"];
 	const MODE = "custom_payment_mode";

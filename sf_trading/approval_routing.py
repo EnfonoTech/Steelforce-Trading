@@ -55,7 +55,9 @@ SR_SECOND_PERMISSIONS = ("read", "write", "submit")
 
 # indicator colour for a Workflow State this module has to create
 STATE_STYLES = {SUBMITTED: "Primary", REQUESTED: "Warning", CANCELLED: "Danger", "Pending": "Warning",
-	SR_SECOND_STATE: "Warning", "Approved": "Success", "Rejected": "Danger"}
+	SR_SECOND_STATE: "Warning", "Approved": "Success", "Rejected": "Danger",
+	# the Customer / Supplier / Item approval (master_approval.py)
+	"Pending Approval": "Warning"}
 
 
 def _active(doctype) -> bool:

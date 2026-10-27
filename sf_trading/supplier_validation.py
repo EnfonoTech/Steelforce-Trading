@@ -165,6 +165,11 @@ def validate_supplier_at_transaction(doc, _method=None):
 		supplier = doc.get("supplier")
 	if not supplier:
 		return
+	# a supplier an admin bypassed is let through the requirement checks (master_approval.py)
+	from sf_trading.master_approval import is_master_bypassed
+
+	if is_master_bypassed("Supplier", supplier):
+		return
 
 	missing = missing_supplier_details(supplier)
 	if missing:

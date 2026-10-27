@@ -97,7 +97,7 @@ doctype_js = {
 	],
 	"Stock Entry":      "public/js/stock_entry.js",
 	# Item Code and Item Name are typed in capitals on the form -- the server enforces it, see item_case.py
-	"Item":             "public/js/item_uppercase.js",
+	"Item":             ["public/js/item_uppercase.js", "public/js/master_approval.js"],
 	# "Items Without Price" button: opens that report on this list
 	"Price List":       "public/js/price_list.js",
 	"Company":          "public/js/company_stock_reco_account.js",
@@ -109,7 +109,8 @@ doctype_js = {
 		"public/js/party_mobile_no_prefill.js",
 		# "Quick Edit Billing Fields" button -- same dialog the Sales Invoice Customer field uses
 		"public/js/customer_quick_edit.js",
-		"public/js/credit_customer_approval.js",
+		# what the approval still wants of the master, Approve / Bypass Approval -- see master_approval.py
+		"public/js/master_approval.js",
 		# the Supporting Documents grid and the new-master required marks
 		"public/js/party_documents.js",
 	],
@@ -118,6 +119,7 @@ doctype_js = {
 		"public/js/party_documents.js",
 		# "Quick Edit Billing Fields" -- the supplier twin of the Customer one
 		"public/js/supplier_quick_edit.js",
+		"public/js/master_approval.js",
 	],
 	"Quotation":        [
 		"public/js/quotation.js",
@@ -148,6 +150,8 @@ doctype_js = {
 	"Delivery Note":    [
 		"public/js/salesperson_by_company.js",
 		"public/js/document_trail.js",
+		# a popup the moment a customer the approval holds back is picked -- see party_alert.py
+		"public/js/party_gate_alert.js",
 	],
 	"Supplier Quotation": [
 		"public/js/purchase_tax_template.js",
@@ -235,6 +239,10 @@ doctype_list_js = {
 	"Sales Invoice": ["public/js/payment_advice_list_action.js", "public/js/sales_invoice_list.js"],
 	"Purchase Order": ["public/js/payment_advice_list_action.js", "public/js/purchase_order_list.js"],
 	"Sales Order": ["public/js/payment_advice_list_action.js", "public/js/sales_order_list.js"],
+	# Approve / Bypass Approval for the selected masters -- see master_approval.py
+	"Customer": "public/js/master_approval_list.js",
+	"Supplier": "public/js/master_approval_list.js",
+	"Item": "public/js/master_approval_list.js",
 }
 
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
@@ -340,6 +348,9 @@ after_migrate = [
 	"sf_trading.strict_stock_reservation.ensure_custom_fields",
 	# the Goods In link on a Purchase Invoice row
 	"sf_trading.goods_in.ensure_custom_fields",
+	# Customer / Supplier / Item approval: approver access, the three PM Workflows, the switches, and the
+	# first time, the start of the approval -- see master_approval.py
+	"sf_trading.master_approval.setup",
 ]
 
 after_install = [
@@ -453,6 +464,9 @@ _SUPPLIER_GATE = "sf_trading.supplier_validation.validate_supplier_at_transactio
 # a new supplier / B2B customer must be complete, and no party may hold an expired document that
 # carries a Financial Implication -- see sf_trading/party_documents.py
 _MASTER_GATE = "sf_trading.party_documents.validate_party_at_transaction"
+# the customer / supplier and every item on a selling or buying document (and a supplier payment) is
+# approved, where the Customer / Supplier / Item approval covers it -- see sf_trading/master_approval.py
+_APPROVAL_GATE = "sf_trading.master_approval.validate_master_approval_at_transaction"
 # Quantity a Goods In already recorded cannot be received again by a Purchase Receipt or a
 # stock-updating Purchase Invoice made straight from the Purchase Order -- see sf_trading/goods_in.py.
 _GOODS_IN_GATE = "sf_trading.goods_in.validate_receipt_against_goods_in"
@@ -532,6 +546,7 @@ doc_events = {
 			"sf_trading.pdc_transfer.validate",
 			_SUPPLIER_GATE,
 			_MASTER_GATE,
+			_APPROVAL_GATE,
 		],
 		# an Internal Transfer raised from a post-dated cheque closes that cheque when it is
 		# submitted, and re-opens it if it is cancelled
@@ -595,6 +610,8 @@ doc_events = {
 			"sf_trading.party_documents.validate_master",
 			# one row per branch, and the Branch Cash Limits may not add up to more than the Cash Collection Limit
 			"sf_trading.sales_order_limits.validate_branch_cash_limit_allocation",
+			# the Approval Status moves by the approval only, and into Pending / Approved only when complete
+			"sf_trading.master_approval.validate_master",
 		],
 		"on_update": "sf_trading.party_documents.relink_attachments",
 		"onload": "sf_trading.party_documents.set_onload",
@@ -605,10 +622,9 @@ doc_events = {
 			"sf_trading.title_case.title_case_party",
 			"sf_trading.party_accounts.create_customer_receivable_account",
 		],
-		# a brand new customer starts Pending Verification; existing ones were grandfathered
-		# in as Approved by the rollout patch, so this never touches a re-saved customer
+		# a brand new customer starts as a Draft of the Customer approval -- see master_approval.py
 		"before_insert": [
-			"sf_trading.credit_customer_approval.default_new_customer_status",
+			"sf_trading.master_approval.set_initial_status",
 			# before Frappe makes the ID from the name: the ID comes out in Title Case too
 			"sf_trading.title_case.title_case_party",
 		],
@@ -626,6 +642,8 @@ doc_events = {
 			"sf_trading.party_master_rules.validate_master",
 			# supporting-document rows, and what a new supplier must carry
 			"sf_trading.party_documents.validate_master",
+			# the Approval Status moves by the approval only, and into Pending / Approved only when complete
+			"sf_trading.master_approval.validate_master",
 		],
 		"on_update": "sf_trading.party_documents.relink_attachments",
 		"onload": "sf_trading.party_documents.set_onload",
@@ -634,7 +652,11 @@ doc_events = {
 			"sf_trading.title_case.title_case_party",
 			"sf_trading.party_accounts.create_supplier_payable_account",
 		],
-		"before_insert": "sf_trading.title_case.title_case_party",
+		"before_insert": [
+			"sf_trading.title_case.title_case_party",
+			# a new supplier starts as a Draft of the Supplier approval -- see master_approval.py
+			"sf_trading.master_approval.set_initial_status",
+		],
 		"before_rename": "sf_trading.title_case.title_case_rename",
 		"after_insert": "sf_trading.supplier_validation.remind_attachment",
 	},
@@ -690,6 +712,8 @@ doc_events = {
 			"sf_trading.payment_term_split.repair_term_less_schedule",
 			# a Cash sale is due the day it is made; runs after the controller built the schedule
 			"sf_trading.cash_due_date.apply_cash_due_date",
+			# the customer and every item approved, where the approval covers them -- see master_approval.py
+			_APPROVAL_GATE,
 		],
 		# the refund a return promised is checked while refusing is still safe, and paid the
 		# moment the return is submitted -- approval and refund land together. before_submit,
@@ -705,9 +729,6 @@ doc_events = {
 			# client call -- a B2B customer with no credit standing no longer needs a 2nd number)
 			"sf_trading.sales_order_governance.validate_credit_customer_requirements_at_transaction",
 			_MASTER_GATE,
-			# a customer still Pending Verification (or Rejected) is not billable, unless
-			# whoever is submitting is named on the bypass roster -- see credit_customer_approval.py
-			"sf_trading.credit_customer_approval.validate_customer_approved_for_invoicing",
 		],
 		"on_submit": [
 			"sf_trading.inter_company.sales_invoice_on_submit",
@@ -740,6 +761,8 @@ doc_events = {
 			"sf_trading.cash_due_date.apply_cash_due_date",
 			# the Driver's cash limit and payment days, by Customer and by Salesperson -- see sales_order_limits.py
 			"sf_trading.sales_order_limits.validate_sales_order_limits",
+			# the customer and every item approved, where the approval covers them -- see master_approval.py
+			_APPROVAL_GATE,
 		],
 		# before_submit, not validate: a draft order can still be saved while a customer's
 		# contact details are being fixed elsewhere -- only SUBMIT is refused.
@@ -772,7 +795,7 @@ doc_events = {
 		# _SDBNB_DN_HOOK last: it reads the expense_account the controller and the
 		# earlier hooks have already settled on, then re-points stock rows at the
 		# Stock Delivered But Not Billed account when the company opts in.
-		"validate": [_BRANCH_HOOK, _LH_HOOK, _SP_HOOK, _BPL_GUARD, _SDBNB_DN_HOOK, _SBND_DN_HOOK],
+		"validate": [_BRANCH_HOOK, _LH_HOOK, _SP_HOOK, _BPL_GUARD, _SDBNB_DN_HOOK, _SBND_DN_HOOK, _APPROVAL_GATE],
 	},
 	"Company": {
 		"validate": [
@@ -821,6 +844,7 @@ doc_events = {
 			_BPL_GUARD,
 			_SUPPLIER_GATE,
 			_MASTER_GATE,
+			_APPROVAL_GATE,
 			"sf_trading.landed_cost.validate_charges",
 			# goods come in by one route only: a Goods In's quantity is invoiced from that Goods In
 			_GOODS_IN_GATE,
@@ -859,6 +883,7 @@ doc_events = {
 			_BPL_GUARD,
 			_SUPPLIER_GATE,
 			_MASTER_GATE,
+			_APPROVAL_GATE,
 			"sf_trading.payment_term_split.repair_term_less_schedule",
 			# a Material Request behind every line and enough Request-for-Quotation quotations, unless it is a
 			# verbal order (SF Trading Settings > Purchase Order Procurement Rules) -- see purchase_order_procurement.py
@@ -869,7 +894,7 @@ doc_events = {
 	},
 	"Purchase Receipt": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_BRANCH_HOOK, _LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE, _MASTER_GATE, "sf_trading.landed_cost.validate_charges", _GOODS_IN_GATE],
+		"validate": [_BRANCH_HOOK, _LH_HOOK, _BPL_GUARD, _SUPPLIER_GATE, _MASTER_GATE, _APPROVAL_GATE, "sf_trading.landed_cost.validate_charges", _GOODS_IN_GATE],
 		"before_submit": "sf_trading.landed_cost.require_links",
 		"on_submit": _ASSET_TRACKING_HOOK,
 	},
@@ -925,7 +950,13 @@ doc_events = {
 		"autoname": "sf_trading.item_naming.autoname",
 		# the Item master is kept in CAPITALS: before_insert runs before Frappe names the record, before_validate on every save
 		# -- see sf_trading/item_case.py
-		"before_insert": "sf_trading.item_case.capitalise_item",
+		"before_insert": [
+			"sf_trading.item_case.capitalise_item",
+			# a new item starts as a Draft of the Item approval -- see master_approval.py
+			"sf_trading.master_approval.set_initial_status",
+		],
+		# the Approval Status moves by the approval only
+		"validate": "sf_trading.master_approval.validate_master",
 		"before_validate": [
 			"sf_trading.item_case.capitalise_item",
 			# an item with no barcode gets its Item Code as one (CODE-128, stock UOM); after the line above so it is the capitalised code
@@ -1091,7 +1122,9 @@ before_job = [
 fixtures = [
 	{
 		"doctype": "Role",
-		"filters": [["name", "in", ("B2B Creator", "Ticket Manager")]],
+		"filters": [["name", "in", ("B2B Creator", "Ticket Manager",
+			# the approvers of the Customer / Supplier / Item approval -- see master_approval.py
+			"Customer Approver", "Supplier Approver", "Item Master Approver")]],
 	},
 	{
 		"doctype": "Custom DocPerm",
@@ -1396,6 +1429,32 @@ fixtures = [
 			# credit customer approval + document expiry
 			"Customer-custom_credit_approval_section",
 			"Customer-custom_approval_status",
+			# Customer / Supplier / Item approval: status, who approved, and the admin bypass -- see master_approval.py
+			"Customer-custom_approval_column",
+			"Customer-custom_approved_by",
+			"Customer-custom_approved_on",
+			"Customer-custom_approval_bypassed",
+			"Customer-custom_approval_bypassed_by",
+			"Customer-custom_approval_bypassed_on",
+			"Customer-custom_approval_bypass_reason",
+			"Supplier-custom_approval_section",
+			"Supplier-custom_approval_status",
+			"Supplier-custom_approval_column",
+			"Supplier-custom_approved_by",
+			"Supplier-custom_approved_on",
+			"Supplier-custom_approval_bypassed",
+			"Supplier-custom_approval_bypassed_by",
+			"Supplier-custom_approval_bypassed_on",
+			"Supplier-custom_approval_bypass_reason",
+			"Item-custom_approval_section",
+			"Item-custom_approval_status",
+			"Item-custom_approval_column",
+			"Item-custom_approved_by",
+			"Item-custom_approved_on",
+			"Item-custom_approval_bypassed",
+			"Item-custom_approval_bypassed_by",
+			"Item-custom_approval_bypassed_on",
+			"Item-custom_approval_bypass_reason",
 			"Customer-custom_supporting_documents",
 			"Supplier-custom_supporting_documents",
 			# their own full-width section at the end of each master's Settings tab
@@ -1449,6 +1508,8 @@ pm_workflow_applicability = [
 	"sf_trading.approval_routing.workflow_applicability",
 	# a system-generated journal (asset depreciation and the like) is governed by no workflow
 	"sf_trading.system_entries.workflow_applicability",
+	# Customer / Supplier / Item approval: only the masters the approval covers -- see master_approval.py
+	"sf_trading.master_approval.workflow_applicability",
 ]
 
 

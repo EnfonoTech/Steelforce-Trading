@@ -1,4 +1,4 @@
-"""Tests for credit customer verification/approval gating Sales Invoice.
+"""The bypass roster, and the earlier credit-customer approval answered by the Customer approval.
 
     bench --site <scratch-site> run-tests --module sf_trading.tests.test_credit_customer_approval
 """
@@ -28,15 +28,11 @@ def _stub_settings(rows=None):
 
 
 class TestDefaultNewCustomerStatus(FrappeTestCase):
-	def test_new_customer_defaults_to_pending(self):
+	def test_delegates_to_the_customer_approval(self):
 		doc = StubDoc("Customer", custom_approval_status=None)
-		cca.default_new_customer_status(doc)
-		self.assertEqual(doc.custom_approval_status, cca.PENDING)
-
-	def test_does_not_override_an_explicit_status(self):
-		doc = StubDoc("Customer", custom_approval_status=cca.APPROVED)
-		cca.default_new_customer_status(doc)
-		self.assertEqual(doc.custom_approval_status, cca.APPROVED)
+		with patch("sf_trading.master_approval.set_initial_status") as initial:
+			cca.default_new_customer_status(doc)
+		initial.assert_called_once()
 
 
 class TestMayBypass(FrappeTestCase):
@@ -70,38 +66,20 @@ class TestMayBypass(FrappeTestCase):
 
 
 class TestValidateCustomerApprovedForInvoicing(FrappeTestCase):
+	"""Answered by the Customer approval (master_approval.party_refusal)."""
+
 	def test_return_is_exempt(self):
 		doc = StubDoc("Sales Invoice", is_return=1, customer="CUST-0001")
-		# would throw if it looked up the customer at all -- get_value is left unmocked so a
-		# lookup would raise inside this test DB context; passing means it never tried
-		cca.validate_customer_approved_for_invoicing(doc)
+		with patch("sf_trading.master_approval.party_refusal", side_effect=AssertionError("asked")):
+			cca.validate_customer_approved_for_invoicing(doc)
 
 	def test_approved_customer_passes(self):
 		doc = StubDoc("Sales Invoice", is_return=0, customer="CUST-0001")
-		with patch(
-			"sf_trading.credit_customer_approval.frappe.db.get_value", return_value=cca.APPROVED
-		):
+		with patch("sf_trading.master_approval.party_refusal", return_value=None):
 			cca.validate_customer_approved_for_invoicing(doc)
 
-	def test_pending_customer_without_bypass_throws(self):
+	def test_unapproved_customer_throws(self):
 		doc = StubDoc("Sales Invoice", is_return=0, customer="CUST-0001")
-		with patch(
-			"sf_trading.credit_customer_approval.frappe.db.get_value", return_value=cca.PENDING
-		), patch.object(cca, "may_bypass", return_value=False):
-			with self.assertRaises(frappe.ValidationError):
-				cca.validate_customer_approved_for_invoicing(doc)
-
-	def test_pending_customer_with_bypass_passes(self):
-		doc = StubDoc("Sales Invoice", is_return=0, customer="CUST-0001")
-		with patch(
-			"sf_trading.credit_customer_approval.frappe.db.get_value", return_value=cca.PENDING
-		), patch.object(cca, "may_bypass", return_value=True):
-			cca.validate_customer_approved_for_invoicing(doc)
-
-	def test_rejected_customer_without_bypass_throws(self):
-		doc = StubDoc("Sales Invoice", is_return=0, customer="CUST-0001")
-		with patch(
-			"sf_trading.credit_customer_approval.frappe.db.get_value", return_value=cca.REJECTED
-		), patch.object(cca, "may_bypass", return_value=False):
+		with patch("sf_trading.master_approval.party_refusal", return_value="Customer CUST-0001 is not approved"):
 			with self.assertRaises(frappe.ValidationError):
 				cca.validate_customer_approved_for_invoicing(doc)
