@@ -78,12 +78,15 @@ VALID_REFERENCE_DOCTYPES = {
 
 ORDER_DOCTYPES = ("Sales Order", "Purchase Order")
 
-# Which invoice carries the money once an order has been billed. Used only to name the right
-# doctype in a message — nothing here follows the link and pays it on the accountant's behalf.
+# Which invoice carries the money once an order has been billed. A draft is only told about it;
+# an APPROVED advice pays that invoice when its Payment Entry is made (billed_order_allocation).
 ORDER_INVOICE = {"Purchase Order": "Purchase Invoice", "Sales Order": "Sales Invoice"}
 
 # The item field on that invoice that names the order.
 ORDER_LINK_FIELD = {"Purchase Order": "purchase_order", "Sales Order": "sales_order"}
+
+# The invoice's party field, so an order is only ever settled through its own party's invoice.
+INVOICE_PARTY_FIELD = {"Purchase Invoice": "supplier", "Sales Invoice": "customer"}
 
 ALLOWED_REFERENCE_DOCTYPES = tuple(
     sorted({dt for types in VALID_REFERENCE_DOCTYPES.values() for dt in types})
@@ -1200,8 +1203,8 @@ def order_block_message(idx, order_doctype, order_name, block, currency=None):
     # replaced while the advice is a draft and only a cancel + amend can replace it afterwards,
     # while a document being picked right now simply should not be picked
     remedy = (
-        _("Replace the order row with the invoice — and if this advice is already submitted, "
-          "cancel it and amend.")
+        _("Replace the order row with the invoice while this advice is a draft. Once it is approved, "
+          "its Payment Entry pays the invoice instead.")
         if idx
         else _("Pick the invoice instead.")
     )
@@ -1250,6 +1253,105 @@ def order_block_message(idx, order_doctype, order_name, block, currency=None):
         "%(prefix)s%(dt)s %(name)s is fully billed, so ERPNext will not accept a payment "
         "against the order. Pay the %(invoice_dt)s raised against it instead."
     ) % {"prefix": prefix, "dt": dt, "name": name, "invoice_dt": invoice_dt}
+
+
+def billed_order_allocation(advice, row, invoices, used):
+    """What an approved advice row on a since-billed order pays instead: the invoices that billed it.
+
+    PA-26-0102 (2026-10-27) was approved to pay PUR-ORD-2026-00483 in advance, and 20020000449 billed
+    the whole order while the advice waited for its approvals. ERPNext takes no payment against a
+    billed order, and a submitted advice cannot have its row replaced, so the only way left was to
+    cancel, amend and approve the same money all over again. The obligation the approvers signed
+    for -- this party, this order, this amount -- is now owed on the invoice, so the Payment Entry
+    settles the invoice.
+
+    The approval is never widened. Invoices are taken oldest first, only the party's own, only what
+    each still owes, and never more in all than the row's approved allocation. An invoice another
+    live advice holds is left to that advice, or it would be paid twice. `used` carries what this
+    advice already puts on each invoice -- its own invoice rows, and other billed-order rows --
+    so two rows cannot overdraw one invoice.
+
+    Returns (parts, held): parts is a list of (invoice, amount) covering the whole allocation, or
+    None when the invoices cannot cover it; held maps an invoice to the advice holding it.
+    """
+    wanted = flt(row.allocated_amount)
+    invoice_doctype = ORDER_INVOICE.get(row.reference_doctype)
+    names = [invoice.name for invoice in invoices]
+    if wanted <= TOLERANCE or not invoice_doctype or not names:
+        return None, {}
+
+    party_field = INVOICE_PARTY_FIELD.get(invoice_doctype)
+    own = set(
+        frappe.get_all(invoice_doctype, filters={"name": ("in", names), party_field: advice.party}, pluck="name")
+    )
+
+    held = {}
+    for clash in frappe.get_all(
+        "Payment Advice Reference",
+        filters={
+            "reference_record": ("in", names),
+            "parenttype": "Payment Advice",
+            "parent": ("!=", advice.name or ""),
+            "docstatus": ("!=", 2),
+        },
+        fields=["parent", "reference_record", "allocated_amount"],
+    ):
+        # the same tests validate_not_advised_elsewhere applies: a zero row or a cancelled advice
+        # holds nothing
+        if abs(flt(clash.allocated_amount)) < TOLERANCE:
+            continue
+        if frappe.db.get_value("Payment Advice", clash.parent, "status") == STATUS_CANCELLED:
+            continue
+        held.setdefault(clash.reference_record, clash.parent)
+
+    remaining, parts = wanted, []
+    for invoice in invoices:
+        if invoice.name not in own or invoice.name in held:
+            continue
+        take = min(flt(invoice.outstanding_amount) - used.get(invoice.name, 0), remaining)
+        if take > TOLERANCE:
+            parts.append((invoice.name, flt(take, 9)))
+            remaining = flt(remaining - take, 9)
+        if remaining <= TOLERANCE:
+            break
+
+    if remaining > TOLERANCE:
+        return None, held
+    for invoice, amount in parts:
+        used[invoice] = used.get(invoice, 0) + amount
+    return parts, held
+
+
+def billed_order_refusal(row, block, held, currency=None):
+    """Why an approved advice row on a billed order still cannot be paid, when the invoices cannot take it."""
+    if held:
+        return _(
+            "Row #%(idx)s: %(dt)s %(name)s is fully billed, and the invoice that billed it is already on "
+            "another advice (%(held)s), which pays it. Cancel this advice."
+        ) % {
+            "idx": row.idx,
+            "dt": _(row.reference_doctype),
+            "name": frappe.bold(row.reference_record),
+            "held": ", ".join(
+                _("%(invoice)s on %(advice)s") % {"invoice": frappe.bold(i), "advice": frappe.bold(a)}
+                for i, a in held.items()
+            ),
+        }
+
+    unpaid = [i for i in block.get("invoices") or [] if flt(i.get("outstanding_amount")) > 0]
+    if unpaid:
+        return _(
+            "Row #%(idx)s: %(dt)s %(name)s is fully billed, and its invoices owe only %(owed)s of the "
+            "%(approved)s this advice was approved to pay. Cancel this advice and amend it."
+        ) % {
+            "idx": row.idx,
+            "dt": _(row.reference_doctype),
+            "name": frappe.bold(row.reference_record),
+            "owed": frappe.utils.fmt_money(sum(flt(i.get("outstanding_amount")) for i in unpaid), currency=currency),
+            "approved": frappe.utils.fmt_money(flt(row.allocated_amount), currency=currency),
+        }
+
+    return order_block_message(row.idx, row.reference_doctype, row.reference_record, block, currency)
 
 
 def get_branch_cost_center(branch, company=None):
@@ -1463,21 +1565,34 @@ def build_payment_entry(advice):
                 }
             )
 
-    # An order that has since been billed is no longer payable, and ERPNext reports that with
-    # the wrong sentence — "has already been fully paid" — because its test is per_billed and
-    # not payment. Say what is actually true, before pe.insert() gets the chance to say what is
-    # not. Read-only, so this is safe on a submitted, already-approved advice.
+    # An order that has since been billed is no longer payable as an order, and ERPNext reports
+    # that with the wrong sentence — "has already been fully paid" — because its test is
+    # per_billed and not payment. A billed order's approved money is paid on the invoice that
+    # billed it (billed_order_allocation); a closed or fully advanced order, or a billed one whose
+    # invoices cannot take the money, is refused with what is actually true, before pe.insert()
+    # gets the chance to say what is not. Read-only, so this is safe on an approved advice.
     company_currency = get_company_currency(advice.company)
+    used = {}
+    for row in allocations:
+        if row.reference_doctype in INVOICE_PARTY_FIELD and flt(row.allocated_amount) > 0:
+            used[row.reference_record] = used.get(row.reference_record, 0) + flt(row.allocated_amount)
+    switched = {}
     for row in allocations:
         if row.reference_doctype in ORDER_DOCTYPES:
             block = order_payment_block(row.reference_doctype, row.reference_record)
-            if block:
+            if not block:
+                continue
+            if block.get("reason") != "billed":
                 frappe.throw(
                     order_block_message(
                         row.idx, row.reference_doctype, row.reference_record, block,
                         company_currency,
                     )
                 )
+            parts, held = billed_order_allocation(advice, row, block.get("invoices") or [], used)
+            if parts is None:
+                frappe.throw(billed_order_refusal(row, block, held, company_currency))
+            switched[id(row)] = parts
 
     # A supplier on hold makes ERPNext's get_outstanding_reference_documents return NOTHING, so
     # every reference row on the advice reports "has already been fully paid" — the same wrong
@@ -1546,13 +1661,36 @@ def build_payment_entry(advice):
         pe.reference_no = advice.reference_no
         pe.reference_date = advice.reference_date or nowdate()
 
+    paid_instead = []
     for row in allocations:
-        reference = payment_entry_reference(advice.party_type, row)
-        if reference:
+        if id(row) in switched:
+            invoice_doctype = ORDER_INVOICE[row.reference_doctype]
+            references = [
+                {"reference_doctype": invoice_doctype, "reference_name": invoice, "allocated_amount": amount}
+                for invoice, amount in switched[id(row)]
+            ]
+            paid_instead.append((row.reference_doctype, row.reference_record, switched[id(row)]))
+        else:
+            reference = payment_entry_reference(advice.party_type, row)
+            references = [reference] if reference else []
+        for reference in references:
             # a document under a term-allocated Payment Terms Template must be paid against a named
             # term: name it here when the advice row does not (see sf_trading/payment_term_split.py)
             for part in split_by_payment_term(reference):
-                pe.append("references", part)
+                # an order row paid on an invoice the advice also names gets one row, not two:
+                # ERPNext refuses a reference that appears twice
+                key = (part["reference_doctype"], part["reference_name"], part.get("payment_term"))
+                same = next(
+                    (r for r in pe.get("references")
+                     if (r.reference_doctype, r.reference_name, r.get("payment_term") or None) == key),
+                    None,
+                )
+                if same:
+                    same.allocated_amount = flt(same.allocated_amount) + flt(part["allocated_amount"])
+                else:
+                    pe.append("references", part)
+    # read by create_payment_entry, which records the switch once the entry exists
+    pe.flags.sf_paid_instead_of_orders = paid_instead
 
     # currencies: read them, never assume they match (company_currency was read above, for
     # the guard's message)
@@ -1602,7 +1740,25 @@ def create_payment_entry(payment_advice: str, submit: int = 0):
             )
 
     pe = build_payment_entry(advice)
+    paid_instead = pe.flags.sf_paid_instead_of_orders or []
     pe.insert()
+
+    if paid_instead:
+        # the advice names an order and the entry pays its invoice: say so where both will be read
+        party_currency = pe.paid_to_account_currency if pe.payment_type == "Pay" else pe.paid_from_account_currency
+        note = _("Paid on the invoice, the order having been billed after this advice was raised: %s") % "; ".join(
+            _("%(order)s → %(invoices)s") % {
+                "order": frappe.bold(order),
+                "invoices": ", ".join(
+                    "%s (%s)" % (frappe.bold(invoice), frappe.utils.fmt_money(amount, currency=party_currency))
+                    for invoice, amount in parts
+                ),
+            }
+            for _doctype, order, parts in paid_instead
+        )
+        pe.add_comment("Comment", note)
+        advice.add_comment("Comment", note + " " + _("Payment Entry %s.") % frappe.bold(pe.name))
+        frappe.msgprint(note, indicator="blue", alert=True)
 
     if cint(submit):
         if not frappe.has_permission("Payment Entry", "submit"):

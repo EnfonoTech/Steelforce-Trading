@@ -789,12 +789,19 @@ class TestOrderReferenceGuard(FrappeTestCase):
         self.assertIn(po.name, text)
         self.assertNotIn("fully paid", text)
 
-    def test_build_payment_entry_refuses_before_erpnext_does(self):
-        """The PA-26-0048 reproduction: an advice on an order that has since been billed."""
-        from sf_trading.sf_trading.doctype.payment_advice.payment_advice import build_payment_entry
+    def test_build_payment_entry_pays_the_invoice_or_says_why_not(self):
+        """PA-26-0048 / PA-26-0102: an approved advice on an order that has since been billed.
+
+        It pays the invoice that billed the order when that invoice can take the approved money,
+        and otherwise refuses with the truth -- and either way before ERPNext sees an entry.
+        """
+        from sf_trading.sf_trading.doctype.payment_advice.payment_advice import (
+            build_payment_entry,
+            get_invoices_against_order,
+        )
 
         row = frappe.db.sql(
-            """select r.parent from `tabPayment Advice Reference` r
+            """select r.parent, r.reference_record, r.allocated_amount from `tabPayment Advice Reference` r
                join `tabPurchase Order` po on po.name = r.reference_record
                join `tabPayment Advice` pa on pa.name = r.parent
                where r.reference_doctype = 'Purchase Order' and pa.docstatus = 1
@@ -807,11 +814,18 @@ class TestOrderReferenceGuard(FrappeTestCase):
 
         advice = frappe.get_doc("Payment Advice", row[0].parent)
         before = frappe.db.count("Payment Entry")
-        with self.assertRaises(frappe.ValidationError) as caught:
-            build_payment_entry(advice)
-        text = frappe.utils.strip_html(str(caught.exception))
-        self.assertIn("fully billed", text)
-        self.assertNotIn("fully paid", text)
+        try:
+            pe = build_payment_entry(advice)
+        except frappe.ValidationError as refused:
+            text = frappe.utils.strip_html(str(refused))
+            self.assertIn("fully billed", text)
+            self.assertNotIn("fully paid", text)
+        else:
+            billed_by = {i.name for i in get_invoices_against_order("Purchase Order", row[0].reference_record)}
+            paid = [r for r in pe.references if r.reference_name in billed_by]
+            self.assertTrue(paid, "the order's money goes to the invoice that billed it")
+            self.assertNotIn(row[0].reference_record, [r.reference_name for r in pe.references])
+            self.assertTrue(pe.flags.sf_paid_instead_of_orders)
         # the guard has to beat pe.insert(), or a Payment Entry exists by the time it throws
         self.assertEqual(frappe.db.count("Payment Entry"), before)
 
@@ -836,3 +850,108 @@ class TestOrderReferenceGuard(FrappeTestCase):
         self.assertIn(row[0].reference_record, [r.reference_name for r in pe.references])
         self.assertTrue(all(r.reference_doctype for r in pe.references))
         self.assertFalse(pe.get("name") and frappe.db.exists("Payment Entry", pe.name))
+
+
+class TestBilledOrderPaidOnItsInvoice(FrappeTestCase):
+    """PA-26-0102: approved to pay PUR-ORD-2026-00483, which 20020000449 billed while the advice
+    waited. The approved money is paid on the invoice -- never more, never twice. Database reads are
+    patched, so nothing is created."""
+
+    def setUp(self):
+        from unittest.mock import patch
+
+        from sf_trading.sf_trading.doctype.payment_advice import payment_advice as pa
+
+        self.pa = pa
+        self.own = {"20020000449", "PINV-2"}
+        self.clashes = []
+        # only the advice's status is faked: flt(x, precision) reads the site's rounding method
+        # through the same get_value, and a blanket fake rounds every amount to 0
+        real_get_value = pa.frappe.db.get_value
+        self.patches = [
+            patch.object(pa.frappe, "get_all", side_effect=self.get_all),
+            patch.object(
+                pa.frappe.db, "get_value",
+                side_effect=lambda dt, *a, **k: "Approved" if dt == "Payment Advice" else real_get_value(dt, *a, **k),
+            ),
+        ]
+        for p in self.patches:
+            p.start()
+
+    def tearDown(self):
+        for p in reversed(self.patches):
+            p.stop()
+
+    def get_all(self, doctype, filters=None, fields=None, pluck=None, **kwargs):
+        if doctype == "Purchase Invoice":
+            return [n for n in filters["name"][1] if n in self.own]
+        if doctype == "Payment Advice Reference":
+            return [c for c in self.clashes if c.reference_record in filters["reference_record"][1]]
+        raise AssertionError("unexpected read of %s" % doctype)
+
+    def advice(self):
+        return frappe._dict(name="PA-26-0102", party="Tylos Building Material Establishment Wll")
+
+    def row(self, amount=540.54, idx=1):
+        return frappe._dict(idx=idx, reference_doctype="Purchase Order",
+                            reference_record="PUR-ORD-2026-00483", allocated_amount=amount)
+
+    def invoice(self, name="20020000449", outstanding=540.54):
+        return frappe._dict(name=name, outstanding_amount=outstanding)
+
+    def test_the_approved_amount_is_paid_on_the_invoice(self):
+        parts, held = self.pa.billed_order_allocation(self.advice(), self.row(), [self.invoice()], {})
+        self.assertEqual(parts, [("20020000449", 540.54)])
+        self.assertEqual(held, {})
+
+    def test_never_more_than_the_approval(self):
+        parts, _ = self.pa.billed_order_allocation(self.advice(), self.row(300), [self.invoice(outstanding=540.54)], {})
+        self.assertEqual(parts, [("20020000449", 300)])
+
+    def test_several_invoices_are_taken_oldest_first(self):
+        invoices = [self.invoice(outstanding=200), self.invoice("PINV-2", 400)]
+        parts, _ = self.pa.billed_order_allocation(self.advice(), self.row(540.54), invoices, {})
+        self.assertEqual(parts, [("20020000449", 200), ("PINV-2", 340.54)])
+
+    def test_invoices_that_owe_less_than_approved_refuse(self):
+        parts, held = self.pa.billed_order_allocation(self.advice(), self.row(), [self.invoice(outstanding=100)], {})
+        self.assertIsNone(parts)
+        text = frappe.utils.strip_html(
+            self.pa.billed_order_refusal(self.row(), {"invoices": [self.invoice(outstanding=100)]}, held, "BHD")
+        )
+        self.assertIn("owe only", text)
+        self.assertIn("Cancel this advice and amend it", text)
+
+    def test_an_invoice_another_advice_holds_is_left_to_it(self):
+        self.clashes = [frappe._dict(parent="PA-26-0200", reference_record="20020000449", allocated_amount=540.54)]
+        parts, held = self.pa.billed_order_allocation(self.advice(), self.row(), [self.invoice()], {})
+        self.assertIsNone(parts)
+        self.assertEqual(held, {"20020000449": "PA-26-0200"})
+        text = frappe.utils.strip_html(self.pa.billed_order_refusal(self.row(), {"invoices": [self.invoice()]}, held))
+        self.assertIn("PA-26-0200", text)
+
+    def test_another_partys_invoice_is_never_paid(self):
+        self.own = set()
+        parts, _ = self.pa.billed_order_allocation(self.advice(), self.row(), [self.invoice()], {})
+        self.assertIsNone(parts)
+
+    def test_two_rows_cannot_overdraw_one_invoice(self):
+        used = {}
+        first, _ = self.pa.billed_order_allocation(self.advice(), self.row(300), [self.invoice()], used)
+        second, _ = self.pa.billed_order_allocation(self.advice(), self.row(300, idx=2), [self.invoice()], used)
+        self.assertEqual(first, [("20020000449", 300)])
+        self.assertIsNone(second, "only 240.54 is left on the invoice")
+
+    def test_the_advices_own_invoice_row_counts_against_the_invoice(self):
+        parts, _ = self.pa.billed_order_allocation(
+            self.advice(), self.row(300), [self.invoice()], {"20020000449": 300}
+        )
+        self.assertIsNone(parts)
+
+    def test_the_draft_notice_no_longer_sends_an_approved_advice_to_cancel_and_amend(self):
+        body = frappe.utils.strip_html(
+            self.pa.order_block_message(1, "Purchase Order", "PUR-ORD-2026-00483",
+                                        {"reason": "billed", "invoices": [self.invoice()]}, "BHD")
+        )
+        self.assertIn("pays the invoice instead", body)
+        self.assertNotIn("cancel it and amend", body)
