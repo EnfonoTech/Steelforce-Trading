@@ -42,15 +42,15 @@ def invoice(rows=None, update_stock=0, docstatus=0, before=None, **values):
 class Seams:
 	"""The module's own helpers, each to a settable value."""
 
-	def __init__(self, user="buyer@example.com", stock=True, eligible=True, receipt=False, tracked=False):
-		self.user, self.stock, self.eligible, self.receipt, self.tracked = user, stock, eligible, receipt, tracked
+	def __init__(self, user="buyer@example.com", stock=True, live=True, receipt=False, tracked=False):
+		self.user, self.stock, self.live, self.receipt, self.tracked = user, stock, live, receipt, tracked
 		self.patches = []
 
 	def __enter__(self):
 		table = [
 			(poi, "_stock_rows", lambda inv: [r for r in inv.get("items") or [] if r.get("item_code")] if self.stock else []),
-			(poi, "_orders_are_eligible", lambda orders: self.eligible),
-			(poi, "_has_a_receipt", lambda orders, inv: self.receipt),
+			(poi, "_orders_are_live", lambda orders: self.live),
+			(poi, "_received_rows", lambda inv: list(inv.get("items") or []) if self.receipt else []),
 			(poi, "_is_tracked", lambda code: self.tracked),
 		]
 		for target, name, fn in table:
@@ -95,11 +95,11 @@ class TestWhenTheInvoiceIsTheArrival(FrappeTestCase):
 			self.assertFalse(poi.is_the_arrival(invoice([row(purchase_receipt="MAT-PRE-1")])))
 			self.assertFalse(poi.is_the_arrival(invoice([row(pr_detail="x1")])))
 
-	def test_an_order_that_has_a_receipt_or_is_part_received_or_closed_is_not(self):
+	def test_a_received_order_line_or_a_closed_order_is_not(self):
 		rows = [row(purchase_order="PO-1", po_detail="r1")]
 		with Seams(receipt=True):
 			self.assertFalse(poi.is_the_arrival(invoice(rows)))
-		with Seams(eligible=False):
+		with Seams(live=False):
 			self.assertFalse(poi.is_the_arrival(invoice(rows)))
 
 	def test_a_tracked_item_is_left_to_the_buyer(self):
@@ -108,8 +108,116 @@ class TestWhenTheInvoiceIsTheArrival(FrappeTestCase):
 
 	def test_an_invoice_made_from_a_goods_in_is_the_arrival_whatever_the_order_says(self):
 		rows = [row(purchase_order="PO-1", po_detail="r1", custom_goods_in_item="GI-1-1")]
-		with Seams(eligible=False, receipt=True):
+		with Seams(live=False, receipt=True):
 			self.assertTrue(poi.is_the_arrival(invoice(rows)))
+
+
+class Lines:
+	"""The database as `_received_rows` reads it: order lines, receipt rows, orders."""
+
+	def __init__(self, lines=None, receipted=(), received_orders=(), receipt_orders=()):
+		self.lines = lines or {}
+		self.receipted, self.received_orders, self.receipt_orders = set(receipted), set(received_orders), set(receipt_orders)
+
+	def get_all(self, doctype, filters=None, fields=None, pluck=None):
+		wanted = set(filters["name"][1]) if "name" in filters else None
+		if doctype == "Purchase Order Item":
+			return [frappe._dict(name=n, qty=q, received_qty=r) for n, (q, r) in self.lines.items() if n in wanted]
+		if doctype == "Purchase Receipt Item" and "purchase_order_item" in filters:
+			return [d for d in filters["purchase_order_item"][1] if d in self.receipted]
+		if doctype == "Purchase Receipt Item":
+			return [o for o in filters["purchase_order"][1] if o in self.receipt_orders]
+		if doctype == "Purchase Order":
+			return [o for o in wanted if o in self.received_orders]
+		raise AssertionError("unexpected read of %s" % doctype)
+
+	def __enter__(self):
+		self.patches = [
+			patch.object(poi.frappe, "get_all", side_effect=self.get_all),
+			patch.object(poi, "_stock_rows", side_effect=lambda inv: [r for r in inv.get("items") or [] if r.get("item_code")]),
+		]
+		for p in self.patches:
+			p.start()
+		return self
+
+	def __exit__(self, *exc):
+		for p in reversed(self.patches):
+			p.stop()
+
+
+def ordered(item="STEEL-1", order="PO-1", line="r1", qty=3):
+	return row(item, purchase_order=order, po_detail=line, qty=qty)
+
+
+class TestReceivedIsJudgedPerOrderLine(FrappeTestCase):
+	"""PUR-ORD-2026-00472: lines 1 and 2 taken into stock by one invoice, line 3 billed on another."""
+
+	def test_an_untouched_line_of_a_part_received_order_is_not_received(self):
+		# the order sits at 50% received, but nothing has arrived on r3
+		with Lines({"r1": (2, 2), "r2": (1, 1), "r3": (3, 0)}, received_orders={"PO-1"}):
+			self.assertEqual(poi._received_rows(invoice([ordered(line="r3")])), [])
+
+	def test_a_line_with_a_receipt_is_received_even_a_draft_one(self):
+		with Lines({"r1": (3, 0)}, receipted={"r1"}):
+			inv = invoice([ordered(line="r1")])
+			self.assertEqual(poi._received_rows(inv), inv["items"])
+
+	def test_one_received_line_is_enough_to_take_the_whole_invoice_off(self):
+		with Lines({"r1": (2, 0), "r3": (3, 0)}, receipted={"r1"}):
+			first, third = ordered("A", line="r1"), ordered("C", line="r3")
+			self.assertEqual(poi._received_rows(invoice([first, third])), [first])
+
+	def test_the_rest_of_a_line_an_earlier_ticked_invoice_part_received_is_not_received(self):
+		with Lines({"r1": (10, 4)}):
+			self.assertEqual(poi._received_rows(invoice([ordered(qty=6)])), [])
+			self.assertTrue(poi._received_rows(invoice([ordered(qty=7)])), "more than the line still awaits")
+
+	def test_two_rows_of_one_line_count_together(self):
+		with Lines({"r1": (10, 4)}):
+			self.assertEqual(poi._received_rows(invoice([ordered(qty=3), ordered(qty=3)])), [])
+			self.assertEqual(len(poi._received_rows(invoice([ordered(qty=3), ordered(qty=4)]))), 2)
+
+	def test_a_row_that_names_no_line_is_judged_by_its_order(self):
+		loose = row(purchase_order="PO-1", qty=1)
+		with Lines(received_orders={"PO-1"}):
+			self.assertEqual(poi._received_rows(invoice([loose])), [loose])
+		with Lines(receipt_orders={"PO-1"}):
+			self.assertEqual(poi._received_rows(invoice([loose])), [loose])
+		with Lines():
+			self.assertEqual(poi._received_rows(invoice([loose])), [])
+
+	def test_a_row_that_bills_a_receipt_is_received_without_a_read(self):
+		billed = row(purchase_receipt="MAT-PRE-1")
+		with Lines():
+			self.assertEqual(poi._received_rows(invoice([billed])), [billed])
+
+	def test_a_direct_row_is_never_received(self):
+		with Lines():
+			self.assertEqual(poi._received_rows(invoice([row()])), [])
+
+
+class TestTheUntickNamesWhatArrived(FrappeTestCase):
+	def untick(self, doc, live=True, receipt=False):
+		with Seams(live=live, receipt=receipt) as s:
+			poi.untick_stock_when_the_goods_already_arrived(doc)
+			return s.msgprint
+
+	def test_an_untouched_line_keeps_its_tick(self):
+		doc = invoice([ordered(line="r3")], update_stock=1)
+		self.untick(doc).assert_not_called()
+		self.assertEqual(doc.update_stock, 1)
+
+	def test_a_received_line_is_unticked_and_named(self):
+		doc = invoice([ordered("110201040016", line="r3")], update_stock=1)
+		said = self.untick(doc, receipt=True)
+		self.assertEqual(doc.update_stock, 0)
+		self.assertIn("110201040016", said.call_args.args[0])
+
+	def test_a_closed_order_says_so(self):
+		doc = invoice([ordered()], update_stock=1)
+		said = self.untick(doc, live=False)
+		self.assertEqual(doc.update_stock, 0)
+		self.assertIn("Closed", said.call_args.args[0])
 
 
 class TestRequireStockUpdate(FrappeTestCase):

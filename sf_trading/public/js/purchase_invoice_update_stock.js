@@ -1,7 +1,7 @@
 // sf_trading/public/js/purchase_invoice_update_stock.js
 // Update Stock on a Purchase Invoice is ticked, and locked, when the invoice is what takes its goods into
 // stock; only Administrator can untick it (sf_trading/api/purchase_order_invoice.py, require_stock_update).
-// Whether the invoice is that is the server's answer (stock items, no receipt behind the rows or the order,
+// Whether the invoice is that is the server's answer (stock items, nothing received on the order lines it bills,
 // not a return, not tracked) -- asked once the items settle, so the form and the save agree.
 // UI only: the server ticks the box again on save, approval and submit whatever the form lets through.
 

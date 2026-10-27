@@ -34,7 +34,8 @@ class TestPurchaseInvoiceUpdateStock(FrappeTestCase):
 		cls.cost_center = TestOpenItems.cost_center
 		cls.item_code = TestOpenItems.item_code
 
-	def make_order(self, qty=5, rate=100, item_code=None):
+	def make_order(self, qty=5, rate=100, item_code=None, more=()):
+		"""An order of one line, plus a line for each (item_code, qty) in `more`."""
 		po = frappe.get_doc(
 			{
 				"doctype": "Purchase Order",
@@ -45,19 +46,44 @@ class TestPurchaseInvoiceUpdateStock(FrappeTestCase):
 				"cost_center": self.cost_center,
 				"items": [
 					{
-						"item_code": item_code or self.item_code,
-						"qty": qty,
+						"item_code": code,
+						"qty": line_qty,
 						"rate": rate,
 						"warehouse": self.warehouse,
 						"cost_center": self.cost_center,
 						"schedule_date": add_days(nowdate(), 3),
 					}
+					for code, line_qty in [(item_code or self.item_code, qty), *more]
 				],
 			}
 		)
 		po.insert()
 		po.submit()
 		return po
+
+	def second_item(self):
+		from erpnext.stock.doctype.item.test_item import make_item
+
+		return make_item(
+			"SF Test Second Stock Item",
+			properties={"is_stock_item": 1, "item_group": "Products", "stock_uom": "Nos"},
+		).name
+
+	@staticmethod
+	def keep_only(doc, item_code):
+		for row in [row for row in doc.items if row.item_code != item_code]:
+			doc.remove(row)
+
+	@staticmethod
+	def post(pi):
+		"""Submit, past the import rule: the test supplier reads as foreign, so an invoice without a Landed
+		Cost Voucher is refused unless it says why (sf_trading/landed_cost_with_invoice.py)."""
+		from sf_trading.landed_cost_with_invoice import ESCAPE_FIELD, REASON_FIELD
+
+		if pi.meta.has_field(ESCAPE_FIELD):
+			pi.set(ESCAPE_FIELD, 1)
+			pi.set(REASON_FIELD, "test: no landed cost")
+		pi.submit()
 
 	def receive(self, po, qty=None):
 		"""Book the order's goods in, the way a storekeeper would."""
@@ -204,13 +230,66 @@ class TestPurchaseInvoiceUpdateStock(FrappeTestCase):
 		self.assertEqual(int(pi.update_stock or 0), 0)
 		po.update_status("Submitted")
 
-	def test_an_order_already_part_received_is_refused(self):
-		"""per_received moves for a receipt AND for an earlier ticked invoice; only it sees both."""
+	def test_a_line_billed_past_what_it_still_awaits_is_refused(self):
+		"""received_qty moves for a receipt AND for an earlier ticked invoice; the line's own figure sees both."""
+		po = self.make_order(qty=5)
+		frappe.db.set_value("Purchase Order Item", po.items[0].name, "received_qty", 2)
+
+		pi = make_purchase_invoice(po.name)  # all five: nothing has been billed yet
+		self.assertEqual(int(pi.update_stock or 0), 0, "two of these five are already in stock")
+
+	def test_the_order_wide_percentage_alone_does_not_untick(self):
 		po = self.make_order()
 		frappe.db.set_value("Purchase Order", po.name, "per_received", 40)
 
 		pi = make_purchase_invoice(po.name)
-		self.assertEqual(int(pi.update_stock or 0), 0, "some of these goods are already in stock")
+		self.assertEqual(int(pi.update_stock or 0), 1, "nothing has arrived on the line this invoice bills")
+
+	def test_an_untouched_line_of_a_part_received_order_stays_ticked(self):
+		"""PUR-ORD-2026-00472: one ticked invoice took lines 1 and 2 in (the order read 50% received), and the
+		invoice for line 3 was unticked and billed into Stock Received But Not Billed with no stock behind it."""
+		other = self.second_item()
+		po = self.make_order(qty=2, more=[(other, 3)])
+
+		first = make_purchase_invoice(po.name)
+		self.keep_only(first, self.item_code)
+		self.assertEqual(int(first.update_stock or 0), 1)
+		first.insert()
+		self.post(first)
+		self.assertGreater(flt(frappe.db.get_value("Purchase Order", po.name, "per_received")), 0)
+
+		second = make_purchase_invoice(po.name)
+		self.assertEqual([row.item_code for row in second.items], [other])
+		self.assertEqual(int(second.update_stock or 0), 1, "nothing has arrived on this line")
+		second.insert()
+		second.reload()
+		second.save()  # the untick runs on every save, the approver's included
+		self.assertEqual(int(second.update_stock or 0), 1)
+
+		self.post(second)
+		moved = frappe.get_all(
+			"Stock Ledger Entry", filters={"voucher_no": second.name, "is_cancelled": 0}, pluck="actual_qty"
+		)
+		self.assertAlmostEqual(sum(flt(q) for q in moved), 3, places=3)
+
+	def test_a_line_on_a_receipt_unticks_only_the_invoices_that_bill_it(self):
+		from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_receipt
+
+		other = self.second_item()
+		po = self.make_order(qty=2, more=[(other, 3)])
+		pr = make_purchase_receipt(po.name)
+		self.keep_only(pr, self.item_code)
+		pr.insert()
+		pr.submit()
+
+		both = make_purchase_invoice(po.name)
+		self.assertEqual(int(both.update_stock or 0), 0, "line 1 is already in stock")
+
+		rest = make_purchase_invoice(po.name)
+		self.keep_only(rest, other)
+		rest.update_stock = 1
+		rest.insert()
+		self.assertEqual(int(rest.update_stock or 0), 1, "nothing has arrived on line 2")
 
 	def test_a_drop_ship_row_is_refused(self):
 		"""The goods never enter a warehouse, and no receipt will ever arrive to stop the tick."""
@@ -267,7 +346,7 @@ class TestPurchaseInvoiceUpdateStock(FrappeTestCase):
 		po = self.make_order(qty=4, rate=100)
 		pi = make_purchase_invoice(po.name)
 		pi.insert()
-		pi.submit()
+		self.post(pi)
 
 		self.assertEqual(int(pi.update_stock or 0), 1)
 		ledger = frappe.get_all(

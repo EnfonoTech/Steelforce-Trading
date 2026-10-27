@@ -24,61 +24,116 @@ Only Administrator may leave the box off an invoice that IS the goods' arrival
 (`require_stock_update`, 2026-10-20): PI 20020000419 was approved with the box turned off and the stock
 only reached the warehouse the next day, when Administrator raised a receipt for the order. For anyone else
 the box is ticked and locked on such an invoice; Administrator can still untick it, and an invoice whose
-goods are demonstrably in already (a receipt, a part-received order) is never re-ticked.
+goods are demonstrably in already (a receipt, a received order line) is never re-ticked.
 
-It never ticks when a receipt exists -- not a submitted one, not a draft, and not a row already
-linked on the invoice itself -- because the goods would then be counted into stock twice: once by
-the receipt and once by the invoice. Nor when the order is Closed or Cancelled, when anything has
-already been received by any route, when the goods are drop-shipped, or when an item is batch- or
-serial-tracked: in each of those a ticked box turns an invoice that submits today into one that
-refuses.
+It never ticks when a receipt exists for the goods it bills -- not a submitted one, not a draft, and
+not a row already linked on the invoice itself -- because the goods would then be counted into stock
+twice: once by the receipt and once by the invoice. Nor when the order is Closed or Cancelled, when
+the goods it bills have already been received by any route, when the goods are drop-shipped, or when
+an item is batch- or serial-tracked: in each of those a ticked box turns an invoice that submits today
+into one that refuses.
+
+"Already received" is judged per order LINE, never per order (2026-10-27). PUR-ORD-2026-00472 was billed
+on two invoices: 20020000447 took lines 1 and 2 into stock, which put the order at 50% received, and
+20020000448 billed line 3, which nothing had received -- yet the order-wide test unticked it and its
+goods were billed into Stock Received But Not Billed with no stock behind them.
 """
+
+from collections import defaultdict
 
 import frappe
 from frappe import _
 from frappe.utils import cint, flt
 
 
-def _has_a_receipt(orders, invoice) -> bool:
-	"""Whether anything has been received against these orders, by any route.
+def _bills_a_receipt(row) -> bool:
+	return bool(row.get("purchase_receipt") or row.get("pr_detail"))
 
-	A draft receipt counts. It is somebody's intention to receive, and an invoice that posts the
-	stock first would leave them submitting a duplicate.
+
+def _received_rows(invoice) -> list:
+	"""The rows whose goods another document has already taken into stock, or is about to.
+
+	A row that names a Purchase Receipt, and a stock row whose order line has had anything received
+	against it by a receipt -- a draft one too: it is somebody's intention to receive, and an invoice
+	that posts the stock first would leave them submitting a duplicate.
+
+	A line received by an earlier ticked invoice instead has been billed as well, so what is left of it
+	is still out there: a row is received only when it bills more than the line still awaits
+	(`received_qty` is moved by a receipt and by a ticked invoice alike, purchase_invoice.py moves it only
+	with update_stock set). Two rows of one line count together.
+
+	Other lines of the same order do not come into it: `update_stock` posts the rows of THIS invoice and
+	nothing else. A row that names an order but not the line (typed in, not mapped) can only be judged by
+	the order, so it falls back to the order-wide test: anything received against the order at all.
 	"""
-	if any(row.get("purchase_receipt") or row.get("pr_detail") for row in invoice.get("items") or []):
-		return True
+	items = invoice.get("items") or []
+	received = [row for row in items if _bills_a_receipt(row)]
+	ordered = [row for row in _stock_rows(invoice) if row.get("purchase_order") and not _bills_a_receipt(row)]
+	if not ordered:
+		return received
 
-	return bool(
-		frappe.db.exists(
-			"Purchase Receipt Item",
-			{"purchase_order": ("in", list(orders)), "docstatus": ("<", 2)},
+	details = list({row.po_detail for row in ordered if row.get("po_detail")})
+	lines, receipted = {}, set()
+	if details:
+		lines = {
+			line.name: line
+			for line in frappe.get_all(
+				"Purchase Order Item",
+				filters={"name": ("in", details)},
+				fields=["name", "qty", "received_qty"],
+			)
+		}
+		receipted = set(
+			frappe.get_all(
+				"Purchase Receipt Item",
+				filters={"purchase_order_item": ("in", details), "docstatus": ("<", 2)},
+				pluck="purchase_order_item",
+			)
 		)
-	)
+
+	orders = list({row.purchase_order for row in ordered if not row.get("po_detail")})
+	received_orders = set()
+	if orders:
+		received_orders = set(
+			frappe.get_all(
+				"Purchase Order", filters={"name": ("in", orders), "per_received": (">", 0)}, pluck="name"
+			)
+		) | set(
+			frappe.get_all(
+				"Purchase Receipt Item",
+				filters={"purchase_order": ("in", orders), "docstatus": ("<", 2)},
+				pluck="purchase_order",
+			)
+		)
+
+	billing = defaultdict(float)
+	for row in ordered:
+		if row.get("po_detail"):
+			billing[row.po_detail] += flt(row.qty)
+
+	for row in ordered:
+		detail = row.get("po_detail")
+		if not detail:
+			if row.purchase_order in received_orders:
+				received.append(row)
+			continue
+		line = lines.get(detail)
+		if detail in receipted or (
+			line and flt(line.received_qty) > 0 and flt(line.received_qty) + billing[detail] > flt(line.qty) + 0.0001
+		):
+			received.append(row)
+	return received
 
 
-def _orders_are_eligible(orders) -> bool:
-	"""Every named order must be live and have had nothing arrive against it, by any route.
-
-	`per_received` is the one field BOTH routes move -- a Purchase Receipt and an earlier ticked
-	invoice alike (erpnext moves it from purchase_invoice.py only when update_stock is set), so it
-	is the honest test for "nothing has arrived yet". A receipt check alone misses an order already
-	part-received by an earlier ticked invoice: one such order exists on production today.
-
-	Closed and Cancelled orders are refused because a ticked invoice reaches
+def _orders_are_live(orders) -> bool:
+	"""Closed and Cancelled orders are refused because a ticked invoice reaches
 	`update_ordered_and_reserved_qty`, which throws "Purchase Order X is cancelled or closed" at
 	submit (erpnext/controllers/buying_controller.py:758). A Purchase Invoice runs no such check of
 	its own, so without this gate a Closed order that submits fine today would start refusing.
 	"""
-	for order in frappe.get_all(
-		"Purchase Order",
-		filters={"name": ("in", list(orders))},
-		fields=["name", "status", "per_received"],
-	):
-		if order.status in ("Closed", "Cancelled"):
-			return False
-		if flt(order.per_received) > 0:
-			return False
-	return True
+	return not frappe.db.exists(
+		"Purchase Order", {"name": ("in", list(orders)), "status": ("in", ("Closed", "Cancelled"))}
+	)
 
 
 def _is_drop_ship(row) -> bool:
@@ -141,11 +196,10 @@ def set_update_stock(invoice) -> bool:
 		# nothing to judge by: a direct invoice keeps whatever default the site set
 		return False
 
-	if not _orders_are_eligible(orders) or _has_a_receipt(orders, invoice):
-		# the goods are already in stock. Ticking here would receive them twice -- and a partly
-		# received order is no different, because `update_stock` posts EVERY row of the invoice,
-		# not just the quantity still outstanding. What arrived belongs to its receipt; what has
-		# not arrived yet belongs to the next one.
+	if not _orders_are_live(orders) or _received_rows(invoice):
+		# goods this invoice bills are already in stock. Ticking here would receive them twice -- and
+		# one received row is enough, because `update_stock` posts EVERY row of the invoice. What
+		# arrived belongs to its receipt; lines nothing has received go on an invoice of their own.
 		invoice.update_stock = 0
 		return False
 
@@ -193,19 +247,29 @@ def untick_stock_when_the_goods_already_arrived(doc, method=None):
 	# (sf_trading/goods_in.py)
 	if rows and all(row.get("custom_goods_in_item") for row in rows):
 		return
-	if any(row.get("purchase_receipt") or row.get("pr_detail") for row in rows):
+	if any(_bills_a_receipt(row) for row in rows):
 		message = _(
 			"Update Stock has been turned off: this invoice bills a Purchase Receipt, which has "
 			"already taken the goods into stock."
 		)
 	else:
 		orders = {row.purchase_order for row in rows if row.get("purchase_order")}
-		if not orders or (_orders_are_eligible(orders) and not _has_a_receipt(orders, doc)):
+		if not orders:
 			return
-		message = _(
-			"Update Stock has been turned off: the goods on this order have already been received, "
-			"so ticking it would take them into stock a second time."
-		)
+		if not _orders_are_live(orders):
+			message = _(
+				"Update Stock has been turned off: the order is Closed or Cancelled, and goods cannot be "
+				"taken into stock against it."
+			)
+		else:
+			received = _received_rows(doc)
+			if not received:
+				return
+			message = _(
+				"Update Stock has been turned off: {0} on this invoice has already been received against "
+				"the order, so ticking it would take it into stock a second time. Bill goods that have not "
+				"arrived yet on an invoice of their own."
+			).format(", ".join(dict.fromkeys(row.item_code for row in received)))
 
 	doc.update_stock = 0
 	frappe.msgprint(message, indicator="orange", alert=True)
@@ -215,10 +279,10 @@ def is_the_arrival(invoice) -> bool:
 	"""Whether this invoice is what takes its goods into stock: the box has to be ticked for them to arrive.
 
 	True for an invoice of stock items that no receipt stands behind. False for a return or an opening
-	entry, a bill with no stock row (service, drop-ship), a row already linked to a Purchase Receipt, an
-	order that is closed, part-received or has a receipt (even a draft one) -- the same tests the
-	un-ticking hook uses, so the two can never disagree -- and batch- or serial-tracked items, which need
-	a bundle nobody entered. An invoice made from a Goods In is the arrival by definition.
+	entry, a bill with no stock row (service, drop-ship), a row already linked to a Purchase Receipt, a
+	closed order, a row whose order line has a receipt (even a draft one) or has been received already --
+	the same tests the un-ticking hook uses, so the two can never disagree -- and batch- or serial-tracked
+	items, which need a bundle nobody entered. An invoice made from a Goods In is the arrival by definition.
 	"""
 	if cint(invoice.get("is_return")) or invoice.get("is_opening") == "Yes":
 		return False
@@ -227,10 +291,10 @@ def is_the_arrival(invoice) -> bool:
 	rows = invoice.get("items") or []
 	if rows and all(row.get("custom_goods_in_item") for row in rows):
 		return True
-	if any(row.get("purchase_receipt") or row.get("pr_detail") for row in rows):
+	if any(_bills_a_receipt(row) for row in rows):
 		return False
 	orders = {row.purchase_order for row in rows if row.get("purchase_order")}
-	if orders and (not _orders_are_eligible(orders) or _has_a_receipt(orders, invoice)):
+	if orders and (not _orders_are_live(orders) or _received_rows(invoice)):
 		return False
 	return not any(_is_tracked(row.item_code) for row in _stock_rows(invoice))
 
