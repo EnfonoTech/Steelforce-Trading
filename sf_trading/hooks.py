@@ -196,6 +196,8 @@ doctype_js = {
 		"public/js/supplier_quick_edit.js",
 		# a popup when the customer / supplier picked on a new voucher would be refused -- see party_alert.py
 		"public/js/party_gate_alert.js",
+		# the Return Reason Template picker on a debit note, as on a sales return
+		"public/js/sales_return_reason.js",
 	],
 	# cancelling a payment must not demand the advice behind it be cancelled as well;
 	# and a cleared post-dated cheque is banked from the cheque's own entry
@@ -824,6 +826,9 @@ doc_events = {
 			"sf_trading.landed_cost.validate_charges",
 			# goods come in by one route only: a Goods In's quantity is invoiced from that Goods In
 			_GOODS_IN_GATE,
+			# a debit note names its reason from Purchase Return Reason, as a sales return does
+			_RETURN_REASON_REQUIRED,
+			_RETURN_REASON_HOOK,
 			# a term-allocated template with a schedule that names no term could never be paid -- see payment_term_split.py
 			"sf_trading.payment_term_split.repair_term_less_schedule",
 			# an import needs its Landed Cost Voucher before it goes for approval; last, so the
@@ -1405,6 +1410,10 @@ fixtures = [
 			# Sales Invoice-custom_return_reason field, fixtured by whichever app already owns
 			# that field (not this one); see sf_trading/sales_return_reason.py
 			"Sales Invoice-custom_return_reason_template",
+			# the same picker on a debit note, and the free-text field it appends into (Purchase
+			# Invoice has none of its own)
+			"Purchase Invoice-custom_return_reason",
+			"Purchase Invoice-custom_return_reason_template",
 			# company-wise Salesperson
 			"Sales Person-custom_companies",
 			# sf_trading.asset_tracking_item: shadow Asset (Movement tracking only, no
