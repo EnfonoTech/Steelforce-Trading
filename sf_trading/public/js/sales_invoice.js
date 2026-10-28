@@ -25,37 +25,30 @@ function sf_apply_customer_credit_filter(frm) {
 }
 
 function sf_get_customer_credit_limit(customer, company) {
-	return frappe.call({
-		method: "frappe.client.get",
-		args: { doctype: "Customer", name: customer },
-	}).then(function (r) {
-		const rows = (r.message && r.message.credit_limits) || [];
-		const row = rows.find(function (d) { return d.company === company; });
-		return row ? flt(row.credit_limit) : 0;
+	// one shared answer per customer (public/js/customer_selling_context.js), not a Customer document each time
+	return sf_trading.customer_context(customer, company).then(function (ctx) {
+		return flt(ctx && ctx.credit_limit);
 	});
 }
 
 function sf_check_overdue_on_customer(frm) {
 	if (frm.doc.is_return || frm.doc.custom_payment_mode !== "Credit" || !frm.doc.customer || !frm.doc.company) return;
-	frappe.call({
-		method: "sf_trading.api.sales_invoice_override.check_customer_credit_overdue",
-		args: { customer: frm.doc.customer, company: frm.doc.company },
-		callback: function (r) {
-			if (r.message) {
-				var inv = r.message;
-				frappe.msgprint({
-					title: __("Overdue Credit Invoice"),
-					message: __(
-						"Customer {0} has an overdue credit invoice <a href='/app/sales-invoice/{1}'>{1}</a> dated {2} "
-						+ "with outstanding amount {3}. "
-						+ "Saving this invoice will be blocked until it is settled.",
-						[frm.doc.customer, inv.name, inv.posting_date,
-						format_currency(inv.outstanding_amount, frm.doc.currency)]
-					),
-					indicator: "orange",
-				});
-			}
-		},
+	const customer = frm.doc.customer;
+	sf_trading.customer_context(customer, frm.doc.company).then(function (ctx) {
+		const inv = ctx && ctx.overdue;
+		// the customer may have been changed again while the answer was on its way
+		if (!inv || frm.doc.customer !== customer) return;
+		frappe.msgprint({
+			title: __("Overdue Credit Invoice"),
+			message: __(
+				"Customer {0} has an overdue credit invoice <a href='/app/sales-invoice/{1}'>{1}</a> dated {2} "
+				+ "with outstanding amount {3}. "
+				+ "Saving this invoice will be blocked until it is settled.",
+				[frm.doc.customer, inv.name, inv.posting_date,
+				format_currency(inv.outstanding_amount, frm.doc.currency)]
+			),
+			indicator: "orange",
+		});
 	});
 }
 
@@ -369,7 +362,8 @@ frappe.ui.form.on("Sales Invoice", {
 		if (!frm.fields_dict.items || !frm.fields_dict.items.grid) return;
 		sf_trading.hide_stock_display(frm);
 		const grid = frm.fields_dict.items.grid;
-		grid.wrapper.on("click focus", "[data-fieldname='item_code'] input, [data-fieldname='item_code'] .link-field", function() {
+		// a refresh fires many times in a form's life: take the previous listener off first, or each refresh adds one more
+		grid.wrapper.off(".sf_stock_pick").on("click.sf_stock_pick focus.sf_stock_pick", "[data-fieldname='item_code'] input, [data-fieldname='item_code'] .link-field", function() {
 			let idx = $(this).closest(".grid-row").attr("data-idx");
 			if (idx && frm.doc.items) {
 				let row = frm.doc.items.find(function(i) { return i.idx == idx; });
@@ -936,23 +930,15 @@ function sf_set_credit_limit(frm) {
 	if (frm.doc.custom_payment_mode !== "Credit" || !frm.doc.customer) {
 		frm.doc.custom_credit_limit = 0; frm.refresh_field("custom_credit_limit"); return;
 	}
-	var company = frm.doc.company || frappe.defaults.get_default("company");
-	frappe.db.get_doc("Customer", frm.doc.customer).then(function(cust) {
-		var credit_limit = 0;
-		if (cust.credit_limits && cust.credit_limits.length) {
-			var row = cust.credit_limits.find(function(r) { return r.company === company; });
-			credit_limit = flt(row ? row.credit_limit : cust.credit_limits[0].credit_limit);
-		}
+	const customer = frm.doc.customer;
+	const company = frm.doc.company || frappe.defaults.get_default("company");
+	// the limit and what the Credit invoices already used of it come in the one shared answer
+	sf_trading.customer_context(customer, company).then(function(ctx) {
+		if (frm.doc.customer !== customer) return;
+		const credit_limit = flt(ctx && ctx.credit_limit_any);
 		if (!credit_limit) { frm.doc.custom_credit_limit = 0; frm.refresh_field("custom_credit_limit"); return; }
-		frappe.db.get_list("Sales Invoice", {
-			filters: { customer: frm.doc.customer, company, custom_payment_mode: "Credit", docstatus: 1 },
-			fields: ["grand_total"], limit: 500,
-		}).then(function(invoices) {
-			var used = 0;
-			(invoices || []).forEach(function(inv) { used += flt(inv.grand_total); });
-			frm.doc.custom_credit_limit = Math.max(0, flt(credit_limit - used, 2));
-			frm.refresh_field("custom_credit_limit");
-		});
+		frm.doc.custom_credit_limit = Math.max(0, flt(credit_limit - flt(ctx.credit_used), 2));
+		frm.refresh_field("custom_credit_limit");
 	});
 }
 
@@ -1590,7 +1576,9 @@ frappe.ui.form.on("Sales Invoice", {
 	},
 	customer: function(frm) {
 		if (!frm.doc.customer) return;
-		frappe.db.get_doc("Customer", frm.doc.customer).then(function(doc) {
+		const customer = frm.doc.customer;
+		sf_trading.customer_context(customer, frm.doc.company).then(function(doc) {
+			if (!doc || frm.doc.customer !== customer) return;
 			// Customer has no sales team → keep the sales person already on the invoice
 			if (!doc.sales_team || !doc.sales_team.length) return;
 			frm.set_value("custom_sales_person", "");

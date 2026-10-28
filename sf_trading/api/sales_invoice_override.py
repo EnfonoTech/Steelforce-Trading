@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from frappe.utils import today
+from frappe.utils import flt, today
 
 
 def before_validate(doc, _method=None):
@@ -97,6 +97,64 @@ def _get_overdue_invoice(customer, company, as_of_date=None):
 		as_dict=True,
 	)
 	return rows[0] if rows else None
+
+
+@frappe.whitelist()
+def get_customer_selling_context(customer, company=None):
+	"""What a selling form asks about a customer the moment it is picked, in ONE round trip.
+
+	Picking a customer used to start five separate calls from five handlers of the Sales Invoice form -- the
+	whole Customer document three times over, a list of up to 500 submitted invoices to add up what is used,
+	and the overdue check -- each waiting for the one before, which is most of the seconds the form then
+	spends redrawing under the cursor. The form now asks once (public/js/customer_selling_context.js) and every
+	handler reads the same answer.
+
+	credit_limit      the customer's limit for this company, 0 when the company has no row
+	credit_limit_any  the same, else the first row's limit (what the "available credit" field has always shown)
+	credit_used       submitted Credit invoices of the customer for the company, in full
+	overdue           the oldest overdue credit invoice, only worked out for a customer that has a limit
+	sales_team        the customer's own sales team rows
+	"""
+	if not customer:
+		return {}
+	frappe.has_permission("Customer", "read", customer, throw=True)
+	company = company or frappe.defaults.get_user_default("Company")
+
+	rows = frappe.get_all(
+		"Customer Credit Limit",
+		filters={"parent": customer, "parenttype": "Customer"},
+		fields=["company", "credit_limit"],
+		order_by="idx",
+	)
+	company_row = next((r for r in rows if r.company == company), None)
+	credit_limit = flt(company_row.credit_limit) if company_row else 0.0
+	credit_limit_any = credit_limit if company_row else (flt(rows[0].credit_limit) if rows else 0.0)
+
+	credit_used = 0.0
+	if credit_limit_any:
+		credit_used = flt(
+			frappe.db.sql(
+				"""
+				SELECT IFNULL(SUM(grand_total), 0)
+				FROM `tabSales Invoice`
+				WHERE customer = %s AND company = %s AND custom_payment_mode = 'Credit' AND docstatus = 1
+				""",
+				(customer, company),
+			)[0][0]
+		)
+
+	return {
+		"credit_limit": credit_limit,
+		"credit_limit_any": credit_limit_any,
+		"credit_used": credit_used,
+		"overdue": _get_overdue_invoice(customer, company) if credit_limit > 0 else None,
+		"sales_team": frappe.get_all(
+			"Sales Team",
+			filters={"parent": customer, "parenttype": "Customer"},
+			fields=["sales_person", "allocated_percentage"],
+			order_by="idx",
+		),
+	}
 
 
 CASH_MODE = "Cash"

@@ -29,6 +29,10 @@ app_license = "mit"
 from sf_trading import __version__ as _v
 app_include_js = [
 	# ── Multi-doctype: selling (Sales Invoice, Sales Order, Quotation, Delivery Note) ──
+	# what a selling form asks about a customer when it is picked, in one call shared by every handler
+	f"/assets/sf_trading/js/customer_selling_context.js?{_v}",
+	# text being typed into a field is not wiped by the form redrawing itself under the cursor
+	f"/assets/sf_trading/js/keep_typed_input.js?{_v}",
 	f"/assets/sf_trading/js/last_selling_rate.js?{_v}",
 	f"/assets/sf_trading/js/quick_entry.js?{_v}",
 	f"/assets/sf_trading/js/create_customer.js?{_v}",

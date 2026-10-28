@@ -26,13 +26,9 @@
 	}
 
 	function customer_credit_limit(customer, company) {
-		return frappe.call({
-			method: "frappe.client.get",
-			args: { doctype: "Customer", name: customer },
-		}).then(function (r) {
-			const rows = (r.message && r.message.credit_limits) || [];
-			const row = rows.find(function (d) { return d.company === company; });
-			return row ? flt(row.credit_limit) : 0;
+		// the one shared answer per customer (public/js/customer_selling_context.js)
+		return sf_trading.customer_context(customer, company).then(function (ctx) {
+			return flt(ctx && ctx.credit_limit);
 		});
 	}
 
@@ -46,24 +42,21 @@
 
 	function check_overdue(frm) {
 		if (frm.doc.custom_payment_mode !== CREDIT || !frm.doc.customer || !frm.doc.company) return;
-		frappe.call({
-			method: "sf_trading.api.sales_invoice_override.check_customer_credit_overdue",
-			args: { customer: frm.doc.customer, company: frm.doc.company },
-			callback: function (r) {
-				if (!r.message) return;
-				const inv = r.message;
-				frappe.msgprint({
-					title: __("Overdue Credit Invoice"),
-					message: __(
-						"Customer {0} has an overdue credit invoice <a href='/app/sales-invoice/{1}'>{1}</a> dated {2} "
-						+ "with outstanding amount {3}. "
-						+ "Saving this order will be blocked until it is settled.",
-						[frm.doc.customer, inv.name, inv.posting_date,
-						format_currency(inv.outstanding_amount, frm.doc.currency)]
-					),
-					indicator: "orange",
-				});
-			},
+		const customer = frm.doc.customer;
+		sf_trading.customer_context(customer, frm.doc.company).then(function (ctx) {
+			const inv = ctx && ctx.overdue;
+			if (!inv || frm.doc.customer !== customer) return;
+			frappe.msgprint({
+				title: __("Overdue Credit Invoice"),
+				message: __(
+					"Customer {0} has an overdue credit invoice <a href='/app/sales-invoice/{1}'>{1}</a> dated {2} "
+					+ "with outstanding amount {3}. "
+					+ "Saving this order will be blocked until it is settled.",
+					[frm.doc.customer, inv.name, inv.posting_date,
+					format_currency(inv.outstanding_amount, frm.doc.currency)]
+				),
+				indicator: "orange",
+			});
 		});
 	}
 
