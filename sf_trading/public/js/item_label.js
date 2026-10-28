@@ -34,7 +34,7 @@ sf_trading.item_label.print = (item_code) => {
 						fieldtype: "Int",
 						default: 1,
 						reqd: 1,
-						description: __("Available stock: {0} ({1})", [format_number(stock, null, 0), where]),
+						description: __("Available stock: {0} ({1})", [format_number(stock), where]),
 					},
 				],
 				primary_action_label: __("Print"),

@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from frappe.utils import cint, flt, fmt_money
+from frappe.utils import cint, flt, fmt_money, getdate
 
 # CODE-128 bar/space widths for the symbol values 0..105, and the stop pattern
 _PATTERNS = (
@@ -47,7 +47,7 @@ MAX_COPIES = 500
 
 def code128_values(text: str) -> list[int]:
 	"""The symbol values for `text`, start and check symbol included (stop excluded)."""
-	if text.isdigit() and len(text) % 2 == 0:
+	if text.isascii() and text.isdigit() and len(text) % 2 == 0:
 		values = [_START_C] + [int(text[i : i + 2]) for i in range(0, len(text), 2)]
 	else:
 		if any(not 32 <= ord(ch) <= 127 for ch in text):
@@ -103,9 +103,18 @@ def selling_price(item_code: str, uom: str | None = None) -> frappe._dict | None
 	prices = frappe.get_all(
 		"Item Price",
 		filters={"item_code": item_code, "price_list": price_list, "selling": 1},
-		fields=["price_list_rate", "currency", "uom"],
+		fields=["price_list_rate", "currency", "uom", "valid_from", "valid_upto", "customer", "supplier", "batch_no"],
 		order_by="valid_from desc, modified desc",
 	)
+	# the shelf price: one in force today and meant for everybody -- not tomorrow's, not an expired one, and not
+	# the special price of one customer, supplier or batch (ERPNext's own get_item_price leaves those out too)
+	today = getdate()
+	prices = [
+		p for p in prices
+		if not (p.customer or p.supplier or p.batch_no)
+		and (not p.valid_from or getdate(p.valid_from) <= today)
+		and (not p.valid_upto or getdate(p.valid_upto) >= today)
+	]
 	# a price for the label's UOM first, then one with no UOM
 	price = next((p for p in prices if uom and p.uom == uom), None) or next((p for p in prices if not p.uom), None)
 	if not price:
@@ -125,6 +134,7 @@ def selling_price(item_code: str, uom: str | None = None) -> frappe._dict | None
 def available_qty(item_code: str) -> dict:
 	"""The stock the Number of Labels dialog shows: in the user's default warehouse, or in all of them."""
 	frappe.has_permission("Item", "read", item_code, throw=True)
+	frappe.has_permission("Bin", "read", throw=True)
 	warehouse = frappe.defaults.get_user_default("Warehouse")
 	filters = {"item_code": item_code}
 	if warehouse:
@@ -142,11 +152,17 @@ def label_context(doc) -> frappe._dict:
 	"""What the Item Label print format shows. Refuses an item that gets no label."""
 	if not labelled(doc):
 		frappe.throw(_("Labels are printed only for stock items and fixed assets, not for {0}.").format(frappe.bold(doc.name)))
+	# the item's Item Code when it is one of its barcodes (it is, for an item made or imported here), else the
+	# first barcode it carries: an item that already had a supplier's EAN gets no Item Code row (item_barcode.py),
+	# and a sticker encoding a code no barcode row holds would not scan as this item at the till
+	barcodes = [b.barcode for b in (doc.get("barcodes") or []) if b.barcode]
+	# (compared as the column is, case-insensitively)
+	code = doc.name if not barcodes or doc.name.lower() in {b.lower() for b in barcodes} else barcodes[0]
 	return frappe._dict(
 		copies=_copies(),
 		uom=doc.stock_uom,
 		price=selling_price(doc.name, doc.stock_uom),
-		barcode=barcode_svg(doc.name),
-		code=doc.name,
+		barcode=barcode_svg(code),
+		code=code,
 		name=doc.item_name or doc.name,
 	)

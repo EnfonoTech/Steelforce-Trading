@@ -9,7 +9,7 @@
 
 	settings.formatters = Object.assign({}, settings.formatters, {
 		name(value, df, doc) {
-			let html = `<div>${value}</div>`;
+			let html = `<div>${frappe.utils.escape_html(value)}</div>`;
 			if (flt(doc.standard_rate)) {
 				html += `<div style="font-size: 12px; color: var(--blue-600, #1a73e8); font-weight: 600">
 					${format_currency(doc.standard_rate, frappe.boot.sysdefaults.currency)}
