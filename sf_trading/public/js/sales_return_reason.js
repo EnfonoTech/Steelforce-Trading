@@ -64,12 +64,15 @@ function sf_apply_return_reason_template(frm) {
 	}
 }
 
-frappe.ui.form.on("Sales Invoice", {
-	refresh(frm) {
-		sf_seed_return_reason_suffix(frm);
-	},
+// a debit note (Purchase Invoice return) carries the same two fields, its picker over Purchase Return Reason
+["Sales Invoice", "Purchase Invoice"].forEach((doctype) => {
+	frappe.ui.form.on(doctype, {
+		refresh(frm) {
+			sf_seed_return_reason_suffix(frm);
+		},
 
-	custom_return_reason_template(frm) {
-		sf_apply_return_reason_template(frm);
-	},
+		custom_return_reason_template(frm) {
+			sf_apply_return_reason_template(frm);
+		},
+	});
 });

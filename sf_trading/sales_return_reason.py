@@ -28,6 +28,10 @@ the person raising the return can still answer -- their own save, their own subm
 "Send for Approval" -- and never on an approver's action: the approver cannot edit the return from
 the inbox, so refusing there would strand a return that was already in the chain before the rule
 existed (planned_payment.require_plan_before_approval explains the same trap).
+
+Since 2026-10-27 a purchase return (a Purchase Invoice debit note) works the same way: the same two
+fieldnames on Purchase Invoice (both fixtured by this app, as Purchase Invoice had no reason field),
+the picker over its own master, Purchase Return Reason, and the same two validate rules below.
 """
 
 import frappe
@@ -39,7 +43,7 @@ TEMPLATE_FIELD = "custom_return_reason_template"
 
 
 def require_reason_template(doc, method=None):
-	"""validate on Sales Invoice: a return must pick its Return Reason Template."""
+	"""validate on Sales / Purchase Invoice: a return must pick its Return Reason Template."""
 	if not cint(doc.get("is_return")) or (doc.get(TEMPLATE_FIELD) or "").strip():
 		return
 	if _made_by_the_system(doc):
@@ -116,7 +120,7 @@ def _approvers_turn(doc) -> bool:
 
 
 def validate_return_reason(doc, method=None):
-	"""validate on Sales Invoice: picking "Other" must leave more than just that label behind."""
+	"""validate on Sales / Purchase Invoice: picking "Other" must leave more than just that label behind."""
 	if not cint(doc.get("is_return")):
 		return
 	if doc.get("custom_return_reason_template") != OTHER_REASON:
