@@ -1478,6 +1478,9 @@ fixtures = [
 			"Sales Invoice-custom_return_reason_template",
 			# company-wise Salesperson
 			"Sales Person-custom_companies",
+			# Branch / Outdoor, which the Sales Performance reports split on; see
+			# sf_trading/sales_target.py
+			"Sales Person-custom_sales_person_type",
 			# sf_trading.asset_tracking_item: shadow Asset (Movement tracking only, no
 			# capitalization) for an item that is bought expensed, not fixed-asset
 			"Item-custom_track_as_asset",

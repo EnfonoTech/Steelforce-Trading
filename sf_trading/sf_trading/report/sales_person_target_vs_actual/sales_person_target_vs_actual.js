@@ -18,6 +18,7 @@ function sf_drill_link(value, row_value, dimension_filter, from_date, to_date) {
 		to_date: to_date || f.to_date || "",
 	};
 	if (f.branch) params.branch = f.branch;
+	if (f.sales_person_type) params.sales_person_type = f.sales_person_type;
 	params[dimension_filter] = row_value;
 
 	const qs = Object.keys(params)
@@ -50,6 +51,21 @@ function sf_add_drill(value, row, column, data, dimension_filter) {
 			data[key + "_from"], data[key + "_to"]);
 	}
 	return value;
+}
+
+// The Sales Person picker follows the Sales Person Type filter, so an Outdoor report only offers
+// outdoor sellers; a seller already picked is cleared when the type changes.
+function sf_person_query() {
+	const type = frappe.query_report && frappe.query_report.get_filter_value("sales_person_type");
+	const filters = { is_group: 0 };
+	if (type) filters.custom_sales_person_type = type;
+	return { filters };
+}
+
+function sf_person_type_changed() {
+	const report = frappe.query_report;
+	if (report.get_filter_value("sales_person")) report.set_filter_value("sales_person", "");
+	else report.refresh();
 }
 
 frappe.query_reports["Sales Person Target vs Actual"] = {
@@ -87,10 +103,16 @@ frappe.query_reports["Sales Person Target vs Actual"] = {
 			description: __("One branch at a time reads a cross-branch seller correctly."),
 		},
 		{
+			fieldname: "sales_person_type", label: __("Sales Person Type"), fieldtype: "Link",
+			options: "Sales Person Type",
+			description: __("A branch never counts Outdoor sales. Pick Outdoor to see them apart."),
+			on_change: sf_person_type_changed,
+		},
+		{
 			fieldname: "sales_person", label: __("Sales Person"), fieldtype: "Link",
 			options: "Sales Person",
 			description: __("Invoice-wise only. Narrows the list to one seller."),
-			get_query: () => ({ filters: { is_group: 0 } }),
+			get_query: sf_person_query,
 		},
 		{
 			fieldname: "row_limit", label: __("Row Limit"), fieldtype: "Int", default: 5000,

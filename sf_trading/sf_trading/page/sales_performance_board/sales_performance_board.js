@@ -48,6 +48,10 @@ class SalesPerformance {
 			fieldname: "branch", label: __("Branch"), fieldtype: "Link", options: "Branch",
 			change: () => this.refresh(),
 		});
+		this.filters.sales_person_type = this.page.add_field({
+			fieldname: "sales_person_type", label: __("Sales Person Type"), fieldtype: "Link",
+			options: "Sales Person Type", change: () => this.refresh(),
+		});
 		this.filters.from_date = this.page.add_field({
 			fieldname: "from_date", label: __("From"), fieldtype: "Date",
 			change: () => this.refresh(),
@@ -75,6 +79,7 @@ class SalesPerformance {
 		return {
 			company: this._val("company"), fiscal_year: this._val("fiscal_year"),
 			basis: this._val("basis") || "Net of VAT", branch: this._val("branch"),
+			sales_person_type: this._val("sales_person_type"),
 			from_date: this._val("from_date"), to_date: this._val("to_date"),
 		};
 	}
@@ -127,6 +132,7 @@ class SalesPerformance {
 			args: {
 				company: this._val("company"), fiscal_year: this._val("fiscal_year"),
 				basis: this._val("basis") || "Net of VAT", branch: this._val("branch"),
+				sales_person_type: this._val("sales_person_type"),
 				from_date: this._val("from_date"), to_date: this._val("to_date"),
 			},
 			callback: (r) => {

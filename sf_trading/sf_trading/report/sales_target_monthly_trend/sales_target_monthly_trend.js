@@ -1,4 +1,19 @@
 // sf_trading/sf_trading/report/sales_target_monthly_trend/sales_target_monthly_trend.js
+// The Sales Person picker follows the Sales Person Type filter, so an Outdoor report only offers
+// outdoor sellers; a seller already picked is cleared when the type changes.
+function sf_person_query() {
+	const type = frappe.query_report && frappe.query_report.get_filter_value("sales_person_type");
+	const filters = { is_group: 0 };
+	if (type) filters.custom_sales_person_type = type;
+	return { filters };
+}
+
+function sf_person_type_changed() {
+	const report = frappe.query_report;
+	if (report.get_filter_value("sales_person")) report.set_filter_value("sales_person", "");
+	else report.refresh();
+}
+
 frappe.query_reports["Sales Target Monthly Trend"] = {
 	filters: [
 		{
@@ -21,8 +36,14 @@ frappe.query_reports["Sales Target Monthly Trend"] = {
 		{ fieldname: "to_date", label: __("To Date"), fieldtype: "Date" },
 		{ fieldname: "branch", label: __("Branch"), fieldtype: "Link", options: "Branch" },
 		{
+			fieldname: "sales_person_type", label: __("Sales Person Type"), fieldtype: "Link",
+			options: "Sales Person Type",
+			description: __("A branch never counts Outdoor sales. Pick Outdoor to see them apart."),
+			on_change: sf_person_type_changed,
+		},
+		{
 			fieldname: "sales_person", label: __("Sales Person"), fieldtype: "Link",
-			options: "Sales Person", get_query: () => ({ filters: { is_group: 0 } }),
+			options: "Sales Person", get_query: sf_person_query,
 		},
 	],
 };

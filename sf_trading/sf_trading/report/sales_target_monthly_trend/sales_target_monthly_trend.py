@@ -25,9 +25,11 @@ def execute(filters=None):
 	# invoices are always narrowed by the branch filter; targets only when the dimension is a
 	# person, because a branch's target carries no branch field of its own
 	act = actuals(company, fiscal_year, dimension, basis, filters.branch,
-	              from_date=filters.from_date, to_date=filters.to_date)
+	              from_date=filters.from_date, to_date=filters.to_date,
+	              person_type=filters.sales_person_type)
 	tgt = targets(company, fiscal_year, dimension,
-	              filters.branch if dimension == "Sales Person" else None)
+	              filters.branch if dimension == "Sales Person" else None,
+	              filters.sales_person_type)
 	coverage = month_coverage(fiscal_year, filters.from_date, filters.to_date)
 	if filters.from_date or filters.to_date:
 		tgt = {k: flt(v) * coverage.get(k[1], 0) for k, v in tgt.items()}
