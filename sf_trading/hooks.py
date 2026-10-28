@@ -133,6 +133,8 @@ doctype_js = {
 	"Sales Order":      [
 		"public/js/sales_order_payment.js",
 		"public/js/sales_order_parity.js",
+		# the Sales Invoice's credit checks while the customer is picked -- see sales_order_credit.js
+		"public/js/sales_order_credit.js",
 		# fix the customer's own phone/CR/VAT from inside the draft order, without navigating away
 		# -- same dialog the Sales Invoice Customer field and Customer master both already use
 		"public/js/customer_quick_edit.js",
@@ -760,6 +762,8 @@ doc_events = {
 			_LH_HOOK,
 			_SP_HOOK,
 			_BPL_GUARD,
+			# an overdue credit invoice refuses a credit order, as it refuses a credit invoice
+			"sf_trading.api.sales_invoice_override.validate",
 			"sf_trading.api.sales_invoice_override.validate_driver_payment",
 			"sf_trading.api.sales_invoice_override.validate_driver_cash_limit",
 			"sf_trading.driver_branches.validate_driver_serves_branch",

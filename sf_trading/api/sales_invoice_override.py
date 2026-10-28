@@ -31,23 +31,26 @@ def before_validate(doc, _method=None):
 
 
 def validate(doc, _method=None):
-	"""Block new credit invoice if customer has overdue unsettled credit."""
-	if doc.is_return:
+	"""Block a new credit invoice -- or credit order -- if the customer has overdue unsettled credit."""
+	if doc.get("is_return"):
 		return
-	if doc.custom_payment_mode != "Credit":
+	if doc.get("custom_payment_mode") != "Credit":
 		return
 	if not doc.customer:
 		return
 
-	inv = _get_overdue_invoice(doc.customer, doc.company, as_of_date=doc.posting_date)
+	# an order has a transaction date where the invoice has a posting date
+	as_of = doc.get("posting_date") or doc.get("transaction_date")
+	inv = _get_overdue_invoice(doc.customer, doc.company, as_of_date=as_of)
 	if inv:
 		inv_link = frappe.utils.get_link_to_form("Sales Invoice", inv.name)
 		frappe.throw(
 			_(
-				"Cannot create a new credit invoice for {0}. "
-				"Invoice {1} dated {2} has an outstanding amount of {3} "
+				"Cannot create a new credit {0} for {1}. "
+				"Invoice {2} dated {3} has an outstanding amount of {4} "
 				"that is overdue. Please settle the outstanding balance first."
 			).format(
+				_("order") if doc.doctype == "Sales Order" else _("invoice"),
 				frappe.bold(doc.customer),
 				inv_link,
 				inv.posting_date,
