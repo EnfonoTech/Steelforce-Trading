@@ -156,7 +156,12 @@ def is_new_master(doc) -> bool:
 		return False
 	if doc.is_new() or not doc.get("creation"):
 		return True
-	return get_datetime(doc.creation) >= start
+	if get_datetime(doc.creation) >= start:
+		return True
+	# an older customer that came under the Customer approval (it turned credit) carries what a new one does
+	from sf_trading.master_approval import comes_under_approval
+
+	return comes_under_approval(doc)
 
 
 def attached_rows(doc) -> list:

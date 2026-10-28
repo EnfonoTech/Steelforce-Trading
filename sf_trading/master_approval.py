@@ -24,7 +24,12 @@ PM's inbox, reminders, history and bulk approval. What is sf_trading's own:
   committed. Returns, opening entries and internal (inter-company) parties stand aside.
 * **Customers: credit customers only, for now.** The approval covers a Customer only while it carries a
   Customer Credit Limit above zero (`has_credit_limit`); every other customer is used as before and gets no
-  workflow buttons or inbox entry. A customer given a limit later comes under the approval from then on.
+  workflow buttons or inbox entry.
+* **An older customer that turns credit.** The save that gives an existing customer its first credit limit
+  puts it back to a Draft (`hold_for_approval`): from then on it is covered like a new master, held to the
+  same details and supporting document (party_documents.is_new_master reads `comes_under_approval`), and
+  refused on orders, deliveries and invoices until it is sent for approval and approved. A customer already
+  approved through the approval keeps that approval when its limit is raised or re-added.
 * **Who is covered.** A master created at or after SF Trading Settings > Approval Applies to Masters
   Created From (set the first time this is migrated). An older master is covered only when Strict
   Validation is ticked -- it then needs an approval like a new one -- or when it is itself waiting for
@@ -68,9 +73,9 @@ APPROVED = "Approved"
 REJECTED = "Rejected"
 #: the earlier credit-customer approval's waiting state, carried over as Pending Approval
 OLD_PENDING = "Pending Verification"
-#: a master someone put up for approval and that does not have it -- held back even when it is older
-#: than the approval itself
-HELD = (PENDING, REJECTED)
+#: a master that is in the approval and does not have it -- held back even when it is older than the approval
+#: itself. An older master is only ever a Draft because it turned into a credit customer (`hold_for_approval`)
+HELD = (DRAFT, PENDING, REJECTED)
 
 #: SF Trading Settings switch per master, and its value while nobody has set it
 SWITCH = {"Customer": "master_approval_customer", "Supplier": "master_approval_supplier", "Item": "master_approval_item"}
@@ -167,6 +172,15 @@ def is_covered(doctype: str, state) -> bool:
 
 def is_approved(state) -> bool:
 	return state.get(STATUS_FIELD) == APPROVED and bool(state.get(APPROVED_ON))
+
+
+def comes_under_approval(doc) -> bool:
+	"""A Customer the approval holds, or has approved: party_documents holds it to the new-master rules
+	(details, a supporting document) whatever its age -- an older customer that turned credit is one."""
+	if doc.get("doctype") != "Customer" or not is_enabled("Customer") or is_bypassed(doc):
+		return False
+	status = doc.get(STATUS_FIELD)
+	return status in HELD or (status == APPROVED and bool(doc.get(APPROVED_ON)))
 
 
 def refusal_status(doctype: str, state) -> str | None:
@@ -317,12 +331,38 @@ def set_initial_status(doc, _method=None):
 	doc.set(APPROVED_ON, None)
 
 
+def became_credit_customer(doc, before) -> bool:
+	"""This save gives a customer that had no credit limit above zero its first one."""
+	return bool(before) and doc.doctype == "Customer" and has_credit_limit(doc) and not has_credit_limit(before)
+
+
+def hold_for_approval(doc) -> bool:
+	"""An older customer that has just been given a credit limit comes under the approval from this save: back
+	to a Draft, to be completed, sent and approved before any order is raised for it. One already approved
+	through the approval, one bypassed and one already in it stay as they are."""
+	if (_system_run() or not is_enabled("Customer") or is_bypassed(doc) or is_approved(doc)
+			or doc.get(STATUS_FIELD) in HELD):
+		return False
+	doc.set(STATUS_FIELD, DRAFT)
+	doc.set(APPROVED_BY, None)
+	doc.set(APPROVED_ON, None)
+	frappe.msgprint(
+		_("{0} now has a credit limit, so it comes under the Customer approval. Complete its details and "
+		  "supporting document, then Send for Approval: no Sales Order, Delivery Note or Sales Invoice can be "
+		  "raised for it until it is approved.").format(frappe.bold(_label(doc))),
+		title=_("Customer Approval Needed"), indicator="orange",
+	)
+	return True
+
+
 def validate_master(doc, _method=None):
 	"""validate on Customer / Supplier / Item: the approval status moves by the workflow only, into
 	Pending Approval and Approved only with every requirement met, and Approved is stamped."""
 	if doc.is_new() or not has_fields(doc.doctype):
 		return
 	before = doc.get_doc_before_save()
+	if became_credit_customer(doc, before) and hold_for_approval(doc):
+		return
 	was = before.get(STATUS_FIELD) if before else None
 	now = doc.get(STATUS_FIELD)
 	if was == now:
@@ -616,6 +656,26 @@ def grant_approver_access():
 			add_permission(doctype, role, 0)
 			for ptype in ("read", "write"):
 				update_permission_property(doctype, role, 0, ptype, 1, validate=False)
+	_grant_report_access()
+
+
+#: the Masters Pending Approval report hangs on this doctype, whose "report" permission decides who may run it
+REPORT_DOCTYPE = "Supporting Document Type"
+
+
+def _grant_report_access():
+	"""The customer and supplier approvers may run the Masters Pending Approval report."""
+	from frappe.permissions import add_permission, update_permission_property
+
+	for role in ("Customer Approver", "Supplier Approver"):
+		if not frappe.db.exists("Role", role) or not frappe.db.exists("DocType", REPORT_DOCTYPE):
+			continue
+		if frappe.db.exists("Custom DocPerm", {"parent": REPORT_DOCTYPE, "role": role, "permlevel": 0, "read": 1,
+				"report": 1}):
+			continue
+		add_permission(REPORT_DOCTYPE, role, 0)
+		for ptype in ("read", "report"):
+			update_permission_property(REPORT_DOCTYPE, role, 0, ptype, 1, validate=False)
 
 
 def _seed_switches():

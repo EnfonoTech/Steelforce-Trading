@@ -79,6 +79,11 @@
 				const told = problems.length ? party + "|" + problems.join("|") : "";
 				if (told && told !== frm.__sf_party_alert_told) popup(frm, data);
 				frm.__sf_party_alert_told = told;
+				// a customer or supplier the approval has not approved is not available on the voucher at all
+				if (data.blocked) {
+					frm.__sf_party_alert_told = "";
+					frm.set_value(field, "");
+				}
 			},
 		});
 	}

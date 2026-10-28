@@ -51,7 +51,7 @@ class Policy(FrappeTestCase):
 		self.assertTrue(ma.refusal_status("Supplier", unstamped))
 
 	def test_an_older_master_stays_usable_without_strict(self):
-		for status in (None, ma.DRAFT, ma.APPROVED):
+		for status in (None, ma.APPROVED):
 			self.assertIsNone(ma.refusal_status("Customer", state(creation=OLD, **{ma.STATUS_FIELD: status})), status)
 
 	def test_an_older_master_waiting_or_rejected_is_held(self):
@@ -135,6 +135,76 @@ class CreditScope(FrappeTestCase):
 		self.assertEqual(exists.call_args[0][1]["credit_limit"], [">", 0])
 		with patch("frappe.db.exists", return_value=None):
 			self.assertFalse(ma.has_credit_limit(row))
+
+
+class Doc(frappe._dict):
+	"""Enough of a Document for hold_for_approval: it sets fields by name."""
+
+	def set(self, key, value):
+		self[key] = value
+
+
+class TurnsCredit(FrappeTestCase):
+	"""An older customer given its first credit limit comes under the approval from that save."""
+
+	def setUp(self):
+		self.patches = [
+			patch.object(ma, "is_enabled", return_value=True),
+			patch.object(ma, "has_fields", return_value=True),
+			patch.object(ma, "rules_from", return_value=START),
+			patch.object(ma, "is_strict", return_value=False),
+		]
+		for p in self.patches:
+			p.start()
+
+	def tearDown(self):
+		for p in self.patches:
+			p.stop()
+
+	def customer(self, limit, status=ma.APPROVED, **fields):
+		return Doc(doctype="Customer", name="C-1", customer_name="C One", creation=OLD,
+			credit_limits=[frappe._dict(credit_limit=limit)] if limit is not None else [],
+			**{ma.STATUS_FIELD: status, ma.APPROVED_ON: None, ma.APPROVED_BY: None, ma.BYPASSED: 0, **fields})
+
+	def test_the_first_limit_is_seen(self):
+		self.assertTrue(ma.became_credit_customer(self.customer(500), self.customer(None)))
+		self.assertTrue(ma.became_credit_customer(self.customer(500), self.customer(0)))
+		self.assertFalse(ma.became_credit_customer(self.customer(500), self.customer(100)))
+		self.assertFalse(ma.became_credit_customer(self.customer(0), self.customer(None)))
+		self.assertFalse(ma.became_credit_customer(self.customer(500), None))
+
+	def test_an_older_customer_that_turns_credit_goes_back_to_draft(self):
+		doc = self.customer(500)
+		with patch("frappe.msgprint") as told:
+			self.assertTrue(ma.hold_for_approval(doc))
+		self.assertEqual(doc.get(ma.STATUS_FIELD), ma.DRAFT)
+		self.assertTrue(told.called)
+		# from then on the approval covers it, though it is older than the approval
+		self.assertTrue(ma.is_covered("Customer", doc))
+		self.assertTrue(ma.refusal_status("Customer", doc))
+		self.assertTrue(ma.workflow_applicability("Customer", doc)["applies"])
+
+	def test_an_approved_a_bypassed_and_a_held_customer_stay_as_they_are(self):
+		approved = self.customer(500, **{ma.APPROVED_ON: NEW})
+		bypassed = self.customer(500, **{ma.BYPASSED: 1})
+		held = self.customer(500, status=ma.REJECTED)
+		with patch("frappe.msgprint"):
+			for doc in (approved, bypassed, held):
+				before = doc.get(ma.STATUS_FIELD)
+				self.assertFalse(ma.hold_for_approval(doc))
+				self.assertEqual(doc.get(ma.STATUS_FIELD), before)
+
+	def test_a_patch_or_migration_never_holds_a_customer(self):
+		with patch.object(ma, "_system_run", return_value=True):
+			self.assertFalse(ma.hold_for_approval(self.customer(500)))
+
+	def test_the_held_customer_carries_the_new_master_rules(self):
+		self.assertTrue(ma.comes_under_approval(self.customer(500, status=ma.DRAFT)))
+		self.assertTrue(ma.comes_under_approval(self.customer(500, status=ma.APPROVED, **{ma.APPROVED_ON: NEW})))
+		# an older customer approved before the workflow, and a bypassed one, do not
+		self.assertFalse(ma.comes_under_approval(self.customer(500)))
+		self.assertFalse(ma.comes_under_approval(self.customer(500, status=ma.DRAFT, **{ma.BYPASSED: 1})))
+		self.assertFalse(ma.comes_under_approval(frappe._dict(doctype="Supplier", **{ma.STATUS_FIELD: ma.DRAFT})))
 
 
 class StubVoucher(frappe._dict):

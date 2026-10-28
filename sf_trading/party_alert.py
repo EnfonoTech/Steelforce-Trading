@@ -150,4 +150,6 @@ def get_party_alert(doctype: str, doc) -> dict:
 		"party_name": frappe.db.get_value(party_type, party, party_type.lower() + "_name") or party,
 		"problems": problems,
 		"hints": hints,
+		# an unapproved party is not available on the voucher: the form empties the field after the popup
+		"blocked": bool(refused.get(APPROVAL_GATE)),
 	}
