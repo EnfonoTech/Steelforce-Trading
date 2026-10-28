@@ -66,6 +66,8 @@
   "cash_flow_account_map",
   "report_speed_section",
   "fast_financial_statements",
+  "report_search_section",
+  "keep_account_links_on_search",
   "system_entries_section",
   "skip_approval_for_system_entries",
   "support_tab",
@@ -439,6 +441,17 @@
    "label": "Faster Balance Sheet, Profit and Loss and Cash Flow"
   },
   {
+   "fieldname": "report_search_section",
+   "fieldtype": "Section Break",
+   "label": "Report Search"
+  },
+  {
+   "default": "1",
+   "fieldname": "keep_account_links_on_search",
+   "fieldtype": "Check",
+   "label": "Keep Account Links Clickable While Searching Trial Balance, Balance Sheet and P&L"
+  },
+  {
    "fieldname": "system_entries_section",
    "fieldtype": "Section Break",
    "label": "System-generated Entries"
@@ -490,7 +503,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-28 00:00:00.000000",
+ "modified": "2026-10-28 12:00:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",
