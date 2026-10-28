@@ -388,7 +388,7 @@
    "description": "A new customer or supplier is named in Title Case, its ID too (THE DAILY BREAD BAKERY WLL is saved as The Daily Bread Bakery Wll), and every save keeps the name that way. An existing ID changes only when it is renamed."
   },
   {
-   "default": "0",
+   "default": "1",
    "fieldname": "suggest_similar_masters",
    "fieldtype": "Check",
    "label": "Show Similar Names While Creating Masters",
@@ -525,7 +525,7 @@
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-10-28 12:00:00.000000",
+ "modified": "2026-10-28 23:30:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Trading Settings",

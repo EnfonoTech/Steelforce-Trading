@@ -38,6 +38,8 @@ PARTY_DOCTYPE = {
 
 OPEN_ORDER_STATUSES = ("To Deliver and Bill", "To Bill", "To Deliver")
 PDC_OPEN = ("Pending", "Partly Cleared", "Partly Returned")
+#: the smallest amount a cheque can still hold (pdc_transfer.TOLERANCE)
+TOLERANCE = 0.0005
 
 
 class AccountingClearance(Document):
@@ -107,6 +109,11 @@ def get_pending_transactions(clearance_for, party, company, as_on_date=None):
 	if not (clearance_for in PARTY_DOCTYPE and party and company):
 		return []
 	frappe.has_permission("Accounting Clearance", "read", throw=True)
+	# the rows are read past document permissions (get_all), so the caller's company and branch are checked here
+	if not frappe.has_permission("Company", "read", doc=company):
+		frappe.throw(_("Not permitted for company {0}").format(company), frappe.PermissionError)
+	if clearance_for == "Branch" and not frappe.has_permission("Branch", "read", doc=party):
+		frappe.throw(_("Not permitted for branch {0}").format(party), frappe.PermissionError)
 	as_on = getdate(as_on_date or nowdate())
 
 	rows = []
@@ -202,17 +209,26 @@ def _open_orders(company, as_on, **where):
 def _uncleared_cheques(company, as_on, **where):
 	if not frappe.get_meta("Payment Entry").has_field("custom_pdc_status"):
 		return []
+	# a cheque the person RECEIVED (an issued one is the company's own) -- in the amount it was received for,
+	# which is not the paid amount once the currencies differ
 	rows = frappe.get_all(
 		"Payment Entry",
-		filters={"company": company, "docstatus": 1, "custom_pdc_status": ["in", PDC_OPEN], **where},
-		fields=["name", "posting_date", "party_name", "paid_amount", "custom_pdc_cleared_amount", "custom_pdc_returned_amount", "custom_pdc_status"],
+		filters={"company": company, "docstatus": 1, "payment_type": "Receive", "custom_pdc_status": ["in", PDC_OPEN], **where},
+		fields=["name", "posting_date", "party_name", "received_amount", "custom_pdc_cleared_amount", "custom_pdc_returned_amount", "custom_pdc_status"],
 		order_by="posting_date asc",
 	)
-	return [
-		_row(_("Cheque Not Cleared"), "Payment Entry", r.name, r.posting_date, r.party_name, r.paid_amount,
-			flt(r.paid_amount) - flt(r.custom_pdc_cleared_amount) - flt(r.custom_pdc_returned_amount), _(r.custom_pdc_status), as_on)
-		for r in rows
-	]
+	out = []
+	for r in rows:
+		left = flt(r.received_amount) - flt(r.custom_pdc_cleared_amount) - flt(r.custom_pdc_returned_amount)
+		# "Partly Returned" is also the status of a cheque banked in part and returned for the rest, with nothing
+		# left: it is in its final state, and listing it would block the approval for good
+		if left <= TOLERANCE:
+			continue
+		out.append(
+			_row(_("Cheque Not Cleared"), "Payment Entry", r.name, r.posting_date, r.party_name, r.received_amount,
+				left, _(r.custom_pdc_status), as_on)
+		)
+	return out
 
 
 def _advances_and_claims(employee, company, as_on):
