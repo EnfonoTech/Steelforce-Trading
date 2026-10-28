@@ -350,15 +350,23 @@ def get_credit_limit_status(customer, company):
 	"""Client-side check: customer's credit limit and current outstanding for a company.
 	Used by the real-time credit-limit popup while items are being added on Sales Invoice."""
 	if not customer or not company:
-		return {"credit_limit": 0, "outstanding": 0, "currency": None}
+		return {"credit_limit": 0, "outstanding": 0, "currency": None, "bypass": 0}
 
 	from erpnext.selling.doctype.customer.customer import get_credit_limit, get_customer_outstanding
 	from frappe.utils import flt
 
 	credit_limit = flt(get_credit_limit(customer, company))
 	outstanding = flt(get_customer_outstanding(customer, company)) if credit_limit else 0
+	# a customer whose limit is ticked "Bypass Credit Limit Check at Sales Order" is never refused on it, so the
+	# popup must not warn of an excess that submit will let through
+	bypass = frappe.db.get_value(
+		"Customer Credit Limit",
+		{"parent": customer, "parenttype": "Customer", "company": company},
+		"bypass_credit_limit_check",
+	)
 	return {
 		"credit_limit": credit_limit,
 		"outstanding": outstanding,
 		"currency": frappe.get_cached_value("Company", company, "default_currency"),
+		"bypass": 1 if bypass else 0,
 	}

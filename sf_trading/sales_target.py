@@ -231,7 +231,7 @@ def targets(company: str, fiscal_year: str, dimension: str, branch: str | None =
 		conditions.append("st.branch = %(branch)s")
 		values["branch"] = branch
 	join = ""
-	if person_type and values["dimension"] == "Sales Person":
+	if person_type and values["dimension"] == "Sales Person" and _typed():
 		join = "left join `tabSales Person` sp on sp.name = st.dimension_value"
 		conditions.append(_person_type_condition())
 		values.update(_person_type_values(person_type))
@@ -441,7 +441,7 @@ def _actual_clause(company, dimension, basis, branch, start, end, include_unassi
 		conditions.append("(sp.name is null or sp.is_group = 0)")
 		if not include_unassigned:
 			conditions.append("si.custom_sales_person is not null and si.custom_sales_person != ''")
-	if person_type:
+	if person_type and _typed():
 		conditions.append(_person_type_condition())
 		values.update(_person_type_values(person_type))
 
@@ -453,6 +453,12 @@ def _person_type_for(dimension: str, person_type: str | None) -> str | None:
 	if dimension == "Branch":
 		return person_type or DEFAULT_PERSON_TYPE
 	return person_type or None
+
+
+def _typed() -> bool:
+	"""False between `git pull` and `bench migrate`, and on a site of the bench not migrated yet: the Sales Person
+	has no type column to read, and every Branch figure would fail on it instead of reading as before."""
+	return frappe.db.has_column("Sales Person", PERSON_TYPE_FIELD)
 
 
 def _person_type_condition() -> str:

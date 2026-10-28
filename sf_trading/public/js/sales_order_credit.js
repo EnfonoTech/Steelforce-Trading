@@ -94,13 +94,13 @@
 	function run_credit_check(frm) {
 		if (!credit_check_applies(frm)) return;
 		fetch_credit_status(frm).then(function (status) {
-			if (!flt(status.credit_limit)) return;
+			if (!flt(status.credit_limit) || cint(status.bypass)) return;
 
 			const order_total = flt(frm.doc.base_grand_total || frm.doc.grand_total);
 			const limit = flt(status.credit_limit);
 			const projected = flt(status.outstanding) + order_total;
 			const currency = status.currency;
-			if (projected <= limit) return;
+			if (flt(projected - limit, 3) <= 0) return;
 
 			frappe.msgprint({
 				title: __("Credit Limit Exceeded"),
