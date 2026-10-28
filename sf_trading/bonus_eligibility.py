@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, flt, getdate, nowdate
+from frappe.utils import add_days, cint, flt, getdate, nowdate
 
 from sf_trading.sales_target import fiscal_year_bounds, month_coverage, targets
 
@@ -130,7 +130,7 @@ def _collected(invoices, days) -> dict:
 def calculate(company: str, from_date, to_date, branches=None, outdoor=None, days=DEFAULT_COLLECTION_DAYS) -> dict:
 	"""{branch: the sheet's lines} for the period, every branch with a sale or a target in it. `outdoor` is the
 	sales persons whose sales are outdoor sales; `days` how soon a credit sale must be collected to count."""
-	conf = frappe._dict(outdoor=set(outdoor or ()), days=DEFAULT_COLLECTION_DAYS if days in (None, "") else int(days))
+	conf = frappe._dict(outdoor=set(outdoor or ()), days=DEFAULT_COLLECTION_DAYS if days in (None, "") else cint(days))
 	invoices = _invoices(company, from_date, to_date, branches)
 	credit_customers = _credit_customers({inv.customer for inv in invoices if not inv.mode})
 	return_modes = _return_modes(invoices)
@@ -143,6 +143,12 @@ def calculate(company: str, from_date, to_date, branches=None, outdoor=None, day
 
 	credit_sales = [inv for inv in invoices if not inv.is_return and is_credit(inv)]
 	collected = _collected(credit_sales, conf.days)
+	# what was returned against each credit invoice of the period: the returned part is no longer owed, so it is
+	# not "not collected" as well as "returned" (a fully returned, unpaid invoice would take its net out twice)
+	credit_returned = {}
+	for inv in invoices:
+		if inv.is_return and inv.return_against and is_credit(inv):
+			credit_returned[inv.return_against] = credit_returned.get(inv.return_against, 0.0) - flt(inv.net)
 
 	def collected_net(inv):
 		gross = flt(inv.gross)
@@ -155,7 +161,7 @@ def calculate(company: str, from_date, to_date, branches=None, outdoor=None, day
 		if branch not in branches_out:
 			branches_out[branch] = frappe._dict(
 				branch=branch, cash_sales=0.0, credit_sales=0.0, credit_not_collected=0.0, ic_cash=0.0, ic_credit=0.0,
-				cash_returns=0.0, credit_returns=0.0, outdoor={}, outdoor_cash=0.0, credit_collected=0.0,
+				cash_returns=0.0, credit_returns=0.0, ic_returns=0.0, outdoor={}, outdoor_cash=0.0, credit_collected=0.0,
 			)
 		return branches_out[branch]
 
@@ -171,6 +177,9 @@ def calculate(company: str, from_date, to_date, branches=None, outdoor=None, day
 				b.credit_returns += -net
 			else:
 				b.cash_returns += -net
+			if intercompany:
+				# its sale left Net Sales in full (lines 3 and 4), so the return has nothing left to take out
+				b.ic_returns += -net
 			if outdoor and not intercompany:
 				b.outdoor[inv.sales_person] = b.outdoor.get(inv.sales_person, 0.0) + net
 				if not credit:
@@ -182,7 +191,7 @@ def calculate(company: str, from_date, to_date, branches=None, outdoor=None, day
 				b.ic_credit += net
 				continue
 			got = collected_net(inv)
-			b.credit_not_collected += net - got
+			b.credit_not_collected += max(net - got - credit_returned.get(inv.name, 0.0), 0.0)
 			b.credit_collected += got
 			if outdoor:
 				b.outdoor[inv.sales_person] = b.outdoor.get(inv.sales_person, 0.0) + got
@@ -195,30 +204,39 @@ def calculate(company: str, from_date, to_date, branches=None, outdoor=None, day
 				b.outdoor[inv.sales_person] = b.outdoor.get(inv.sales_person, 0.0) + net
 				b.outdoor_cash += net
 
-	# the branch targets for the period, each month prorated by the days of it the period covers
-	fiscal_year = frappe.db.get_value(
-		"Fiscal Year", {"year_start_date": ["<=", from_date], "year_end_date": [">=", from_date], "disabled": 0}, "name"
-	)
+	# the branch targets for the period, each month prorated by the days of it the period covers -- of every
+	# fiscal year the period touches, so a period over a year end is not judged against one year's targets
+	period_start, period_end = getdate(from_date), getdate(to_date)
 	branch_targets = {}
-	if fiscal_year:
+	for fiscal_year in frappe.get_all(
+		"Fiscal Year",
+		filters={"disabled": 0, "year_start_date": ["<=", period_end], "year_end_date": [">=", period_start]},
+		pluck="name",
+	):
 		start, end = fiscal_year_bounds(fiscal_year)
-		coverage = month_coverage(fiscal_year, max(getdate(from_date), start), min(getdate(to_date), end))
+		coverage = month_coverage(fiscal_year, max(period_start, start), min(period_end, end))
 		for (branch, month), amount in targets(company, fiscal_year, "Branch").items():
-			if branches and branch not in branches:
+			if (branches and branch not in branches) or not coverage.get(month):
 				continue
-			branch_targets[branch] = branch_targets.get(branch, 0.0) + amount * coverage.get(month, 0)
+			branch_targets[branch] = branch_targets.get(branch, 0.0) + amount * coverage[month]
 			line(branch)
 
+	precision = cint(frappe.get_system_settings("currency_precision")) or 3
 	for b in branches_out.values():
-		b.net_sales = b.cash_sales + b.credit_sales - b.credit_not_collected - b.ic_cash - b.ic_credit - b.cash_returns - b.credit_returns
+		b.net_sales = (
+			b.cash_sales + b.credit_sales - b.credit_not_collected - b.ic_cash - b.ic_credit
+			- b.cash_returns - b.credit_returns + b.ic_returns
+		)
 		b.outdoor_total = sum(b.outdoor.values())
 		b.eligible_sales = b.net_sales - b.outdoor_total
 		b.revenue_allowed = b.cash_sales - b.cash_returns - b.outdoor_cash + b.credit_collected
 		b.target = branch_targets.get(b.branch, 0.0)
 		b.achieved = b.eligible_sales / b.target * 100 if b.target else 0.0
-		b.bonus_percent = bonus_percent(b.achieved) if b.target else 0.0
-		b.bonus = b.revenue_allowed * b.bonus_percent / 100
-		b.branch_share = b.bonus * BRANCH_SHARE / 100
-		b.operations_share = b.bonus * OPERATIONS_SHARE / 100
+		# 89.99999999999999 is the 90% the sheet shows: the slab is read on the percentage as it is displayed
+		b.bonus_percent = bonus_percent(flt(b.achieved, 6)) if b.target else 0.0
+		# the bonus and its two shares in the currency's precision, so the shares add up to the bonus as printed
+		b.bonus = flt(b.revenue_allowed * b.bonus_percent / 100, precision)
+		b.branch_share = flt(b.bonus * BRANCH_SHARE / 100, precision)
+		b.operations_share = flt(b.bonus - b.branch_share, precision)
 		b.collection_days = conf.days
 	return branches_out

@@ -11,7 +11,7 @@ A user held to some branches sees only those.
 
 import frappe
 from frappe import _
-from frappe.utils import getdate
+from frappe.utils import cint, getdate
 
 from sf_trading.bonus_eligibility import BRANCH_SHARE, OPERATIONS_SHARE, calculate
 from sf_trading.sales_target import allowed_branches
@@ -32,7 +32,7 @@ def execute(filters=None):
 	if filters.branch and allowed is not None and filters.branch not in allowed:
 		frappe.throw(_("You may not see branch {0}.").format(filters.branch), frappe.PermissionError)
 
-	if filters.collection_days not in (None, "") and int(filters.collection_days) < 0:
+	if filters.collection_days not in (None, "") and cint(filters.collection_days) < 0:
 		frappe.throw(_("Collected Within (Days) cannot be below 0."))
 	outdoor = frappe.parse_json(filters.outdoor_sales_persons) if filters.outdoor_sales_persons else []
 	result = calculate(filters.company, filters.from_date, filters.to_date, branches, outdoor, filters.collection_days)
