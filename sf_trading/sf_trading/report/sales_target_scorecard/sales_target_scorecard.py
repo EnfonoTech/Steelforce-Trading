@@ -23,7 +23,8 @@ def execute(filters=None):
 
 	rows = scorecard(company, fiscal_year, dimension, filters.basis or "Net of VAT",
 	                 filters.as_on, filters.branch,
-	                 from_date=filters.from_date, to_date=filters.to_date)
+	                 from_date=filters.from_date, to_date=filters.to_date,
+	                 person_type=filters.sales_person_type)
 	for r in rows:
 		r["currency"] = currency
 

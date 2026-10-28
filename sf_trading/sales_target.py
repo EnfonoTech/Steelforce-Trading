@@ -33,6 +33,12 @@ that lesson already. The rules, in one place:
     two stray invoices would otherwise read as a seventh salesman.
   * Branch user permissions are applied, so a branch head sees their own branch and nobody
     else's, on every surface at once.
+  * an Outdoor seller's invoices still carry a branch, so without help they read as that
+    branch's own sales. A branch's figures are therefore always its own: Outdoor sales never
+    count against a branch target, whether or not a Sales Person Type is asked for. Asking for
+    Outdoor shows those sales apart, against the outdoor sellers' own targets. Per person, no
+    type shows everyone. An invoice with no sales person, or a person not yet given a type,
+    counts as Branch -- the type was added long after those were raised.
 """
 
 import json
@@ -53,6 +59,8 @@ DIMENSIONS = {
 BASIS_FIELD = {"Net of VAT": "si.base_net_total", "Gross": "si.base_grand_total"}
 PERIOD_SIZE = {"Monthly": 1, "Quarterly": 3, "Half-Yearly": 6, "Yearly": 12}
 UNASSIGNED = "Unassigned"
+PERSON_TYPE_FIELD = "custom_sales_person_type"
+DEFAULT_PERSON_TYPE = "Branch"
 
 
 # ─── Calendar ─────────────────────────────────────────────────────────────────
@@ -163,7 +171,7 @@ def branch_query(doctype, txt, searchfield, start, page_len, filters):
 
 def actuals(company: str, fiscal_year: str, dimension: str, basis: str = "Net of VAT",
             branch: str | None = None, include_unassigned: bool = True,
-            from_date=None, to_date=None) -> dict:
+            from_date=None, to_date=None, person_type: str | None = None) -> dict:
 	"""{(dimension value, month name): amount} of net sales, optionally within a date range."""
 	if dimension not in DIMENSIONS:
 		frappe.throw(_("Unknown dimension {0}").format(dimension))
@@ -174,7 +182,7 @@ def actuals(company: str, fiscal_year: str, dimension: str, basis: str = "Net of
 	if to_date:
 		end = min(end, getdate(to_date))
 	amount, column, join, conditions, values = _actual_clause(
-		company, dimension, basis, branch, start, end, include_unassigned)
+		company, dimension, basis, branch, start, end, include_unassigned, person_type)
 
 	rows = frappe.db.sql(
 		f"""
@@ -196,28 +204,46 @@ def actuals(company: str, fiscal_year: str, dimension: str, basis: str = "Net of
 
 # ─── Targets ──────────────────────────────────────────────────────────────────
 
-def targets(company: str, fiscal_year: str, dimension: str, branch: str | None = None) -> dict:
+def targets(company: str, fiscal_year: str, dimension: str, branch: str | None = None,
+            person_type: str | None = None) -> dict:
 	"""{(dimension value, month name): amount} from the Sales Target records.
 
 	With no branch asked for, a person's branch-split records and their whole-number record are
 	added together -- which is the same total either way of setting them up, so the report reads
 	right whichever shape the user chose. Ask for one branch and only that branch's records
 	answer; a whole-number target cannot be split after the fact and is deliberately not guessed.
+
+	A Sales Person Type narrows a person's targets to the people of that type. A branch's own
+	target belongs to its Branch sellers; asked for another type, a branch is answered with the
+	targets of that type's sellers who sell from it -- which only a person's record naming the
+	branch can say, so one without a branch is left out rather than guessed.
 	"""
+	person_type = _person_type_for(dimension, person_type)
+	value_column = "st.dimension_value"
 	conditions = ["st.company = %(company)s", "st.fiscal_year = %(fiscal_year)s",
 	              "st.dimension_type = %(dimension)s", "ifnull(st.disabled, 0) = 0"]
 	values = {"company": company, "fiscal_year": fiscal_year, "dimension": dimension}
+	if dimension == "Branch" and person_type != DEFAULT_PERSON_TYPE:
+		value_column = "st.branch"
+		values["dimension"] = "Sales Person"
+		conditions.append("ifnull(st.branch, '') != ''")
 	if branch:
 		conditions.append("st.branch = %(branch)s")
 		values["branch"] = branch
+	join = ""
+	if person_type and values["dimension"] == "Sales Person":
+		join = "left join `tabSales Person` sp on sp.name = st.dimension_value"
+		conditions.append(_person_type_condition())
+		values.update(_person_type_values(person_type))
 
 	rows = frappe.db.sql(
 		f"""
-		select st.dimension_value, m.month, sum(m.target_amount) as amount
+		select {value_column} as dimension_value, m.month, sum(m.target_amount) as amount
 		from `tab{TARGET_DOCTYPE}` st
 		join `tabSales Target Month` m on m.parent = st.name
+		{join}
 		where {" and ".join(conditions)}
-		group by st.dimension_value, m.month
+		group by {value_column}, m.month
 		""",
 		values,
 		as_dict=True,
@@ -270,15 +296,16 @@ def variance_dataset(filters, dimension: str):
 	basis = filters.basis or "Net of VAT"
 	branch = filters.branch
 	period = filters.period or "Monthly"
+	person_type = filters.get("sales_person_type")
 
 	# The branch filter reads differently per dimension, and getting this backwards returns a
 	# silently empty grid: a BRANCH target carries no `branch` field of its own (the branch IS
 	# the dimension value), so it must be matched by name, while a PERSON target may carry one.
 	from_date, to_date = filters.get("from_date"), filters.get("to_date")
 	act = actuals(company, fiscal_year, dimension, basis, branch,
-	              from_date=from_date, to_date=to_date)
+	              from_date=from_date, to_date=to_date, person_type=person_type)
 	tgt = targets(company, fiscal_year, dimension,
-	              branch if dimension == "Sales Person" else None)
+	              branch if dimension == "Sales Person" else None, person_type)
 	coverage = month_coverage(fiscal_year, from_date, to_date)
 	if from_date or to_date:
 		# half a month of sales is judged against half a month of target
@@ -382,7 +409,8 @@ def variance_dataset(filters, dimension: str):
 	return columns, data, None, chart, summary
 
 
-def _actual_clause(company, dimension, basis, branch, start, end, include_unassigned=True):
+def _actual_clause(company, dimension, basis, branch, start, end, include_unassigned=True,
+                   person_type=None):
 	"""The one WHERE clause behind every actual figure in this module.
 
 	The monthly totals and the invoice-wise drill-down MUST come from the same predicate. Written
@@ -391,6 +419,7 @@ def _actual_clause(company, dimension, basis, branch, start, end, include_unassi
 	"""
 	amount = BASIS_FIELD.get(basis or "Net of VAT", BASIS_FIELD["Net of VAT"])
 	column = DIMENSIONS[dimension]["column"]
+	person_type = _person_type_for(dimension, person_type)
 
 	conditions = ["si.docstatus = 1", "si.company = %(company)s",
 	              "si.posting_date between %(start)s and %(end)s"]
@@ -405,19 +434,41 @@ def _actual_clause(company, dimension, basis, branch, start, end, include_unassi
 		values["branches"] = branches
 
 	join = ""
+	if dimension == "Sales Person" or person_type:
+		join = "left join `tabSales Person` sp on sp.name = si.custom_sales_person"
 	if dimension == "Sales Person":
 		# a tree node is not a salesman
-		join = "left join `tabSales Person` sp on sp.name = si.custom_sales_person"
 		conditions.append("(sp.name is null or sp.is_group = 0)")
 		if not include_unassigned:
 			conditions.append("si.custom_sales_person is not null and si.custom_sales_person != ''")
+	if person_type:
+		conditions.append(_person_type_condition())
+		values.update(_person_type_values(person_type))
 
 	return amount, column, join, conditions, values
 
 
+def _person_type_for(dimension: str, person_type: str | None) -> str | None:
+	"""A branch's figures are its own sales: with no type asked for, a branch means Branch."""
+	if dimension == "Branch":
+		return person_type or DEFAULT_PERSON_TYPE
+	return person_type or None
+
+
+def _person_type_condition() -> str:
+	"""`sp` is the Sales Person joined in; no person, or no type yet, reads as the default."""
+	return (f"ifnull(nullif(sp.{PERSON_TYPE_FIELD}, ''), %(default_person_type)s)"
+	        " = %(person_type)s")
+
+
+def _person_type_values(person_type: str) -> dict:
+	return {"person_type": person_type, "default_person_type": DEFAULT_PERSON_TYPE}
+
+
 def invoices(company: str, fiscal_year: str, dimension: str, basis: str = "Net of VAT",
              branch: str | None = None, from_date=None, to_date=None,
-             dimension_value: str | None = None, limit: int = 5000) -> list:
+             dimension_value: str | None = None, limit: int = 5000,
+             person_type: str | None = None) -> list:
 	"""Every invoice behind the actuals, one row each -- the same filter, simply not grouped.
 
 	ERPNext's own Sales Person-wise Transaction Summary is item-wise: an invoice with nine lines
@@ -431,7 +482,7 @@ def invoices(company: str, fiscal_year: str, dimension: str, basis: str = "Net o
 		end = min(end, getdate(to_date))
 
 	amount, column, join, conditions, values = _actual_clause(
-		company, dimension, basis, branch, start, end)
+		company, dimension, basis, branch, start, end, person_type=person_type)
 	if dimension_value:
 		if dimension_value == UNASSIGNED:
 			conditions.append(f"({column} is null or {column} = '')")
@@ -474,11 +525,12 @@ def invoice_dataset(filters, dimension: str):
 	branch = filters.branch
 	from_date, to_date = filters.get("from_date"), filters.get("to_date")
 	value = filters.get("sales_person") if dimension == "Sales Person" else filters.get("branch")
+	person_type = filters.get("sales_person_type")
 
 	currency = frappe.get_cached_value("Company", company, "default_currency")
 	rows = invoices(company, fiscal_year, dimension, basis, branch,
 	                from_date=from_date, to_date=to_date, dimension_value=value,
-	                limit=cint(filters.get("row_limit")) or 5000)
+	                limit=cint(filters.get("row_limit")) or 5000, person_type=person_type)
 
 	label = _("Branch") if dimension == "Branch" else _("Sales Person")
 	columns = [
@@ -512,9 +564,9 @@ def invoice_dataset(filters, dimension: str):
 		r["currency"] = currency
 
 	act = actuals(company, fiscal_year, dimension, basis, branch,
-	              from_date=from_date, to_date=to_date)
+	              from_date=from_date, to_date=to_date, person_type=person_type)
 	tgt = targets(company, fiscal_year, dimension,
-	              branch if dimension == "Sales Person" else None)
+	              branch if dimension == "Sales Person" else None, person_type)
 	if from_date or to_date:
 		coverage = month_coverage(fiscal_year, from_date, to_date)
 		tgt = {k: flt(v) * coverage.get(k[1], 0) for k, v in tgt.items()}
@@ -548,11 +600,11 @@ def invoice_dataset(filters, dimension: str):
 
 def scorecard(company: str, fiscal_year: str, dimension: str, basis: str = "Net of VAT",
               as_on: str | None = None, branch: str | None = None,
-              from_date=None, to_date=None) -> list:
+              from_date=None, to_date=None, person_type: str | None = None) -> list:
 	as_on = getdate(as_on or nowdate())
 	act = actuals(company, fiscal_year, dimension, basis, branch,
-	              from_date=from_date, to_date=to_date)
-	tgt = targets(company, fiscal_year, dimension, branch)
+	              from_date=from_date, to_date=to_date, person_type=person_type)
+	tgt = targets(company, fiscal_year, dimension, branch, person_type)
 	slots = month_slots(fiscal_year)
 	this_month = [s for s in slots if s.start <= as_on <= s.end]
 	current = this_month[0].month if this_month else None
@@ -598,7 +650,7 @@ def scorecard(company: str, fiscal_year: str, dimension: str, basis: str = "Net 
 # ─── The Sales Performance page ───────────────────────────────────────────────
 
 def top_per_branch(company, fiscal_year, basis, months, branches, from_date=None, to_date=None,
-                   coverage=None):
+                   coverage=None, person_type=None):
 	"""The best salesman inside each branch — not the best overall, repeated.
 
 	Akhil out-sells everyone from SFSB, so a single "top seller" hides whoever is carrying SFSS.
@@ -608,12 +660,12 @@ def top_per_branch(company, fiscal_year, basis, months, branches, from_date=None
 	for row in branches:
 		br = row["name"]
 		act = actuals(company, fiscal_year, "Sales Person", basis, br, include_unassigned=False,
-		              from_date=from_date, to_date=to_date)
+		              from_date=from_date, to_date=to_date, person_type=person_type)
 		# A person's target may be branch-split or a single whole-branch number; ask for both,
 		# preferring the split when it exists, or the topper's percentage reads as blank.
-		tgt = targets(company, fiscal_year, "Sales Person", br)
+		tgt = targets(company, fiscal_year, "Sales Person", br, person_type)
 		if not tgt:
-			tgt = targets(company, fiscal_year, "Sales Person")
+			tgt = targets(company, fiscal_year, "Sales Person", person_type=person_type)
 		if coverage:
 			tgt = {k: flt(v) * coverage.get(k[1], 0) for k, v in tgt.items()}
 		people = {}
@@ -634,7 +686,7 @@ def top_per_branch(company, fiscal_year, basis, months, branches, from_date=None
 
 @frappe.whitelist()
 def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", branch=None,
-                         as_on=None, from_date=None, to_date=None):
+                         as_on=None, from_date=None, to_date=None, sales_person_type=None):
 	"""Everything the Sales Performance page draws, in one payload.
 
 	One call, one set of numbers: the same failure the DCR and VAT screens taught -- two panels
@@ -653,8 +705,10 @@ def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", bra
 	elapsed = [s.month for s in slots if s.start <= as_on]
 	this_month = next((s.month for s in slots if s.start <= as_on <= s.end), None)
 
-	window = target_months(targets(company, fiscal_year, "Branch")) | target_months(
-		targets(company, fiscal_year, "Sales Person"))
+	person_type = sales_person_type or None
+	window = target_months(
+		targets(company, fiscal_year, "Branch", person_type=person_type)) | target_months(
+		targets(company, fiscal_year, "Sales Person", person_type=person_type))
 	coverage = month_coverage(fiscal_year, from_date, to_date)
 	ranged = bool(from_date or to_date)
 	if ranged:
@@ -662,14 +716,14 @@ def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", bra
 		window = {m for m, share in coverage.items() if share > 0}
 
 	branch_act = actuals(company, fiscal_year, "Branch", basis, branch,
-	                     from_date=from_date, to_date=to_date)
-	branch_tgt = targets(company, fiscal_year, "Branch")
+	                     from_date=from_date, to_date=to_date, person_type=person_type)
+	branch_tgt = targets(company, fiscal_year, "Branch", person_type=person_type)
 	if branch:
 		branch_tgt = {k: v for k, v in branch_tgt.items() if k[0] == branch}
 	person_act = actuals(company, fiscal_year, "Sales Person", basis, branch,
-	                     from_date=from_date, to_date=to_date)
+	                     from_date=from_date, to_date=to_date, person_type=person_type)
 	person_tgt = targets(company, fiscal_year, "Sales Person",
-	                     branch if branch else None)
+	                     branch if branch else None, person_type)
 	if ranged:
 		branch_tgt = {k: flt(v) * coverage.get(k[1], 0) for k, v in branch_tgt.items()}
 		person_tgt = {k: flt(v) * coverage.get(k[1], 0) for k, v in person_tgt.items()}
@@ -721,6 +775,7 @@ def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", bra
 		"meta": {
 			"company": company, "fiscal_year": fiscal_year, "currency": currency,
 			"basis": basis, "branch": branch, "as_on": str(as_on),
+			"sales_person_type": person_type,
 			"month": this_month, "generated_on": frappe.utils.now_datetime().strftime("%d-%m-%Y %H:%M"),
 			"has_targets": bool(branch_tgt or person_tgt),
 			# which months the year-to-date figures actually cover, so the screen can say so
@@ -741,7 +796,8 @@ def performance_snapshot(company=None, fiscal_year=None, basis="Net of VAT", bra
 		"people": people,
 		"top_per_branch": top_per_branch(
 			company, fiscal_year, basis, [m["month"] for m in counted_months], branches,
-			from_date=from_date, to_date=to_date, coverage=coverage if ranged else None),
+			from_date=from_date, to_date=to_date, coverage=coverage if ranged else None,
+			person_type=person_type),
 	}
 
 
@@ -765,6 +821,7 @@ def _card_context(filters):
 	return frappe._dict(
 		company=company, fiscal_year=fiscal_year, as_on=as_on, dimension=dimension,
 		basis=filters.get("basis") or "Net of VAT", branch=filters.get("branch"),
+		person_type=filters.get("sales_person_type") or None,
 		currency=frappe.get_cached_value("Company", company, "default_currency") if company else None,
 	)
 
@@ -773,7 +830,8 @@ def _totals(filters):
 	c = _card_context(filters)
 	if not (c.company and c.fiscal_year):
 		return c, {}
-	rows = scorecard(c.company, c.fiscal_year, c.dimension, c.basis, c.as_on, c.branch)
+	rows = scorecard(c.company, c.fiscal_year, c.dimension, c.basis, c.as_on, c.branch,
+	                 person_type=c.person_type)
 	agg = {k: sum(flt(r[k]) for r in rows) for k in
 	       ("mtd_target", "mtd_actual", "ytd_target", "ytd_actual")}
 	return c, agg
@@ -853,7 +911,7 @@ def card_top_seller(filters=None):
 	if not (c.company and c.fiscal_year):
 		return "—"
 	rows = [r for r in scorecard(c.company, c.fiscal_year, "Sales Person", c.basis, c.as_on,
-	                             c.branch)
+	                             c.branch, person_type=c.person_type)
 	        if r["dimension_value"] != UNASSIGNED and r["ytd_target"]]
 	if not rows:
 		return "—"

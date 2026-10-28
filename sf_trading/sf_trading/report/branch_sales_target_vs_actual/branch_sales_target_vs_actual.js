@@ -18,6 +18,7 @@ function sf_drill_link(value, row_value, dimension_filter, from_date, to_date) {
 		to_date: to_date || f.to_date || "",
 	};
 	if (f.branch) params.branch = f.branch;
+	if (f.sales_person_type) params.sales_person_type = f.sales_person_type;
 	params[dimension_filter] = row_value;
 
 	const qs = Object.keys(params)
@@ -88,6 +89,11 @@ frappe.query_reports["Branch Sales Target vs Actual"] = {
 			description: __("Targets need not start in January. Untick to see the whole year."),
 		},
 		{ fieldname: "branch", label: __("Branch"), fieldtype: "Link", options: "Branch" },
+		{
+			fieldname: "sales_person_type", label: __("Sales Person Type"), fieldtype: "Link",
+			options: "Sales Person Type",
+			description: __("A branch never counts Outdoor sales. Pick Outdoor to see them apart."),
+		},
 		{
 			fieldname: "row_limit", label: __("Row Limit"), fieldtype: "Int", default: 5000,
 			description: __("Invoice-wise only."),

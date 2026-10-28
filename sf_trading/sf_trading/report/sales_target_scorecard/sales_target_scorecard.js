@@ -25,6 +25,11 @@ frappe.query_reports["Sales Target Scorecard"] = {
 		},
 		{ fieldname: "to_date", label: __("To Date"), fieldtype: "Date" },
 		{ fieldname: "branch", label: __("Branch"), fieldtype: "Link", options: "Branch" },
+		{
+			fieldname: "sales_person_type", label: __("Sales Person Type"), fieldtype: "Link",
+			options: "Sales Person Type",
+			description: __("A branch never counts Outdoor sales. Pick Outdoor to see them apart."),
+		},
 	],
 
 	formatter(value, row, column, data, default_formatter) {
