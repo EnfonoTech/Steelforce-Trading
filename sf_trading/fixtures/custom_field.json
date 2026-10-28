@@ -3167,7 +3167,7 @@
   "label": "Return/Debit Reason",
   "length": 0,
   "link_filters": null,
-  "mandatory_depends_on": "eval:doc.is_return",
+  "mandatory_depends_on": "eval:doc.is_return && doc.docstatus == 0 && !['pending', 'pending approval', 'sent for approval', 'awaiting approval'].includes((doc.workflow_state || '').toLowerCase())",
   "modified": "2026-10-27 13:00:00",
   "module": null,
   "name": "Purchase Invoice-custom_return_reason",

@@ -83,7 +83,8 @@ def get_lines(doctype, party_field, party_name_field, side, filters, branches, r
 		conditions.append("d.posting_date <= %(to_date)s")
 		values["to_date"] = filters.to_date
 	if branches is not None:
-		if not branches:
+		# a document with no Branch cannot be told to be inside the user's branches
+		if not branches or not meta.has_field("branch"):
 			return []
 		conditions.append("d.branch IN %(branches)s")
 		values["branches"] = tuple(branches)
@@ -102,7 +103,10 @@ def get_lines(doctype, party_field, party_name_field, side, filters, branches, r
 	if filters.warehouse:
 		conditions.append("r.warehouse = %(warehouse)s")
 		values["warehouse"] = filters.warehouse
-	if side == SALES and filters.sales_person and meta.has_field("custom_sales_person"):
+	if side == SALES and filters.sales_person:
+		if not meta.has_field("custom_sales_person"):
+			# a Delivery Note carries no sales person, so none of them match one (as with a reason below)
+			return []
 		conditions.append("d.custom_sales_person = %(sales_person)s")
 		values["sales_person"] = filters.sales_person
 
@@ -121,7 +125,7 @@ def get_lines(doctype, party_field, party_name_field, side, filters, branches, r
 			%(doctype)s AS voucher_type,
 			d.posting_date,
 			d.return_against,
-			d.branch,
+			{header("branch")},
 			d.{party_field} AS party,
 			d.{party_name_field} AS party_name,
 			{header("custom_return_reason_template", "reason_template")},
@@ -181,7 +185,7 @@ def group_by_item(returns, moved, currency):
 		r.returns = len(r.pop("vouchers"))
 		r.return_percent = r.returned_qty / r.moved_qty * 100 if r.moved_qty else None
 
-	return sorted(out.values(), key=lambda r: (-r.return_value, r.branch or "", r.item_code))
+	return sorted(out.values(), key=lambda r: (-r.return_value, r.branch or "", r.item_code or ""))
 
 
 def get_summary(rows, currency):
@@ -234,7 +238,7 @@ def get_columns(view, doctype, side):
 		{"label": _("Warehouse"), "fieldname": "warehouse", "fieldtype": "Link", "options": "Warehouse", "width": 140},
 		{"label": _("Qty"), "fieldname": "qty", "fieldtype": "Float", "width": 80},
 		{"label": _("UOM"), "fieldname": "uom", "fieldtype": "Link", "options": "UOM", "width": 70},
-		{"label": _("Rate"), "fieldname": "rate", "fieldtype": "Currency", "options": "currency", "width": 100},
+		{"label": _("Rate"), "fieldname": "rate", "fieldtype": "Currency", "options": "currency", "width": 100, "disable_total": 1},
 		{"label": _("Amount"), "fieldname": "amount", "fieldtype": "Currency", "options": "currency", "width": 110},
 	]
 	if frappe.get_meta(doctype).has_field("custom_return_reason_template"):
