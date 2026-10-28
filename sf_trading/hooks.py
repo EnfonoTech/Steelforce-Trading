@@ -922,6 +922,8 @@ doc_events = {
 			"sf_trading.purchase_order_procurement.validate",
 			# the physical stock count's system stock and variance, row by row -- see po_stock_count.py
 			"sf_trading.po_stock_count.refresh",
+			# ... and no order enters the approval chain with a stock row uncounted
+			"sf_trading.po_stock_count.require_count_on_entry",
 		],
 		# every stock row counted before submit, while SF Trading Settings asks for it
 		"before_submit": "sf_trading.po_stock_count.require_count",

@@ -20,6 +20,8 @@ stock items going into one of our warehouses need a count: a service / non-stock
 count, and a drop-shipped row (delivered by the supplier straight to the customer) never enters ours.
 """
 
+import re
+
 import frappe
 from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
@@ -94,6 +96,12 @@ def required() -> bool:
 	return is_on(SWITCH, default=True)
 
 
+def _field_ready() -> bool:
+	"""False between `git pull` and `bench migrate`, and on a site never migrated: the count field does not exist
+	yet, every row would read as not counted, and every Purchase Order submit would be refused."""
+	return frappe.get_meta(ROW).has_field(COUNT)
+
+
 def counted(row) -> bool:
 	return bool(cstr(row.get(COUNT)).strip())
 
@@ -123,10 +131,15 @@ def _system_stock(rows) -> dict:
 
 def _tidy_count(row):
 	"""The typed count as a number, written back tidied; blank stays blank. A non-number or a negative refuses."""
-	raw = cstr(row.get(COUNT)).strip().replace(",", "")
+	raw = cstr(row.get(COUNT)).strip()
 	if not raw:
 		row.set(COUNT, None)
 		return None
+	# a comma is a thousands separator ("1,250") or it is refused: "2,5" read as 25 would be a silent mistake
+	if "," in raw:
+		if not re.fullmatch(r"\d{1,3}(,\d{3})+(\.\d+)?", raw):
+			frappe.throw(_("Row {0}: Physical Stock Count must be a number, not {1}.").format(row.idx, frappe.bold(raw)))
+		raw = raw.replace(",", "")
 	try:
 		value = float(raw)
 	except ValueError:
@@ -141,6 +154,8 @@ def _tidy_count(row):
 
 def refresh(doc, _method=None):
 	"""Purchase Order validate: the count checked, and the system stock and variance on every row."""
+	if not _field_ready():
+		return
 	stock_items = _stock_items(doc)
 	countable = [row for row in doc.items if _countable(row, stock_items)]
 	countable_ids = {id(row) for row in countable}
@@ -155,9 +170,30 @@ def refresh(doc, _method=None):
 			row.set(VARIANCE, 0.0)
 
 
+def require_count_on_entry(doc, _method=None):
+	"""Purchase Order validate: an order may not enter the approval chain with a stock row uncounted.
+
+	An order over the approval limit is never submitted from the form: it is saved, sent for approval, and then
+	SUBMITTED BY THE APPROVER'S ACTION, server-side. Refusing only at before_submit would strand an approved
+	order that its approver cannot count for -- so the requirement is also asked on the way IN to the chain,
+	where the buyer who counted is still at the order (see planned_payment.require_plan_before_approval)."""
+	from sf_trading.planned_payment import LIVE_APPROVAL_STATES
+
+	if doc.docstatus != 0:
+		return
+	state = (doc.get("workflow_state") or "").strip().lower()
+	if state not in LIVE_APPROVAL_STATES:
+		return
+	before = doc.get_doc_before_save()
+	if before and (before.get("workflow_state") or "").strip().lower() == state:
+		# already in the chain; this save is something else and must not be blocked
+		return
+	require_count(doc)
+
+
 def require_count(doc, _method=None):
 	"""Purchase Order before_submit: every stock row counted, while SF Trading Settings asks for it."""
-	if not required():
+	if not required() or not _field_ready():
 		return
 	stock_items = _stock_items(doc)
 	missing = [row for row in doc.items if _countable(row, stock_items) and not counted(row)]

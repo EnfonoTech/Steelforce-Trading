@@ -32,11 +32,21 @@ def execute(filters=None):
 		frappe.throw(_("Pick a Company."))
 	if filters.from_date and filters.to_date and filters.from_date > filters.to_date:
 		frappe.throw(_("From Date cannot be after To Date."))
-	rows = data(filters)
 	if filters.view == DOCUMENT_ROWS:
-		# the item rows folded, never a second query: both views count the same rows
-		return document_columns(), fold_to_documents(rows)
-	return columns(), rows
+		# the item rows folded, never a second query. An order's "Stock Rows" and "Not Counted" need EVERY stock
+		# row of it, so the Rows filter is applied to the orders afterwards, not to the rows before they are folded
+		# (only "Rows With Variance Only" narrows the rows, as it is about the rows themselves).
+		wanted = filters.rows or COUNTED_ROWS
+		if not cint(filters.only_variance):
+			filters.rows = ALL_ROWS
+		orders = fold_to_documents(data(filters))
+		if not cint(filters.only_variance):
+			if wanted == COUNTED_ROWS:
+				orders = [o for o in orders if o.counted_rows]
+			elif wanted == NOT_COUNTED_ROWS:
+				orders = [o for o in orders if o.not_counted_rows]
+		return document_columns(), orders
+	return columns(), data(filters)
 
 
 def document_columns():
