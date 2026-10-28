@@ -1,0 +1,109 @@
+{
+ "actions": [],
+ "creation": "2026-10-28 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "field",
+  "check",
+  "value",
+  "party_kind",
+  "credit",
+  "company_country",
+  "existing_masters",
+  "message"
+ ],
+ "fields": [
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "default": "1",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "field",
+   "fieldtype": "Select",
+   "label": "Field",
+   "options": "VAT / Tax ID\nMobile Number\nPostal Code\nCR Number",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2,
+   "description": "Postal Code is checked on the Address; the others on the master (a mobile also on its Contact)."
+  },
+  {
+   "fieldname": "check",
+   "fieldtype": "Select",
+   "label": "Check",
+   "options": "Regular Expression\nExact Digits\nMinimum Digits\nStarts With\nEnds With",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "value",
+   "fieldtype": "Data",
+   "label": "Value",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2,
+   "description": "A number of digits, a prefix or suffix, or a regular expression (checked when the rule set is saved)."
+  },
+  {
+   "fieldname": "party_kind",
+   "fieldtype": "Select",
+   "label": "Party Kind",
+   "options": "Any\nB2B\nB2C",
+   "default": "Any",
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "B2B: a customer with a VAT Registration Number on file, a Company supplier. B2C: the others."
+  },
+  {
+   "fieldname": "credit",
+   "fieldtype": "Select",
+   "label": "Credit",
+   "options": "Any\nCredit Customers Only",
+   "default": "Any",
+   "in_list_view": 1,
+   "columns": 1,
+   "description": "Credit Customers Only: a customer with a Customer Credit Limit above zero. Suppliers are not asked."
+  },
+  {
+   "fieldname": "company_country",
+   "fieldtype": "Link",
+   "label": "Company Country",
+   "options": "Country",
+   "description": "Blank: every company. The party's company is a customer's own Company, else the user's default company."
+  },
+  {
+   "fieldname": "existing_masters",
+   "fieldtype": "Select",
+   "label": "Existing Values",
+   "options": "New or Changed Values Only\nAll Values",
+   "default": "New or Changed Values Only",
+   "description": "Only a new or changed value is checked by default, so an old master that already breaks the rule stays editable."
+  },
+  {
+   "fieldname": "message",
+   "fieldtype": "Data",
+   "label": "Message",
+   "reqd": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-28 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "Party Rule Format",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

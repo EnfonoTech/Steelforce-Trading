@@ -351,6 +351,8 @@ after_migrate = [
 	# Customer / Supplier / Item approval: approver access, the three PM Workflows, the switches, and the
 	# first time, the start of the approval -- see master_approval.py
 	"sf_trading.master_approval.setup",
+	# the Master Rules Manager role and its access to the Party Master Rule Set -- see party_rules.py
+	"sf_trading.party_rules.setup",
 ]
 
 after_install = [

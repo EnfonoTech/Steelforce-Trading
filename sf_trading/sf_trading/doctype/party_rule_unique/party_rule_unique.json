@@ -1,0 +1,84 @@
+{
+ "actions": [],
+ "creation": "2026-10-28 12:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "field",
+  "scope",
+  "party_kind",
+  "override_roles",
+  "override_needs_reason",
+  "message"
+ ],
+ "fields": [
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "default": "1",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "field",
+   "fieldtype": "Select",
+   "label": "Field",
+   "options": "VAT / Tax ID\nCR Number",
+   "reqd": 1,
+   "in_list_view": 1,
+   "columns": 2
+  },
+  {
+   "fieldname": "scope",
+   "fieldtype": "Select",
+   "label": "Compared With",
+   "options": "All Parties\nEnabled Only",
+   "default": "All Parties",
+   "in_list_view": 1,
+   "columns": 2,
+   "description": "Enabled Only: a disabled party does not hold the number, so disabling a duplicate frees it."
+  },
+  {
+   "fieldname": "party_kind",
+   "fieldtype": "Select",
+   "label": "Party Kind",
+   "options": "Any\nB2B\nB2C",
+   "default": "Any",
+   "in_list_view": 1,
+   "columns": 1
+  },
+  {
+   "fieldname": "override_roles",
+   "fieldtype": "Table MultiSelect",
+   "label": "May Override",
+   "options": "Party Rule Override Role",
+   "description": "Roles that may knowingly save a second party under the same number, with a reason."
+  },
+  {
+   "fieldname": "override_needs_reason",
+   "fieldtype": "Check",
+   "label": "Override Needs a Reason",
+   "default": "1"
+  },
+  {
+   "fieldname": "message",
+   "fieldtype": "Data",
+   "label": "Message"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-28 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "Party Rule Unique",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

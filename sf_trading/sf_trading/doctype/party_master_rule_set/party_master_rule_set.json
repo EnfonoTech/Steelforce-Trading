@@ -1,0 +1,120 @@
+{
+ "actions": [],
+ "autoname": "field:party_type",
+ "creation": "2026-10-28 12:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "party_type",
+  "enabled",
+  "applies_from",
+  "notes",
+  "required_section",
+  "required",
+  "formats_section",
+  "formats",
+  "uniques_section",
+  "uniques",
+  "exemptions_section",
+  "exemptions"
+ ],
+ "fields": [
+  {
+   "fieldname": "party_type",
+   "fieldtype": "Select",
+   "label": "Party Type",
+   "options": "Customer\nSupplier",
+   "reqd": 1,
+   "unique": 1,
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Enabled",
+   "default": "0",
+   "in_list_view": 1,
+   "description": "Off: the code's own rules answer, and this set is only read by the Test Rules button and the diff report."
+  },
+  {
+   "fieldname": "applies_from",
+   "fieldtype": "Datetime",
+   "label": "Applies From",
+   "description": "A master created at or after this moment is a new master. Seeded from SF Trading Settings > New-Master Rules From."
+  },
+  {
+   "fieldname": "notes",
+   "fieldtype": "Small Text",
+   "label": "Notes"
+  },
+  {
+   "fieldname": "required_section",
+   "fieldtype": "Section Break",
+   "label": "Required Details"
+  },
+  {
+   "fieldname": "required",
+   "fieldtype": "Table",
+   "label": "Required Details",
+   "options": "Party Rule Required"
+  },
+  {
+   "fieldname": "formats_section",
+   "fieldtype": "Section Break",
+   "label": "Format Checks"
+  },
+  {
+   "fieldname": "formats",
+   "fieldtype": "Table",
+   "label": "Format Checks",
+   "options": "Party Rule Format"
+  },
+  {
+   "fieldname": "uniques_section",
+   "fieldtype": "Section Break",
+   "label": "Unique Checks"
+  },
+  {
+   "fieldname": "uniques",
+   "fieldtype": "Table",
+   "label": "Unique Checks",
+   "options": "Party Rule Unique"
+  },
+  {
+   "fieldname": "exemptions_section",
+   "fieldtype": "Section Break",
+   "label": "Exemptions"
+  },
+  {
+   "fieldname": "exemptions",
+   "fieldtype": "Table",
+   "label": "Exemptions",
+   "options": "Party Rule Exemption"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-28 12:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "Party Master Rule Set",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1,
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ]
+}
