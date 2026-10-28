@@ -334,6 +334,7 @@
   },
   {
    "default": "1",
+   "description": "For now the approval holds credit customers only (a Customer Credit Limit above zero). Every other customer is used without it.",
    "fieldname": "master_approval_customer",
    "fieldtype": "Check",
    "label": "Customer Approval"

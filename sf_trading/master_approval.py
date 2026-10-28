@@ -22,6 +22,9 @@ PM's inbox, reminders, history and bulk approval. What is sf_trading's own:
   has not approved; every item row is held to the same (`validate_master_approval_at_transaction`).
   Quotations, Supplier Quotations and Material Requests stay open: they come before anything is
   committed. Returns, opening entries and internal (inter-company) parties stand aside.
+* **Customers: credit customers only, for now.** The approval covers a Customer only while it carries a
+  Customer Credit Limit above zero (`has_credit_limit`); every other customer is used as before and gets no
+  workflow buttons or inbox entry. A customer given a limit later comes under the approval from then on.
 * **Who is covered.** A master created at or after SF Trading Settings > Approval Applies to Masters
   Created From (set the first time this is migrated). An older master is covered only when Strict
   Validation is ticked -- it then needs an approval like a new one -- or when it is itself waiting for
@@ -44,7 +47,7 @@ from __future__ import annotations
 
 import frappe
 from frappe import _
-from frappe.utils import cint, cstr, get_datetime, now_datetime
+from frappe.utils import cint, cstr, flt, get_datetime, now_datetime
 
 from sf_trading import switches
 
@@ -137,13 +140,29 @@ def is_bypassed(state) -> bool:
 	return bool(cint(state.get(BYPASSED)))
 
 
+def has_credit_limit(state) -> bool:
+	"""A credit limit above zero on this Customer: from its table when the doc carries one (a limit added in
+	this very save counts), else from the database."""
+	rows = state.get("credit_limits")
+	if rows is not None:
+		return any(flt(row.get("credit_limit")) > 0 for row in rows)
+	name = state.get("name")
+	return bool(name) and bool(frappe.db.exists("Customer Credit Limit",
+		{"parent": name, "parenttype": "Customer", "credit_limit": [">", 0]}))
+
+
+def in_scope(doctype: str, state) -> bool:
+	"""For now the approval holds credit customers only; a supplier and an item are not narrowed."""
+	return doctype != "Customer" or has_credit_limit(state)
+
+
 def is_covered(doctype: str, state) -> bool:
 	"""Does the approval apply to this master at all?"""
 	if not is_enabled(doctype) or not has_fields(doctype) or is_bypassed(state):
 		return False
-	if is_new_master(state) or is_strict():
-		return True
-	return state.get(STATUS_FIELD) in HELD
+	if not (is_new_master(state) or is_strict() or state.get(STATUS_FIELD) in HELD):
+		return False
+	return in_scope(doctype, state)
 
 
 def is_approved(state) -> bool:

@@ -31,6 +31,7 @@ class Policy(FrappeTestCase):
 			patch.object(ma, "has_fields", return_value=True),
 			patch.object(ma, "rules_from", return_value=START),
 			patch.object(ma, "is_strict", return_value=False),
+			patch.object(ma, "has_credit_limit", return_value=True),
 		]
 		for p in self.patches:
 			p.start()
@@ -78,6 +79,62 @@ class Policy(FrappeTestCase):
 		self.assertTrue(ma.workflow_applicability("Item", state(**{ma.STATUS_FIELD: ma.DRAFT}))["applies"])
 		self.assertFalse(ma.workflow_applicability("Item", state(creation=OLD))["applies"])
 		self.assertIsNone(ma.workflow_applicability("Sales Order", state()))
+
+
+class CreditScope(FrappeTestCase):
+	"""For now the Customer approval holds credit customers only."""
+
+	def setUp(self):
+		self.patches = [
+			patch.object(ma, "is_enabled", return_value=True),
+			patch.object(ma, "has_fields", return_value=True),
+			patch.object(ma, "rules_from", return_value=START),
+			patch.object(ma, "is_strict", return_value=False),
+		]
+		for p in self.patches:
+			p.start()
+
+	def tearDown(self):
+		for p in self.patches:
+			p.stop()
+
+	def test_a_customer_without_a_credit_limit_is_not_covered(self):
+		with patch.object(ma, "has_credit_limit", return_value=False):
+			draft = state(**{ma.STATUS_FIELD: ma.DRAFT})
+			self.assertFalse(ma.is_covered("Customer", draft))
+			self.assertIsNone(ma.refusal_status("Customer", draft))
+			self.assertFalse(ma.workflow_applicability("Customer", draft)["applies"])
+			# not even under Strict Validation, nor while held
+			with patch.object(ma, "is_strict", return_value=True):
+				self.assertFalse(ma.is_covered("Customer", state(creation=OLD)))
+			self.assertFalse(ma.is_covered("Customer", state(creation=OLD, **{ma.STATUS_FIELD: ma.PENDING})))
+
+	def test_a_credit_customer_is_covered(self):
+		with patch.object(ma, "has_credit_limit", return_value=True):
+			draft = state(**{ma.STATUS_FIELD: ma.DRAFT})
+			self.assertTrue(ma.is_covered("Customer", draft))
+			self.assertEqual(ma.refusal_status("Customer", draft), "Draft")
+
+	def test_a_supplier_and_an_item_are_not_narrowed(self):
+		with patch.object(ma, "has_credit_limit", side_effect=AssertionError("asked")):
+			for doctype in ("Supplier", "Item"):
+				self.assertTrue(ma.is_covered(doctype, state(**{ma.STATUS_FIELD: ma.DRAFT})), doctype)
+
+	def test_the_limit_is_read_from_the_docs_own_table(self):
+		with_limit = frappe._dict(name="C", credit_limits=[frappe._dict(credit_limit=0), frappe._dict(credit_limit=500)])
+		zero = frappe._dict(name="C", credit_limits=[frappe._dict(credit_limit=0)])
+		empty = frappe._dict(name="C", credit_limits=[])
+		self.assertTrue(ma.has_credit_limit(with_limit))
+		self.assertFalse(ma.has_credit_limit(zero))
+		self.assertFalse(ma.has_credit_limit(empty))
+
+	def test_without_a_table_the_limit_is_read_from_the_database(self):
+		row = frappe._dict(name="C")
+		with patch("frappe.db.exists", return_value="CCL-1") as exists:
+			self.assertTrue(ma.has_credit_limit(row))
+		self.assertEqual(exists.call_args[0][1]["credit_limit"], [">", 0])
+		with patch("frappe.db.exists", return_value=None):
+			self.assertFalse(ma.has_credit_limit(row))
 
 
 class StubVoucher(frappe._dict):
