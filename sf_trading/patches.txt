@@ -42,3 +42,4 @@ sf_trading.patches.v0_1.collapse_stacked_vat_rows
 sf_trading.patches.v0_1.seed_party_master_rules
 sf_trading.patches.v0_1.seed_party_rule_override_roles
 sf_trading.patches.v0_1.seed_report_search_links_switch
+sf_trading.patches.v0_1.seed_po_stock_count_switch

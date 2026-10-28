@@ -25,6 +25,8 @@
   "purchase_receipt_section",
   "disable_purchase_receipt",
   "purchase_receipt_bypass",
+  "po_stock_count_section",
+  "require_po_stock_count",
   "landed_cost_section",
   "landed_cost_require_on_lcv",
   "landed_cost_column_break",
@@ -422,6 +424,18 @@
    "fieldtype": "Table",
    "label": "Allowed to Use Purchase Receipt",
    "options": "SF Override Entry"
+  },
+  {
+   "fieldname": "po_stock_count_section",
+   "fieldtype": "Section Break",
+   "label": "Purchase Order Stock Count"
+  },
+  {
+   "default": "1",
+   "description": "When ticked, a Purchase Order cannot be submitted until every stock item row has its Physical Stock Count entered (in Stock UOM; 0 when the shelf is empty). Service / non-stock items and rows delivered by the supplier straight to the customer need none. Unticked, the count is optional but can still be entered, and the PO Stock Count Variance report shows it.",
+   "fieldname": "require_po_stock_count",
+   "fieldtype": "Check",
+   "label": "Require Physical Stock Count on Purchase Orders"
   },
   {
    "fieldname": "tickets_section",
