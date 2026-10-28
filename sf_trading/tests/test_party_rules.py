@@ -59,7 +59,8 @@ def rules(party_type):
 		applies_from=START, enabled=1,
 		required=[frappe._dict(r) for r in build["required"]],
 		formats=[frappe._dict(r) for r in build["formats"]],
-		uniques=[frappe._dict(dict(r, override_roles=[frappe._dict(x) for x in r["override_roles"]])) for r in build["uniques"]],
+		uniques=[frappe._dict(r) for r in build["uniques"]],
+		override_roles=[frappe._dict(r) for r in build["override_roles"]],
 		exemptions=[frappe._dict(r) for r in build["exemptions"]],
 	)
 
@@ -214,6 +215,13 @@ class Uniques(FrappeTestCase):
 		self.assertEqual(clash.clash, "C-9")
 		self.assertEqual(clash.override_roles, ["Sales Manager", "Sales Master Manager", "System Manager"])
 		self.assertTrue(clash.needs_reason)
+
+	def test_the_override_roles_are_per_check_and_per_party_type(self):
+		customer, supplier = rules("Customer"), rules("Supplier")
+		self.assertEqual(pr.override_roles(customer, "VAT / Tax ID"), ["Sales Manager", "Sales Master Manager", "System Manager"])
+		self.assertEqual(pr.override_roles(customer, "CR Number"), ["Sales Manager", "Sales Master Manager", "System Manager"])
+		self.assertEqual(pr.override_roles(supplier, "VAT / Tax ID"), ["Purchase Manager", "Purchase Master Manager", "System Manager"])
+		self.assertEqual(pr.override_roles(supplier, "CR Number"), [])
 
 	def test_the_cr_check_is_for_b2b_customers_only(self):
 		build = rules("Customer")

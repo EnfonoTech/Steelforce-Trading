@@ -412,6 +412,11 @@ def format_failures(doc, rules=None, facts=None) -> list:
 	return out
 
 
+def override_roles(rules, field: str) -> list:
+	"""The roles the rule set lets override the Unique Check on this field."""
+	return [row.role for row in rules.get("override_roles") or [] if row.unique_field == field and row.role]
+
+
 def unique_failures(doc, rules=None, facts=None) -> list:
 	"""The Unique Checks the master breaks: {field, fieldname, value, clash, text, override_roles, needs_reason}.
 	The override itself (a manager's reason) belongs to the caller; the roles that may use it are returned."""
@@ -436,7 +441,7 @@ def unique_failures(doc, rules=None, facts=None) -> list:
 		if clash:
 			out.append(frappe._dict(field=row.field, fieldname=fieldname, value=value, clash=clash,
 				text=cstr(row.get("message")).strip(), needs_reason=cint(row.get("override_needs_reason")),
-				override_roles=[r.role for r in row.get("override_roles") or []]))
+				override_roles=override_roles(rules, row.field)))
 	return out
 
 
@@ -521,7 +526,7 @@ def get_rules_for_client(party_type: str) -> dict:
 		"country": company_country(),
 		"required": [_plain(r, CLIENT_REQUIRED) for r in rules.get("required") or [] if cint(r.enabled)],
 		"formats": [_plain(r, CLIENT_FORMAT) for r in rules.get("formats") or [] if cint(r.enabled)],
-		"uniques": [dict(_plain(r, CLIENT_UNIQUE), override_roles=[o.role for o in r.get("override_roles") or []])
+		"uniques": [dict(_plain(r, CLIENT_UNIQUE), override_roles=override_roles(rules, r.field))
 			for r in rules.get("uniques") or [] if cint(r.enabled)],
 		"exemptions": [_plain(r, CLIENT_EXEMPT) for r in rules.get("exemptions") or []],
 	}

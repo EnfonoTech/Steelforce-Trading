@@ -45,11 +45,23 @@ def fmt(field, check, value, message, kind="Any"):
 		"company_country": SAUDI, "existing_masters": "New or Changed Values Only", "message": message}
 
 
-def unique(field, roles, scope="All Parties", kind="Any"):
+def unique(field, scope="All Parties", kind="Any"):
 	return {"enabled": 1, "field": field, "scope": scope, "party_kind": kind, "override_needs_reason": 1,
-		"override_roles": [{"role": role} for role in roles], "message":
-		"VAT Registration Number {value} is already used by {clash}." if field == "VAT / Tax ID"
+		"message": "VAT Registration Number {value} is already used by {clash}." if field == "VAT / Tax ID"
 		else "Commercial Registration Number {value} is already used by {clash}."}
+
+
+#: who may knowingly save a second party under one number, per party type and Unique Check
+SALES_OVERRIDE = ("Sales Manager", "Sales Master Manager", "System Manager")
+PURCHASE_OVERRIDE = ("Purchase Manager", "Purchase Master Manager", "System Manager")
+OVERRIDE_ROLES = {
+	"Customer": {"VAT / Tax ID": SALES_OVERRIDE, "CR Number": SALES_OVERRIDE},
+	"Supplier": {"VAT / Tax ID": PURCHASE_OVERRIDE},
+}
+
+
+def override_rows(party_type) -> list:
+	return [{"unique_field": field, "role": role} for field, roles in OVERRIDE_ROLES[party_type].items() for role in roles]
 
 
 def address_rows(kind_word):
@@ -77,10 +89,8 @@ def customer_set() -> dict:
 			fmt("Mobile Number", "Minimum Digits", "10", "Mobile number must have at least 10 digits."),
 			fmt("Postal Code", "Exact Digits", "5", "Postal Code must be exactly 5 digits.", kind="B2B"),
 		],
-		"uniques": [
-			unique("VAT / Tax ID", ("Sales Manager", "Sales Master Manager", "System Manager")),
-			unique("CR Number", ("Sales Manager", "Sales Master Manager", "System Manager"), scope="Enabled Only", kind="B2B"),
-		],
+		"uniques": [unique("VAT / Tax ID"), unique("CR Number", scope="Enabled Only", kind="B2B")],
+		"override_roles": override_rows("Customer"),
 		"exemptions": [],
 	}
 
@@ -105,7 +115,8 @@ def supplier_set() -> dict:
 			fmt("Mobile Number", "Minimum Digits", "10", "Mobile number must have at least 10 digits."),
 			fmt("Postal Code", "Exact Digits", "5", "Postal Code must be exactly 5 digits.", kind="B2B"),
 		],
-		"uniques": [unique("VAT / Tax ID", ("Purchase Manager", "Purchase Master Manager", "System Manager"))],
+		"uniques": [unique("VAT / Tax ID")],
+		"override_roles": override_rows("Supplier"),
 		"exemptions": [
 			{"supplier_group": "Govt", "payment_terms": 1, "document": 1, "tax_id": 1},
 			{"supplier_group": "W/O VAT", "payment_terms": 1, "document": 1, "tax_id": 1},
@@ -115,6 +126,26 @@ def supplier_set() -> dict:
 
 
 SETS = {"Customer": customer_set, "Supplier": supplier_set}
+
+
+def add_override_roles() -> list:
+	"""A set seeded before the override roles had their own table has none: give it the seeded ones. A set that
+	already lists any is an admin's own and is left alone."""
+	if not frappe.db.exists("DocType", pr.RULE_SET):
+		return []
+	done = []
+	for party_type in SETS:
+		if not frappe.db.exists(pr.RULE_SET, party_type):
+			continue
+		doc = frappe.get_doc(pr.RULE_SET, party_type)
+		if doc.get("override_roles"):
+			continue
+		for row in override_rows(party_type):
+			doc.append("override_roles", row)
+		doc.flags.ignore_links = True
+		doc.save(ignore_permissions=True)
+		done.append(party_type)
+	return done
 
 
 def seed() -> list:

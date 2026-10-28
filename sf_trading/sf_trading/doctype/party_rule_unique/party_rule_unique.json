@@ -9,7 +9,6 @@
   "field",
   "scope",
   "party_kind",
-  "override_roles",
   "override_needs_reason",
   "message"
  ],
@@ -49,13 +48,6 @@
    "default": "Any",
    "in_list_view": 1,
    "columns": 1
-  },
-  {
-   "fieldname": "override_roles",
-   "fieldtype": "Table MultiSelect",
-   "label": "May Override",
-   "options": "Party Rule Override Role",
-   "description": "Roles that may knowingly save a second party under the same number, with a reason."
   },
   {
    "fieldname": "override_needs_reason",
