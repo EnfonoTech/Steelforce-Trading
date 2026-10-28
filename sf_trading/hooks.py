@@ -70,6 +70,8 @@ app_include_js = [
 	f"/assets/sf_trading/js/alternative_cost_center.js?{_v}",
 	# formatting and drill-down of the MIS Profit and Loss and its detail -- see mis_profit_loss.py
 	f"/assets/sf_trading/js/mis_profit_loss.js?{_v}",
+	# account links on Trial Balance / Balance Sheet / P&L stay clickable while searching a column
+	f"/assets/sf_trading/js/financial_statements_search_links.js?{_v}",
 ]
 
 # doctype_js: loaded only when that specific doctype form opens
@@ -415,6 +417,8 @@ boot_session = [
 	"sf_trading.alternative_cost_center.boot_carriers",
 	# each report the user may open carries its number, so the search bar finds it by RPT-0042
 	"sf_trading.report_numbering.boot_numbers",
+	# whether account links stay clickable while a financial report column is searched
+	"sf_trading.financial_statements_search_links.boot_session",
 ]
 
 # DocType Class
