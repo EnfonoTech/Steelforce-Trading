@@ -92,6 +92,16 @@ def propagate_dimensions_to_items(doc, method=None):
 			if hasattr(tax, "cost_center"):
 				tax.cost_center = doc_cc
 
+	# A tax row is seeded with the user's default Branch permission, not the header's branch, so a
+	# user who bills the other branch leaves a stray value there: the VAT GL leg posts to the wrong
+	# branch and user permissions hide the document from everyone else ("linked to Branch X in row 1,
+	# field Branch"). Stamp the header branch on the tax rows too.
+	doc_branch = doc.get("branch")
+	if doc_branch:
+		for tax in doc.get("taxes") or []:
+			if hasattr(tax, "branch"):
+				tax.branch = doc_branch
+
 
 def _branch_letter_head(branch):
 	"""Return the custom letter head defined on a Branch, or None.
