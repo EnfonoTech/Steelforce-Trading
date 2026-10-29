@@ -183,8 +183,19 @@ class TestAnnouncements(FrappeTestCase):
 			self.assertNotIn(doc.name, ann.visible_names(user))
 
 	def test_a_company_row_must_name_the_company(self):
+		# built, not inserted: saving fills an empty Company link with the signed-in user's default company,
+		# so on a site that has one (prod) the row would no longer be empty by the time it is checked
+		doc = frappe.get_doc(
+			{
+				"doctype": ann.DOCTYPE,
+				"title": "A test update",
+				"summary": "Something to know.",
+				"kind": "Announcement",
+				"audience": [{"audience_type": "Company"}],
+			}
+		)
 		with self.assertRaises(frappe.ValidationError):
-			_announcement([{"audience_type": "Company"}])
+			ann.check_audience(doc)
 
 	def test_a_company_row_reads_as_its_company_in_the_audience_line(self):
 		doc = _announcement([{"audience_type": "Company", "company": self.company}, {"audience_type": "Role", "role": ROLE_A}])
