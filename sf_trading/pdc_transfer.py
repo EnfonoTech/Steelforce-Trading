@@ -26,6 +26,11 @@ The party side is split over the documents the cheque paid, so their outstanding
 of a reference that REDUCES an outstanding, so a debit against a customer's invoice (or a credit
 against a supplier's bill) passes and reopens it. Cancelling that Journal Entry undoes the return.
 
+**Banked by a Journal Entry.** Accounts sometimes bank cheques with one journal (Dr bank, Cr the holding
+account, a line per cheque) instead of an Internal Transfer. The cheque names that journal in
+`custom_pdc_clearing_journal`; with no transfer or return behind it, the cheque then reads cleared in
+full, and the PDC Report shows the journal beside it so the two can be cross-checked.
+
 The cheque's own position -- Cleared Amount, Returned Amount, PDC Status -- is recomputed from its
 transfers and returns every time one of them is submitted or cancelled, so it can never drift
 from the documents that make it up.
@@ -45,6 +50,7 @@ CLEARED_FIELD = "custom_pdc_cleared_amount"
 RETURNED_FIELD = "custom_pdc_returned_amount"
 STATUS_FIELD = "custom_pdc_status"
 RETURN_AMOUNT_FIELD = "custom_pdc_return_amount"
+JOURNAL_FIELD = "custom_pdc_clearing_journal"
 
 PENDING = "Pending"
 PARTLY_CLEARED = "Partly Cleared"
@@ -84,6 +90,20 @@ def ensure_custom_fields():
 					options="paid_to_account_currency", insert_after=STATUS_FIELD),
 				dict(position, fieldname=RETURNED_FIELD, label="PDC Returned Amount", fieldtype="Currency",
 					options="paid_to_account_currency", insert_after=CLEARED_FIELD),
+				{
+					"fieldname": JOURNAL_FIELD,
+					"label": "Banked By Journal Entry",
+					"fieldtype": "Link",
+					"options": "Journal Entry",
+					"insert_after": RETURNED_FIELD,
+					"allow_on_submit": 1,
+					"no_copy": 1,
+					"depends_on": CHEQUE_DEPENDS,
+					"description": (
+						"The Journal Entry that banked this cheque (Dr bank, Cr the holding account), when it was "
+						"not banked by an Internal Transfer. Shown in the PDC Report so the two can be cross-checked."
+					),
+				},
 			],
 			"Journal Entry": [
 				{
@@ -214,6 +234,49 @@ def return_rows(payment_entries: list) -> dict:
 	return found
 
 
+def journal_rows(payment_entries: list) -> dict:
+	"""{cheque: journal row} -- the submitted Journal Entry each cheque names as having banked it, with
+	the credits it posts per account: row.credits = {account: [credit, ...]}."""
+	if not payment_entries or not frappe.db.has_column("Payment Entry", JOURNAL_FIELD):
+		return {}
+	named = {
+		r.name: r.journal
+		for r in frappe.get_all(
+			"Payment Entry",
+			filters={"name": ["in", list(payment_entries)], JOURNAL_FIELD: ["is", "set"]},
+			fields=["name", JOURNAL_FIELD + " as journal"],
+		)
+	}
+	if not named:
+		return {}
+	journals = {
+		j.name: j
+		for j in frappe.get_all(
+			"Journal Entry",
+			filters={"name": ["in", list(set(named.values()))], "docstatus": 1},
+			fields=["name", "docstatus", "posting_date", "user_remark"],
+		)
+	}
+	for j in journals.values():
+		j.credits = {}
+	for line in frappe.get_all(
+		"Journal Entry Account",
+		filters={"parent": ["in", list(journals)], "credit": [">", 0]},
+		fields=["parent", "account", "credit"],
+	):
+		journals[line.parent].credits.setdefault(line.account, []).append(flt(line.credit))
+	return {cheque: journals[name] for cheque, name in named.items() if name in journals}
+
+
+def journal_matches(journal, pe) -> bool:
+	"""Does the journal credit the cheque's holding account with a line the size of the cheque?
+	(A cheque paying several entries is banked by one line for their total, so those read No.)"""
+	if not journal:
+		return False
+	amount = cheque_amount(pe)
+	return any(abs(c - amount) <= TOLERANCE for c in journal.credits.get(holding_account(pe), []))
+
+
 def transfers_for(payment_entries: list) -> dict:
 	"""{cheque: one transfer row} -- the latest submitted transfer, else a draft. Kept for callers
 	that show a single transfer per cheque (the PDC Report's transfer columns)."""
@@ -224,10 +287,11 @@ def transfers_for(payment_entries: list) -> dict:
 	return out
 
 
-def position_of(pe, transfers=None, returns=None) -> frappe._dict:
+def position_of(pe, transfers=None, returns=None, journals=None) -> frappe._dict:
 	"""How much of a cheque has been banked, returned, and is still waiting -- from its documents."""
 	transfers = transfers if transfers is not None else transfer_rows([pe.name]).get(pe.name, [])
 	returns = returns if returns is not None else return_rows([pe.name]).get(pe.name, [])
+	journal = (journals if journals is not None else journal_rows([pe.name])).get(pe.name)
 	submitted_transfers = [t for t in transfers if cint(t.docstatus) == 1]
 	submitted_returns = [r for r in returns if cint(r.docstatus) == 1]
 	amount = cheque_amount(pe)
@@ -237,7 +301,10 @@ def position_of(pe, transfers=None, returns=None) -> frappe._dict:
 	# with no transfer (the bank reconciled the cheque account itself) reads cleared in full, and
 	# one marked rejected by date alone, with no journal behind it, keeps reading returned -- its
 	# money is still in the holding account, so a return journal can still be posted for it.
-	legacy_cleared = not transfers and not returns and bool(pe.get("clearance_date"))
+	# a cheque banked by a Journal Entry it names (with no transfer or return behind it) is cleared in
+	# full on that journal's say; the clearance date alone, with no document, is the older signal
+	by_journal = not transfers and not returns and bool(journal)
+	legacy_cleared = not transfers and not returns and (bool(pe.get("clearance_date")) or by_journal)
 	legacy_returned = not returns and bool(pe.get(REJECTION_FIELD))
 	if legacy_cleared:
 		cleared = amount
@@ -257,6 +324,7 @@ def position_of(pe, transfers=None, returns=None) -> frappe._dict:
 		last_cleared_on=max((getdate(t.posting_date) for t in submitted_transfers), default=None),
 		last_returned_on=max((getdate(r.posting_date) for r in submitted_returns), default=None),
 		legacy_cleared=legacy_cleared, legacy_returned=legacy_returned,
+		by_journal=by_journal, journal=journal,
 		transfers=transfers, returns=returns,
 		drafts=[t.name for t in transfers if cint(t.docstatus) == 0] + [r.name for r in returns if cint(r.docstatus) == 0],
 	)
@@ -279,6 +347,8 @@ def refresh(payment_entry: str):
 	# what the old screens wrote is kept until a transfer or a return journal replaces it
 	if pos.legacy_cleared:
 		values.pop("clearance_date")
+		if pos.by_journal and not pe.get("clearance_date"):
+			values["clearance_date"] = getdate(pos.journal.posting_date)
 	if pos.legacy_returned:
 		values.pop(REJECTION_FIELD)
 	values = {k: v for k, v in values.items() if frappe.db.has_column("Payment Entry", k)}
@@ -516,6 +586,43 @@ def validate(doc, method=None):
 			),
 			title=_("More Than the Cheque"),
 		)
+
+
+def validate_journal(doc, method=None):
+	"""Payment Entry validate/update-after-submit: the journal a cheque names as having banked it has to be
+	a submitted Journal Entry that credits the account the cheque is held in."""
+	name = doc.get(JOURNAL_FIELD)
+	if not name or doc.payment_type not in ("Receive", "Pay"):
+		return
+	journal = journal_rows_for_name(name)
+	if not journal:
+		frappe.throw(_("{0} is not a submitted Journal Entry.").format(frappe.bold(name)))
+	if holding_account(doc) not in journal.credits:
+		frappe.throw(
+			_("{0} does not credit {1}, the account this cheque is held in, so it cannot have banked it.").format(
+				frappe.bold(name), frappe.bold(holding_account(doc))
+			),
+			title=_("Not a Banking Journal"),
+		)
+
+
+def journal_rows_for_name(name: str):
+	"""One submitted Journal Entry with its credits per account, or None."""
+	row = frappe.db.get_value("Journal Entry", {"name": name, "docstatus": 1}, ["name", "posting_date"], as_dict=True)
+	if not row:
+		return None
+	row.credits = {}
+	for line in frappe.get_all("Journal Entry Account", filters={"parent": name, "credit": [">", 0]}, fields=["account", "credit"]):
+		row.credits.setdefault(line.account, []).append(flt(line.credit))
+	return row
+
+
+def on_update_after_submit(doc, method=None):
+	"""Naming (or clearing) the banking journal on a submitted cheque moves its position."""
+	if doc.payment_type in ("Receive", "Pay") and doc.mode_of_payment and frappe.db.has_column("Payment Entry", JOURNAL_FIELD):
+		before = doc.get_doc_before_save()
+		if before is None or before.get(JOURNAL_FIELD) != doc.get(JOURNAL_FIELD):
+			refresh(doc.name)
 
 
 def on_submit(doc, method=None):

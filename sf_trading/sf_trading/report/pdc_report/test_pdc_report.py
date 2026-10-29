@@ -87,3 +87,91 @@ class TestPDCReport(FrappeTestCase):
         for row in cleared:
             self.assertTrue(row["clearance_date"])
             self.assertEqual(row["status"], "Cleared")
+
+
+class TestBankedBy(FrappeTestCase):
+    """The cross-check: a cleared cheque shows the document that banked it. Pure logic, no database."""
+
+    HOLDING = "13020100027 - PDC Account - SFB"
+
+    def _cheque(self, amount=100.0):
+        return frappe._dict(
+            name="ACC-PAY-X", payment_type="Receive", received_amount=amount, paid_amount=amount,
+            paid_to=self.HOLDING, paid_from="Debtors", docstatus=1, clearance_date=None,
+        )
+
+    def _journal(self, *credits):
+        return frappe._dict(name="ACC-JV-X", docstatus=1, posting_date="2026-09-09", credits={self.HOLDING: list(credits)})
+
+    def test_columns_carry_the_banking_document(self):
+        from sf_trading.sf_trading.report.pdc_report.pdc_report import get_columns
+
+        fieldnames = [c["fieldname"] for c in get_columns()]
+        for expected in ("banked_by", "clearing_journal", "journal_date", "journal_amount", "cross_check"):
+            self.assertIn(expected, fieldnames)
+
+    def test_a_cheque_naming_a_journal_is_cleared_by_it(self):
+        from sf_trading.pdc_transfer import position_of
+
+        pe = self._cheque(866.25)
+        pos = position_of(pe, transfers=[], returns=[], journals={pe.name: self._journal(138.6, 866.25)})
+        self.assertEqual(pos.status, "Cleared")
+        self.assertEqual(pos.cleared, 866.25)
+        self.assertTrue(pos.by_journal)
+
+    def test_a_journal_does_not_clear_a_cheque_that_has_a_transfer(self):
+        from sf_trading.pdc_transfer import position_of
+
+        pe = self._cheque(100)
+        transfer = frappe._dict(name="T", docstatus=1, paid_amount=40, posting_date="2026-09-01")
+        pos = position_of(pe, transfers=[transfer], returns=[], journals={pe.name: self._journal(100)})
+        self.assertFalse(pos.by_journal)
+        self.assertEqual(pos.status, "Partly Cleared")
+
+    def test_cross_check_reads_matches_when_the_journal_has_a_line_of_the_cheques_size(self):
+        from sf_trading.pdc_transfer import position_of
+        from sf_trading.sf_trading.report.pdc_report.pdc_report import banked_by_of
+
+        pe = self._cheque(866.25)
+        journals = {pe.name: self._journal(138.6, 866.25)}
+        pos = position_of(pe, transfers=[], returns=[], journals=journals)
+        self.assertEqual(banked_by_of(pe, pos, [], journals[pe.name])[0::2], ("Journal Entry", "Matches"))
+
+    def test_cross_check_flags_a_journal_with_no_line_of_the_cheques_size(self):
+        from sf_trading.pdc_transfer import position_of
+        from sf_trading.sf_trading.report.pdc_report.pdc_report import banked_by_of
+
+        pe = self._cheque(108.9)
+        journals = {pe.name: self._journal(108.0)}
+        pos = position_of(pe, transfers=[], returns=[], journals=journals)
+        by, _journal, check = banked_by_of(pe, pos, [], journals[pe.name])
+        self.assertEqual(by, "Journal Entry")
+        self.assertTrue(check.startswith("Check"))
+
+    def test_a_cheque_cleared_by_a_date_alone_says_no_document_is_linked(self):
+        from sf_trading.pdc_transfer import position_of
+        from sf_trading.sf_trading.report.pdc_report.pdc_report import banked_by_of
+
+        pe = self._cheque()
+        pe.clearance_date = "2026-09-09"
+        pos = position_of(pe, transfers=[], returns=[], journals={})
+        by, journal, check = banked_by_of(pe, pos, [], None)
+        self.assertEqual((by, journal), ("Clearance Date Only", None))
+        self.assertTrue(check.startswith("No document"))
+
+    def test_a_transfer_that_banks_the_whole_cheque_matches(self):
+        from sf_trading.pdc_transfer import position_of
+        from sf_trading.sf_trading.report.pdc_report.pdc_report import banked_by_of
+
+        pe = self._cheque(100)
+        transfer = frappe._dict(name="T", docstatus=1, paid_amount=100, posting_date="2026-09-01")
+        pos = position_of(pe, transfers=[transfer], returns=[], journals={})
+        self.assertEqual(banked_by_of(pe, pos, [transfer], None)[0::2], ("Internal Transfer", "Matches"))
+
+    def test_a_pending_cheque_has_no_banking_document(self):
+        from sf_trading.pdc_transfer import position_of
+        from sf_trading.sf_trading.report.pdc_report.pdc_report import banked_by_of
+
+        pe = self._cheque()
+        pos = position_of(pe, transfers=[], returns=[], journals={})
+        self.assertEqual(banked_by_of(pe, pos, [], None), ("", None, ""))

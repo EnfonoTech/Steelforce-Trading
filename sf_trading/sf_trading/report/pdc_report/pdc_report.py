@@ -17,13 +17,30 @@ Entries created by `sf_trading.pdc_transfer`, each naming the cheque in
 names it the same way. Status, Cleared, Returned and Remaining are worked out here from those
 documents (`pdc_transfer.position_of`), so the report is right even where the stored PDC Status
 on the cheque has not been refreshed yet.
+
+Cross-check: every cleared cheque shows the document that banked it -- the Internal Transfer, or the
+Journal Entry the cheque names in `custom_pdc_clearing_journal` (with its date, the line it posted to the
+holding account and whether that line is the cheque's size). A cheque cleared by a date alone, with no
+document behind it, says so: those are the ones to chase.
 """
 
 import frappe
 from frappe import _
 from frappe.utils import add_days, cint, date_diff, flt, getdate, nowdate
 
-from sf_trading.pdc_transfer import REJECTION_FIELD, position_of, return_rows, transfer_rows
+from sf_trading.pdc_transfer import (
+    JOURNAL_FIELD,
+    REJECTION_FIELD,
+    cheque_amount,
+    holding_account,
+    journal_matches,
+    journal_rows,
+    position_of,
+    return_rows,
+    transfer_rows,
+)
+
+BANKED_BY = ("Internal Transfer", "Journal Entry", "Clearance Date Only")
 
 # days before the posting date that the PDC reminder notification fires
 REMINDER_LEAD_DAYS = 3
@@ -90,6 +107,8 @@ def get_data(filters):
     ]
     if has_rejection_field:
         fields.append(REJECTION_FIELD)
+    if frappe.db.has_column("Payment Entry", JOURNAL_FIELD):
+        fields.append(JOURNAL_FIELD)
 
     rows = frappe.get_all(
         "Payment Entry",
@@ -99,8 +118,9 @@ def get_data(filters):
     )
 
     names = [r.name for r in rows]
-    transfers, returns = transfer_rows(names), return_rows(names)
+    transfers, returns, journals = transfer_rows(names), return_rows(names), journal_rows(names)
     transfer_filter = filters.get("transfer_status")
+    banked_filter = filters.get("banked_by")
 
     today = getdate(nowdate())
     out = []
@@ -121,7 +141,7 @@ def get_data(filters):
         days_to_posting = date_diff(posting_date, today) if posting_date else None
 
         cheque_transfers = transfers.get(r.name, [])
-        pos = position_of(r, transfers=cheque_transfers, returns=returns.get(r.name, []))
+        pos = position_of(r, transfers=cheque_transfers, returns=returns.get(r.name, []), journals=journals)
         submitted = [t for t in cheque_transfers if cint(t.docstatus) == 1]
         transfer = (submitted or cheque_transfers or [None])[-1]
         if any(cint(t.docstatus) == 0 for t in cheque_transfers):
@@ -145,6 +165,9 @@ def get_data(filters):
         else:
             state = pos.status
         if wanted and state not in wanted:
+            continue
+        banked_by, journal, cross_check = banked_by_of(r, pos, cheque_transfers, journals.get(r.name))
+        if banked_filter and banked_filter != banked_by:
             continue
         settled = r.docstatus == 1
         out.append({
@@ -172,6 +195,11 @@ def get_data(filters):
             "returned_amount": pos.returned if settled else 0,
             "remaining_amount": pos.remaining if settled else 0,
             "return_journal": (returns.get(r.name) or [frappe._dict(name=None)])[-1].name,
+            "banked_by": banked_by,
+            "clearing_journal": journal.name if journal else None,
+            "journal_date": getdate(journal.posting_date) if journal else None,
+            "journal_amount": journal_line(journal, r) if journal else None,
+            "cross_check": cross_check,
             "currency": currency,
             "bank_account": bank,
             "clearance_date": r.clearance_date,
@@ -179,6 +207,37 @@ def get_data(filters):
             "company": r.company,
         })
     return out
+
+
+def journal_line(journal, pe):
+    """The credit the journal posts to the cheque's holding account: the line of the cheque's size if it
+    has one, otherwise the journal's total to that account."""
+    credits = journal.credits.get(holding_account(pe), [])
+    amount = cheque_amount(pe)
+    exact = [c for c in credits if abs(c - amount) <= 0.0005]
+    return flt(exact[0] if exact else sum(credits))
+
+
+def banked_by_of(pe, pos, cheque_transfers, journal):
+    """(what banked the cheque, its journal, the cross-check) for one cheque.
+
+    The cross-check is the sentence an accountant reads to know whether the document behind a cleared
+    cheque really is that cheque's: the transfer moved the cheque's amount, the journal has a line of
+    the cheque's size on its holding account, or nothing is linked at all.
+    """
+    submitted = [t for t in cheque_transfers if cint(t.docstatus) == 1]
+    if submitted:
+        moved = flt(sum(flt(t.paid_amount) for t in submitted), 3)
+        if abs(moved - cheque_amount(pe)) <= 0.0005:
+            return "Internal Transfer", None, "Matches"
+        return "Internal Transfer", None, _("Part banked: {0} of {1}").format(moved, flt(cheque_amount(pe), 3))
+    if pos.by_journal:
+        if journal_matches(journal, pe):
+            return "Journal Entry", journal, "Matches"
+        return "Journal Entry", journal, _("Check: no line of {0} on the holding account").format(flt(cheque_amount(pe), 3))
+    if pos.legacy_cleared:
+        return "Clearance Date Only", None, _("No document linked")
+    return "", None, ""
 
 
 def get_columns():
@@ -197,6 +256,11 @@ def get_columns():
         {"label": _("Transfers"), "fieldname": "transfers", "fieldtype": "Int", "width": 80},
         {"label": _("Transferred On"), "fieldname": "transfer_date", "fieldtype": "Date", "width": 110},
         {"label": _("Transferred To"), "fieldname": "transfer_account", "fieldtype": "Link", "options": "Account", "width": 170},
+        {"label": _("Banked By"), "fieldname": "banked_by", "fieldtype": "Data", "width": 150},
+        {"label": _("Banking Journal"), "fieldname": "clearing_journal", "fieldtype": "Link", "options": "Journal Entry", "width": 150},
+        {"label": _("Journal Date"), "fieldname": "journal_date", "fieldtype": "Date", "width": 100},
+        {"label": _("Journal Line"), "fieldname": "journal_amount", "fieldtype": "Currency", "options": "currency", "width": 115},
+        {"label": _("Cross-check"), "fieldname": "cross_check", "fieldtype": "Data", "width": 230},
         {"label": _("Party Type"), "fieldname": "party_type", "fieldtype": "Data", "width": 90},
         {"label": _("Party"), "fieldname": "party", "fieldtype": "Dynamic Link", "options": "party_type", "width": 150},
         {"label": _("Party Name"), "fieldname": "party_name", "fieldtype": "Data", "width": 180},

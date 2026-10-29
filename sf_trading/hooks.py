@@ -591,6 +591,8 @@ doc_events = {
 			"sf_trading.payment_entry_reference_date.set_reference_dates",
 			# a transfer that names a post-dated cheque has to add up, however it was built
 			"sf_trading.pdc_transfer.validate",
+			# the journal a cheque names as having banked it must credit the account it is held in
+			"sf_trading.pdc_transfer.validate_journal",
 			_SUPPLIER_GATE,
 			_MASTER_GATE,
 			_APPROVAL_GATE,
@@ -607,7 +609,12 @@ doc_events = {
 		],
 		# an invoice consuming an advance adds its reference row to a payment that is already
 		# submitted, which never passes validate
-		"on_update_after_submit": "sf_trading.payment_entry_reference_date.fill_missing_reference_dates",
+		"on_update_after_submit": [
+			"sf_trading.payment_entry_reference_date.fill_missing_reference_dates",
+			# naming the journal that banked a cheque moves the cheque on
+			"sf_trading.pdc_transfer.validate_journal",
+			"sf_trading.pdc_transfer.on_update_after_submit",
+		],
 	},
 	"Journal Entry": {
 		# a journal core raises and submits itself (asset depreciation, its reversal, Scrap Asset) is

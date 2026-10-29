@@ -31,6 +31,11 @@ frappe.query_reports["PDC Report"] = {
             options: ["", "Not Transferred", "Draft Transfer", "Partly Transferred", "Transferred"].join("\n"),
             default: "",
         },
+        {
+            fieldname: "banked_by", label: __("Banked By"), fieldtype: "Select",
+            options: ["", "Internal Transfer", "Journal Entry", "Clearance Date Only"].join("\n"),
+            default: "",
+        },
         { fieldname: "include_cancelled", label: __("Include Cancelled"), fieldtype: "Check", default: 0 },
     ],
 
@@ -90,6 +95,14 @@ frappe.query_reports["PDC Report"] = {
                 // cheque date has passed and nothing has been banked
                 value = `<span style="color:var(--red-500)">${value}</span>`;
             }
+        }
+
+        // cross-check: green when the document behind a cleared cheque is that cheque's, red when it is
+        // not, orange when nothing is linked
+        if (column.fieldname === "cross_check" && data.cross_check) {
+            const text = data.cross_check;
+            const colour = text === "Matches" ? "green-600" : text.indexOf("No document") === 0 ? "orange-500" : "red-500";
+            value = `<span style="color:var(--${colour})"><b>${value}</b></span>`;
         }
 
         return value;
