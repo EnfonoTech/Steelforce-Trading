@@ -61,7 +61,7 @@ POPUP_MAX = 5
 PENDING_LIST_MAX = 200
 
 # the field each audience type is read from
-AUDIENCE_FIELD = {"Role": "role", "Department": "department", "Branch": "branch", "User": "user"}
+AUDIENCE_FIELD = {"Role": "role", "Department": "department", "Branch": "branch", "Company": "company", "User": "user"}
 # roles every desk user holds without a Has Role row, so "everyone" is the honest reading of them
 EVERYONE_ROLES = {"All", "Desk User"}
 
@@ -135,6 +135,30 @@ def _configured_branches(user) -> set:
 	)
 
 
+def _has_company_audience() -> bool:
+	"""False until the migrate that adds the Company column to the audience table has run, so nothing reads it early."""
+	return bool(frappe.db.has_column(AUDIENCE, "company"))
+
+
+def _user_companies(user, branches) -> set:
+	"""The companies this person works for: a Company user permission, a company on their Employee, or a branch
+	(theirs on the Employee or the Branch Configuration) that the Branch Configuration puts under a company.
+
+	A person with none of these is not tied to any company, so a company-wise update does not reach them; they
+	still get everything addressed to their role, branch, department or name."""
+	companies = set(frappe.get_all("User Permission", filters={"user": user, "allow": "Company"}, pluck="for_value"))
+	companies.update(
+		frappe.get_all("Employee", filters={"user_id": user, "status": "Active", "company": ["is", "set"]}, pluck="company")
+	)
+	if branches:
+		companies.update(
+			company
+			for company in frappe.get_all("Branch Configuration", filters={"name": ["in", list(branches)]}, pluck="company")
+			if company
+		)
+	return companies
+
+
 def user_profile(user) -> frappe._dict:
 	"""What decides which updates are meant for this person."""
 	departments, branches = set(), set()
@@ -145,11 +169,13 @@ def user_profile(user) -> frappe._dict:
 			departments.add(row.department)
 		if row.branch:
 			branches.add(row.branch)
+	branches |= _configured_branches(user)
 	return frappe._dict(
 		roles=set(frappe.get_roles(user)),
 		departments=departments,
 		department_chain=_with_ancestors(departments),
-		branches=branches | _configured_branches(user),
+		branches=branches,
+		companies=_user_companies(user, branches),
 	)
 
 
@@ -175,6 +201,8 @@ def audience_fits(audience, user, profile):
 		)
 	if profile.branches:
 		fits.append((audience.audience_type == "Branch") & audience.branch.isin(list(profile.branches)))
+	if profile.companies and _has_company_audience():
+		fits.append((audience.audience_type == "Company") & audience.company.isin(list(profile.companies)))
 	return reduce(or_, fits)
 
 
@@ -200,7 +228,7 @@ def visible_names(user=None) -> list:
 def resolve_audience(rows) -> list:
 	"""Every enabled desk user the audience rows reach. `rows` may be Document rows or plain dicts."""
 	enabled = _enabled_desk_users()
-	roles, departments, with_sub, branches, named = set(), set(), set(), set(), set()
+	roles, departments, with_sub, branches, companies, named = set(), set(), set(), set(), set(), set()
 	for row in rows or ():
 		kind = row.get("audience_type")
 		if kind == "Everyone":
@@ -211,6 +239,8 @@ def resolve_audience(rows) -> list:
 			(with_sub if cint(row.get("include_sub_departments")) else departments).add(row.get("department"))
 		elif kind == "Branch" and row.get("branch"):
 			branches.add(row.get("branch"))
+		elif kind == "Company" and row.get("company"):
+			companies.add(row.get("company"))
 		elif kind == "User" and row.get("user"):
 			named.add(row.get("user"))
 
@@ -238,7 +268,33 @@ def resolve_audience(rows) -> list:
 				pluck="user",
 			)
 		)
+	if companies:
+		users.update(_company_users(companies))
 	return sorted(users & enabled)
+
+
+def _company_users(companies) -> set:
+	"""Everyone `_user_companies` ties to one of these companies, asked the other way round."""
+	companies = list(companies)
+	users = set(frappe.get_all("User Permission", filters={"allow": "Company", "for_value": ["in", companies]}, pluck="user"))
+	users.update(
+		frappe.get_all(
+			"Employee",
+			filters={"status": "Active", "user_id": ["is", "set"], "company": ["in", companies]},
+			pluck="user_id",
+		)
+	)
+	branches = frappe.get_all("Branch Configuration", filters={"company": ["in", companies]}, pluck="name")
+	if branches:
+		users.update(
+			frappe.get_all(
+				"Branch Configuration User", filters={"parenttype": "Branch Configuration", "parent": ["in", branches]}, pluck="user"
+			)
+		)
+		users.update(
+			frappe.get_all("Employee", filters={"status": "Active", "user_id": ["is", "set"], "branch": ["in", branches]}, pluck="user_id")
+		)
+	return users
 
 
 # ── Saving rules ────────────────────────────────────────────────────────────────────────
@@ -684,7 +740,8 @@ def _audience_rows(names) -> dict:
 	for row in frappe.get_all(
 		AUDIENCE,
 		filters={"parent": ["in", list(names)], "parenttype": DOCTYPE},
-		fields=["parent", "audience_type", "role", "department", "include_sub_departments", "branch", "user"],
+		fields=["parent", "audience_type", "role", "department", "include_sub_departments", "branch", "user"]
+		+ (["company"] if _has_company_audience() else []),
 		order_by="idx asc",
 	):
 		grouped.setdefault(row.parent, []).append(row)
@@ -707,6 +764,7 @@ def _audience_labels(names, audience) -> dict:
 				else _("{0} department").format(row.department)
 			),
 			"Branch": _("{0} branch").format(row.branch),
+			"Company": _("{0} company").format(row.get("company")),
 		}.get(row.audience_type)
 		if text:
 			parts.setdefault(row.parent, []).append(text)

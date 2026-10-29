@@ -109,6 +109,7 @@ class TestAnnouncements(FrappeTestCase):
 		if not frappe.db.exists("Branch", "Ann Test Branch"):
 			frappe.get_doc({"doctype": "Branch", "branch": "Ann Test Branch"}).insert(ignore_permissions=True)
 		cls.parent_department, cls.child_department = parent.name, child.name
+		cls.company = company
 		_make_employee(USER_A, company, department=child.name, branch="Ann Test Branch")
 		_make_employee(USER_B, company, department=parent.name)
 
@@ -145,6 +146,8 @@ class TestAnnouncements(FrappeTestCase):
 				{USER_B},
 			),
 			"branch": ([{"audience_type": "Branch", "branch": "Ann Test Branch"}], {USER_A}),
+			# both Employees work for the company; USER_C has no Employee and no company permission
+			"company": ([{"audience_type": "Company", "company": self.company}], {USER_A, USER_B}),
 			"two rows": (
 				[{"audience_type": "Role", "role": ROLE_A}, {"audience_type": "User", "user": USER_C}],
 				{USER_A, USER_C},
@@ -158,6 +161,42 @@ class TestAnnouncements(FrappeTestCase):
 			seeing = {user for user in USERS if doc.name in ann.visible_names(user)}
 			self.assertEqual(resolved, expected, f"resolve_audience: {label}")
 			self.assertEqual(seeing, expected, f"visible_names: {label}")
+
+	def test_a_company_user_permission_ties_a_person_to_that_company(self):
+		doc = _announcement([{"audience_type": "Company", "company": self.company}])
+		self.assertNotIn(doc.name, ann.visible_names(USER_C), "no Employee and no permission: tied to no company")
+		self.assertNotIn(USER_C, ann.resolve_audience(doc.audience))
+
+		frappe.get_doc(
+			{"doctype": "User Permission", "user": USER_C, "allow": "Company", "for_value": self.company}
+		).insert(ignore_permissions=True)
+		self.assertIn(doc.name, ann.visible_names(USER_C))
+		self.assertIn(USER_C, ann.resolve_audience(doc.audience))
+
+	def test_an_update_for_another_company_does_not_reach_them(self):
+		other = frappe.db.get_value("Company", {"name": ["!=", self.company]}, "name")
+		if not other:
+			self.skipTest("needs a second company")
+		doc = _announcement([{"audience_type": "Company", "company": other}])
+		self.assertFalse(set(ann.resolve_audience(doc.audience)) & set(USERS))
+		for user in USERS:
+			self.assertNotIn(doc.name, ann.visible_names(user))
+
+	def test_a_company_row_must_name_the_company(self):
+		with self.assertRaises(frappe.ValidationError):
+			_announcement([{"audience_type": "Company"}])
+
+	def test_a_company_row_reads_as_its_company_in_the_audience_line(self):
+		doc = _announcement([{"audience_type": "Company", "company": self.company}, {"audience_type": "Role", "role": ROLE_A}])
+		line = ann._audience_labels([doc.name], ann._audience_rows([doc.name]))[doc.name]
+		self.assertEqual(line, f"{self.company} company, {ROLE_A}")
+
+	def test_nothing_reads_the_company_column_before_the_migrate_that_adds_it(self):
+		doc = _announcement([{"audience_type": "Role", "role": ROLE_A}])
+		with patch.object(ann, "_has_company_audience", return_value=False):
+			self.assertIn(doc.name, ann.visible_names(USER_A))
+			rows = ann._audience_rows([doc.name])
+			self.assertNotIn("company", rows[doc.name][0])
 
 	def test_a_draft_a_scheduled_and_an_expired_update_are_not_seen(self):
 		rows = [{"audience_type": "Everyone"}]

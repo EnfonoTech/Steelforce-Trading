@@ -266,6 +266,7 @@ frappe.ui.form.on("SF Announcement Audience", {
 	department: (frm) => frm.trigger("preview_audience"),
 	include_sub_departments: (frm) => frm.trigger("preview_audience"),
 	branch: (frm) => frm.trigger("preview_audience"),
+	company: (frm) => frm.trigger("preview_audience"),
 	user: (frm) => frm.trigger("preview_audience"),
 });
 
@@ -301,6 +302,7 @@ function sf_ann_row_label(row) {
 			Role: row.role,
 			Department: row.department ? __("{0} department", [row.department]) : "",
 			Branch: row.branch ? __("{0} branch", [row.branch]) : "",
+			Company: row.company ? __("{0} company", [row.company]) : "",
 			User: row.user,
 		}[row.audience_type] || ""
 	);
@@ -313,6 +315,7 @@ function sf_ann_rows(frm) {
 		department: row.department,
 		include_sub_departments: row.include_sub_departments,
 		branch: row.branch,
+		company: row.company,
 		user: row.user,
 	}));
 }

@@ -10,6 +10,7 @@
   "department",
   "include_sub_departments",
   "branch",
+  "company",
   "user"
  ],
  "fields": [
@@ -19,7 +20,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Who",
-   "options": "Everyone\nRole\nDepartment\nBranch\nUser",
+   "options": "Everyone\nRole\nDepartment\nBranch\nCompany\nUser",
    "reqd": 1,
    "columns": 2
   },
@@ -43,7 +44,7 @@
    "label": "Department",
    "mandatory_depends_on": "eval:doc.audience_type=='Department'",
    "options": "Department",
-   "columns": 2
+   "columns": 1
   },
   {
    "default": "1",
@@ -67,6 +68,17 @@
    "columns": 1
   },
   {
+   "depends_on": "eval:doc.audience_type=='Company'",
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "in_list_view": 1,
+   "label": "Company",
+   "mandatory_depends_on": "eval:doc.audience_type=='Company'",
+   "options": "Company",
+   "columns": 2
+  },
+  {
    "depends_on": "eval:doc.audience_type=='User'",
    "fieldname": "user",
    "fieldtype": "Link",
@@ -75,13 +87,13 @@
    "label": "Person",
    "mandatory_depends_on": "eval:doc.audience_type=='User'",
    "options": "User",
-   "columns": 2
+   "columns": 1
   }
  ],
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2026-10-29 00:00:00.000000",
+ "modified": "2026-10-29 22:45:00.000000",
  "modified_by": "Administrator",
  "module": "Sf Trading",
  "name": "SF Announcement Audience",
