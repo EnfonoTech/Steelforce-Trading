@@ -27,6 +27,10 @@ app_license = "mit"
 # include js, css files in header of desk.html
 # app_include_css = "/assets/sf_trading/css/sf_trading.css"
 from sf_trading import __version__ as _v
+app_include_css = [
+	# the Updates Hub page, the navbar megaphone and the must-read pop-up -- see announcements.py
+	f"/assets/sf_trading/css/announcements.css?{_v}",
+]
 app_include_js = [
 	# ── Multi-doctype: selling (Sales Invoice, Sales Order, Quotation, Delivery Note) ──
 	# what a selling form asks about a customer when it is picked, in one call shared by every handler
@@ -76,6 +80,8 @@ app_include_js = [
 	f"/assets/sf_trading/js/mis_profit_loss.js?{_v}",
 	# account links on Trial Balance / Balance Sheet / P&L stay clickable while searching a column
 	f"/assets/sf_trading/js/financial_statements_search_links.js?{_v}",
+	# the navbar megaphone, the must-read pop-up and the shared card renderer of the Updates Hub page
+	f"/assets/sf_trading/js/announcements.js?{_v}",
 ]
 
 # doctype_js: loaded only when that specific doctype form opens
@@ -102,6 +108,8 @@ doctype_js = {
 		"public/js/cash_due_date.js",
 	],
 	"Stock Entry":      "public/js/stock_entry.js",
+	# Actions -> Announce this report: a new Updates Hub post aimed at the roles that may run the report
+	"Report":           "public/js/report_announce.js",
 	# Item Code and Item Name are typed in capitals on the form -- the server enforces it, see item_case.py
 	"Item":             [
 		"public/js/item_uppercase.js",
@@ -384,6 +392,8 @@ after_migrate = [
 	"sf_trading.party_rules.setup",
 	# the physical stock count, system stock and variance on a Purchase Order row
 	"sf_trading.po_stock_count.ensure_custom_fields",
+	# the Updates Hub workspace -- see announcements.py
+	"sf_trading.announcements.setup",
 ]
 
 after_install = [
@@ -448,6 +458,8 @@ boot_session = [
 	"sf_trading.report_numbering.boot_numbers",
 	# whether account links stay clickable while a financial report column is searched
 	"sf_trading.financial_statements_search_links.boot_session",
+	# how many updates wait for the person, so the navbar megaphone shows its badge with no extra request
+	"sf_trading.announcements.boot_session",
 ]
 
 # DocType Class
@@ -1170,7 +1182,7 @@ before_job = [
 fixtures = [
 	{
 		"doctype": "Role",
-		"filters": [["name", "in", ("B2B Creator", "Ticket Manager",
+		"filters": [["name", "in", ("B2B Creator", "Ticket Manager", "Announcement Manager",
 			# the approvers of the Customer / Supplier / Item approval -- see master_approval.py
 			"Customer Approver", "Supplier Approver", "Item Master Approver")]],
 	},
@@ -1575,10 +1587,14 @@ scheduler_events = {
 		"sf_trading.document_expiry.check_expiring_documents",
 		# a ticket that stayed Resolved for the wait closes by itself -- see ticket.py
 		"sf_trading.ticket.close_resolved_tickets",
+		# only today's "shown the motivation card" row is ever read; older ones are dropped -- see motivation.py
+		"sf_trading.motivation.prune_seen",
 	],
 	# every tick: each Payment Automation Settings row names its own weekday + time,
 	# and the engine fences itself with last_execution
 	"all": [
 		"sf_trading.api.payment_automation.run_due_automations",
+		# a scheduled announcement goes out when its time comes; a published one leaves the feed at "Hide After"
+		"sf_trading.announcements.run_schedule",
 	],
 }

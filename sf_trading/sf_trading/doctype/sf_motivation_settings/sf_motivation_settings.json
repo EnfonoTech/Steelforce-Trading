@@ -1,0 +1,73 @@
+{
+ "actions": [],
+ "creation": "2026-10-29 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enabled",
+  "rotation",
+  "column_break_main",
+  "card_title",
+  "show_in_hub"
+ ],
+ "fields": [
+  {
+   "default": "1",
+   "description": "When on, each person sees one motivation card the first time they open the desk each day.",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "label": "Show a Daily Motivation"
+  },
+  {
+   "default": "In order",
+   "description": "In order: one after another, one a day. Random: a different one each day, the same for everyone that day. A message with a \"Show On\" date always wins on its day.",
+   "fieldname": "rotation",
+   "fieldtype": "Select",
+   "label": "Choose the Day's Message",
+   "options": "In order\nRandom"
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Thought for today",
+   "description": "The small heading on the card.",
+   "fieldname": "card_title",
+   "fieldtype": "Data",
+   "label": "Card Heading"
+  },
+  {
+   "default": "1",
+   "description": "Keep today's message at the top of My Updates all day.",
+   "fieldname": "show_in_hub",
+   "fieldtype": "Check",
+   "label": "Also Show on My Updates"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-10-29 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "SF Motivation Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "read": 1,
+   "role": "System Manager",
+   "write": 1
+  },
+  {
+   "create": 1,
+   "read": 1,
+   "role": "Announcement Manager",
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

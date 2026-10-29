@@ -1,0 +1,296 @@
+{
+ "actions": [],
+ "autoname": "format:ANN-{YYYY}-{####}",
+ "creation": "2026-10-29 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_message",
+  "title",
+  "kind",
+  "priority",
+  "column_break_main",
+  "status",
+  "pinned",
+  "require_ack",
+  "summary",
+  "details",
+  "section_open",
+  "link_type",
+  "link_report",
+  "link_doctype",
+  "link_url",
+  "link_label",
+  "section_audience",
+  "audience_help",
+  "audience",
+  "audience_preview",
+  "section_when",
+  "publish_on",
+  "column_break_when",
+  "expires_on",
+  "section_reach",
+  "reach_html",
+  "section_tracking",
+  "published_on",
+  "published_by",
+  "column_break_tracking",
+  "notified_on",
+  "last_reminded_on"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_message",
+   "fieldtype": "Section Break",
+   "label": "What do you want to tell people?"
+  },
+  {
+   "fieldname": "title",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Title",
+   "reqd": 1,
+   "description": "A short headline in simple English. Example: New report: Customers who stopped buying."
+  },
+  {
+   "default": "Announcement",
+   "fieldname": "kind",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Type",
+   "options": "Announcement\nNew Feature\nRule or Policy\nReport\nMaintenance",
+   "reqd": 1
+  },
+  {
+   "default": "Normal",
+   "fieldname": "priority",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "How Important",
+   "options": "Normal\nImportant\nUrgent",
+   "description": "Urgent shows a pop-up to every person until they close it."
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Draft",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "no_copy": 1,
+   "options": "Draft\nScheduled\nPublished\nExpired\nArchived",
+   "read_only": 1,
+   "search_index": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "pinned",
+   "fieldtype": "Check",
+   "label": "Keep at the Top"
+  },
+  {
+   "default": "0",
+   "description": "Each person must tick \"I have read and understood\". Use this for new rules.",
+   "fieldname": "require_ack",
+   "fieldtype": "Check",
+   "label": "People Must Confirm They Read It"
+  },
+  {
+   "description": "One or two short lines. This is what people see on the card.",
+   "fieldname": "summary",
+   "fieldtype": "Small Text",
+   "label": "Short Message",
+   "reqd": 1
+  },
+  {
+   "description": "Optional. The full message, steps, or examples.",
+   "fieldname": "details",
+   "fieldtype": "Text Editor",
+   "label": "Full Message"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_open",
+   "fieldtype": "Section Break",
+   "label": "What should people open? (optional)"
+  },
+  {
+   "fieldname": "link_type",
+   "fieldtype": "Select",
+   "label": "Opens a",
+   "options": "\nReport\nDocType\nPage or Web Address"
+  },
+  {
+   "depends_on": "eval:doc.link_type=='Report'",
+   "description": "People who are not allowed to open this report will not get the button.",
+   "fieldname": "link_report",
+   "fieldtype": "Link",
+   "label": "Report",
+   "mandatory_depends_on": "eval:doc.link_type=='Report'",
+   "options": "Report"
+  },
+  {
+   "depends_on": "eval:doc.link_type=='DocType'",
+   "fieldname": "link_doctype",
+   "fieldtype": "Link",
+   "label": "DocType",
+   "mandatory_depends_on": "eval:doc.link_type=='DocType'",
+   "options": "DocType"
+  },
+  {
+   "depends_on": "eval:doc.link_type=='Page or Web Address'",
+   "description": "An address inside the system (starts with /app/) or a full https:// address.",
+   "fieldname": "link_url",
+   "fieldtype": "Data",
+   "label": "Address",
+   "mandatory_depends_on": "eval:doc.link_type=='Page or Web Address'"
+  },
+  {
+   "default": "Open",
+   "depends_on": "eval:doc.link_type",
+   "fieldname": "link_label",
+   "fieldtype": "Data",
+   "label": "Button Text"
+  },
+  {
+   "fieldname": "section_audience",
+   "fieldtype": "Section Break",
+   "label": "Who should see it?"
+  },
+  {
+   "fieldname": "audience_help",
+   "fieldtype": "HTML",
+   "options": "<p class=\"text-muted\">Add one line for each group. A person who is in <b>any</b> line will see this update. Use <b>Everyone</b> for all staff, or pick a role, a department, a branch, or one person.</p>"
+  },
+  {
+   "fieldname": "audience",
+   "fieldtype": "Table",
+   "label": "Audience",
+   "options": "SF Announcement Audience"
+  },
+  {
+   "fieldname": "audience_preview",
+   "fieldtype": "HTML",
+   "label": "Who This Reaches"
+  },
+  {
+   "fieldname": "section_when",
+   "fieldtype": "Section Break",
+   "label": "When"
+  },
+  {
+   "description": "Leave empty to publish as soon as you press Publish. A time in the future schedules it.",
+   "fieldname": "publish_on",
+   "fieldtype": "Datetime",
+   "label": "Publish At"
+  },
+  {
+   "fieldname": "column_break_when",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "After this time the update leaves everyone's feed. Leave empty to keep it.",
+   "fieldname": "expires_on",
+   "fieldtype": "Datetime",
+   "label": "Hide After"
+  },
+  {
+   "fieldname": "section_reach",
+   "fieldtype": "Section Break",
+   "label": "Who has read it"
+  },
+  {
+   "fieldname": "reach_html",
+   "fieldtype": "HTML",
+   "label": "Reach"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_tracking",
+   "fieldtype": "Section Break",
+   "label": "Tracking"
+  },
+  {
+   "fieldname": "published_on",
+   "fieldtype": "Datetime",
+   "label": "Published On",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "fieldname": "published_by",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "label": "Published By",
+   "no_copy": 1,
+   "options": "User",
+   "read_only": 1
+  },
+  {
+   "fieldname": "column_break_tracking",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "When the bell notifications went out.",
+   "fieldname": "notified_on",
+   "fieldtype": "Datetime",
+   "label": "Notified On",
+   "no_copy": 1,
+   "read_only": 1
+  },
+  {
+   "description": "A reminder to people who have not read it goes out at most once every 4 hours.",
+   "fieldname": "last_reminded_on",
+   "fieldtype": "Datetime",
+   "label": "Last Reminder",
+   "no_copy": 1,
+   "read_only": 1
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-29 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "SF Announcement",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Announcement Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "search_fields": "title,kind,status",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "title",
+ "track_changes": 1
+}

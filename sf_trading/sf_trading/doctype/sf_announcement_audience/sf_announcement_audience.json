@@ -1,0 +1,93 @@
+{
+ "actions": [],
+ "creation": "2026-10-29 00:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "audience_type",
+  "role",
+  "department",
+  "include_sub_departments",
+  "branch",
+  "user"
+ ],
+ "fields": [
+  {
+   "default": "Everyone",
+   "fieldname": "audience_type",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Who",
+   "options": "Everyone\nRole\nDepartment\nBranch\nUser",
+   "reqd": 1,
+   "columns": 2
+  },
+  {
+   "depends_on": "eval:doc.audience_type=='Role'",
+   "fieldname": "role",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "in_list_view": 1,
+   "label": "Role",
+   "mandatory_depends_on": "eval:doc.audience_type=='Role'",
+   "options": "Role",
+   "columns": 2
+  },
+  {
+   "depends_on": "eval:doc.audience_type=='Department'",
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "in_list_view": 1,
+   "label": "Department",
+   "mandatory_depends_on": "eval:doc.audience_type=='Department'",
+   "options": "Department",
+   "columns": 2
+  },
+  {
+   "default": "1",
+   "depends_on": "eval:doc.audience_type=='Department'",
+   "description": "Also the departments below this one",
+   "fieldname": "include_sub_departments",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "label": "With Sub-departments",
+   "columns": 1
+  },
+  {
+   "depends_on": "eval:doc.audience_type=='Branch'",
+   "fieldname": "branch",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "in_list_view": 1,
+   "label": "Branch",
+   "mandatory_depends_on": "eval:doc.audience_type=='Branch'",
+   "options": "Branch",
+   "columns": 1
+  },
+  {
+   "depends_on": "eval:doc.audience_type=='User'",
+   "fieldname": "user",
+   "fieldtype": "Link",
+   "ignore_user_permissions": 1,
+   "in_list_view": 1,
+   "label": "Person",
+   "mandatory_depends_on": "eval:doc.audience_type=='User'",
+   "options": "User",
+   "columns": 2
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-10-29 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "SF Announcement Audience",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": []
+}
