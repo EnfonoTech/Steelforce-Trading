@@ -68,6 +68,10 @@ class TestMotivation(FrappeTestCase):
 		_make_user(MANAGER, ann.MANAGER_ROLE)
 
 	def setUp(self):
+		# nothing in a test may commit, so a real site's data always rolls back
+		patcher = patch.object(frappe.db, "commit")
+		patcher.start()
+		self.addCleanup(patcher.stop)
 		# inside this class's transaction: nothing real is lost, and nothing real leaks into the test
 		frappe.db.delete(ann.AUDIENCE, {"parenttype": mot.DOCTYPE})
 		frappe.db.delete(mot.DOCTYPE)

@@ -112,6 +112,20 @@ class TestAnnouncements(FrappeTestCase):
 		_make_employee(USER_A, company, department=child.name, branch="Ann Test Branch")
 		_make_employee(USER_B, company, department=parent.name)
 
+	def setUp(self):
+		# Nothing in a test may commit (notify_audience commits every 50 people, and "Everyone" on a real
+		# site is more than 50, which would keep the test data) and nothing may ring a real person's
+		# screen with a live push. Both are switched off for the test.
+		for patcher in (patch.object(frappe.db, "commit"), patch.object(frappe, "publish_realtime")):
+			patcher.start()
+			self.addCleanup(patcher.stop)
+		# an empty feed inside this class's transaction: nothing real is lost, and neither real updates nor
+		# those an earlier test left change what this one sees
+		frappe.db.delete("Notification Log", {"document_type": ann.DOCTYPE})
+		frappe.db.delete(ann.READ_LOG)
+		frappe.db.delete(ann.AUDIENCE, {"parenttype": ann.DOCTYPE})
+		frappe.db.delete(ann.DOCTYPE)
+
 	def tearDown(self):
 		frappe.set_user("Administrator")
 
