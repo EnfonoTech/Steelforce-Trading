@@ -153,10 +153,9 @@
 		return `
 			<article class="sf-card sf-k-${k.cls}${live && item.priority === "Urgent" ? " sf-p-urgent" : ""}${unread ? " is-unread" : ""}${opts.expanded ? " is-open" : ""}${!live && !opts.posts ? " is-off" : ""}"
 				data-name="${esc(item.name)}" data-link="${esc(link ? JSON.stringify(link) : "")}">
-				<div class="sf-card-ico">${svg(k.icon)}</div>
+				<div class="sf-card-rail"><span>${esc(live && item.priority === "Urgent" ? __("Urgent") : k.label)}</span></div>
 				<div class="sf-card-main">
 					<div class="sf-card-top">
-						<span class="sf-chip">${esc(k.label)}</span>
 						${badges.join("")}
 						${unread ? '<span class="sf-dot" title="' + esc(__("New")) + '"></span>' : ""}
 						<span class="sf-card-time" title="${esc(item.published_on || "")}">${esc(when(item.published_on))}</span>
@@ -414,7 +413,7 @@
 			const link = item.link;
 			const ack = item.require_ack && !item.acknowledged;
 			$back.html(`
-				<div class="sf-pop sf-k-${k.cls}">
+				<div class="sf-pop sf-k-${k.cls}${item.priority === "Urgent" ? " sf-p-urgent" : ""}">
 					<div class="sf-pop-head">
 						<div class="sf-card-ico">${svg(k.icon)}</div>
 						<div>
@@ -484,10 +483,10 @@
 		const hub_label = waiting ? __("See what's new ({0})", [waiting]) : __("Open My Updates");
 		const $card = $(`
 			<aside class="sf-mot" role="status" aria-live="polite">
-				<button type="button" class="sf-mot-x" aria-label="${esc(__("Close"))}">&times;</button>
 				<div class="sf-mot-sun">${svg("sun")}</div>
 				<div class="sf-mot-body">
-					<div class="sf-mot-kicker">${esc(greeting + (name ? ", " + name : ""))} &middot; ${esc(m.title || __("Thought for today"))}</div>
+					<button type="button" class="sf-mot-x" aria-label="${esc(__("Close"))}">&times;</button>
+					<div class="sf-mot-kicker"><span>${esc(greeting + (name ? ", " + name : ""))}</span><span>${esc(m.title || __("Thought for today"))}</span></div>
 					<blockquote class="sf-mot-text">${esc(m.message)}</blockquote>
 					${m.author ? `<div class="sf-mot-author">${esc(m.author)}</div>` : ""}
 					<div class="sf-mot-actions">
@@ -495,12 +494,21 @@
 						<button type="button" class="sf-btn sf-mot-hub">${svg("megaphone")} ${esc(hub_label)}</button>
 					</div>
 				</div>
+				<div class="sf-mot-timer"><i></i></div>
 			</aside>`).appendTo("body");
 
+		let timer = null;
 		const close = () => {
+			clearTimeout(timer);
 			$card.addClass("is-leaving");
-			setTimeout(() => $card.remove(), 260);
+			setTimeout(() => $card.remove(), 340);
 		};
+		// it leaves by itself after the bar has drained; the pointer on the card holds it, and a short grace follows
+		timer = setTimeout(close, 22500);
+		$card.on("mouseenter", () => clearTimeout(timer)).on("mouseleave", () => {
+			clearTimeout(timer);
+			timer = setTimeout(close, 4000);
+		});
 		$card.find(".sf-mot-x, .sf-mot-go").on("click", close);
 		$card.find(".sf-mot-hub").on("click", () => {
 			close();

@@ -65,11 +65,12 @@ class SfUpdatesHub {
 			<div class="sf-hub">
 				<section class="sf-hero">
 					<div>
+						<div class="sf-hero-eyebrow"></div>
 						<h2 class="sf-hero-title"></h2>
 						<p class="sf-hero-sub"></p>
 						<div class="sf-hero-quote" hidden></div>
 					</div>
-					<div class="sf-hero-art">${A.svg("megaphone")}</div>
+					<div class="sf-hero-stamp"><strong>0</strong>${A.esc(__("new for you"))}</div>
 				</section>
 
 				<section class="sf-tiles">
@@ -77,8 +78,9 @@ class SfUpdatesHub {
 						.map(
 							(t) => `
 						<button class="sf-tile sf-k-${t.cls}" data-tile="${t.key}" data-view="${t.view || ""}">
-							<span class="sf-tile-ico">${A.svg(t.icon)}</span>
-							<span><div class="sf-tile-num">0</div><div class="sf-tile-label">${A.esc(t.label)}</div></span>
+							<span class="sf-tile-label">${A.svg(t.icon)} ${A.esc(t.label)}</span>
+							<span class="sf-tile-num">0</span>
+							<span class="sf-tile-tick"><i></i></span>
 						</button>`
 						)
 						.join("")}
@@ -271,8 +273,17 @@ class SfUpdatesHub {
 			: c.unread
 			? __("{0} new for you. Everything that concerns you is here.", [c.unread])
 			: __("You are all caught up. New rules, reports and notices will show up here.");
-		this.$root.find(".sf-hero-title").text(`${greeting}${name ? ", " + name : ""}`);
+		const $title = this.$root.find(".sf-hero-title").text(name ? `${greeting}, ` : greeting);
+		if (name) $title.append($("<em>").text(name));
 		this.$root.find(".sf-hero-sub").text(sub);
+		this.$root.find(".sf-hero-stamp strong").text(c.unread || 0);
+		let today = "";
+		try {
+			today = new Date().toLocaleDateString(frappe.boot.lang || undefined, { weekday: "long", day: "numeric", month: "long" });
+		} catch (e) {
+			today = new Date().toDateString();
+		}
+		this.$root.find(".sf-hero-eyebrow").text(today.replace(/,\s*/, " \u00b7 "));
 	}
 
 	// today's motivation, kept at the top of the page all day (a manager can switch this off in the settings)
@@ -296,6 +307,12 @@ class SfUpdatesHub {
 		this.$root.find("[data-tile=urgent]").toggleClass("is-hot", !!c.urgent);
 		this.$root.find("[data-tile=need_ack]").toggleClass("is-hot", !!c.need_ack);
 		this.$root.find("[data-tile=reports] .sf-tile-num").text(this.report_total || 0);
+		// the ticked meter under each number: a few ticks for a few updates, full for the report count
+		const fill = (key, width) => this.$root.find(`[data-tile=${key}] .sf-tile-tick i`).css("width", `${Math.min(100, width)}%`);
+		fill("unread", (c.unread || 0) * 28);
+		fill("need_ack", (c.need_ack || 0) * 28);
+		fill("urgent", (c.urgent || 0) * 28);
+		fill("reports", this.report_total ? 100 : 0);
 		this.paint_hero();
 	}
 
