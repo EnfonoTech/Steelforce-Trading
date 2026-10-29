@@ -99,14 +99,22 @@ Only if all three are empty does the row's insert fail (caught by the try/except
 not raised) into the error log for staff to finish by hand -- create/assign a Location, then raise
 the Asset themselves.
 
-**Asset Category, a separate and much lower-stakes lookup.** Not mandatory on core Asset --
-nothing refuses to create the record without one. It exists purely so core's own Asset
-value-history widget (asset.js, `get_manual_depreciation_entries`) can find a Fixed Asset Account
-to draw its chart against; without one, that unrelated client-side call throws on an otherwise-
-successful save/submit (confirmed live, 2026-09-29: "Please set Fixed Asset Account in Asset
-Category None"). `_resolve_asset_category` tries the Item's own `asset_category` first, then the
-same per-Company Asset Tracking Defaults row Location uses -- finding neither simply leaves the
-Asset without a category, never blocks creation.
+**No Asset Category.** A tracking Asset is not capitalized, so it has no Fixed Asset Account to
+look up and is not given a category to hold one. Core Asset assumed every Asset has one: its form
+asks `get_manual_depreciation_entries` for the value chart of every submitted Asset without a
+depreciation schedule, and its cancel, submit and daily CWIP posting read the category's accounts
+too, so a category-less Asset threw "Please set Fixed Asset Account in Asset Category None" each time
+a submitted tracking Asset was opened (confirmed live, 2026-09-29 and again on UAT 2026-10-29,
+ACC-ASS-2026-00050 and -00054). That was once covered up by stamping a default category on the Asset;
+that is no longer done (`_resolve_asset_category` keeps only the Item's own category, if it has
+one). The real fix is in `overrides/asset_class.py`: for an Asset stamped with `custom_source_row`
+those four core methods do nothing and every other Asset runs core unchanged.
+
+**Traceability.** `get_tracking_assets` (whitelisted, read by `public/js/asset_tracking_links.js`)
+answers "which tracking Assets came from this Purchase Invoice / Purchase Receipt", for an Asset
+raised from the document itself or from the row on the other side of a receipt <-> invoice pair, and
+the form paints them as their own "Asset Tracking" section, apart from the capitalized Asset
+connection core shows.
 """
 
 import frappe
@@ -267,19 +275,14 @@ def _resolve_location(row, company):
 
 
 def _resolve_asset_category(item_code, company):
-	"""The Item's own Asset Category, or the Company's configured default, or blank.
+	"""The Item's own Asset Category, or blank.
 
-	Unlike Location, this is never mandatory -- see module docstring. Only exists so core's own
-	Asset value-history widget can find a Fixed Asset Account to draw its chart against; finding
-	nothing here just leaves the Asset without a category, exactly as before this function
-	existed.
+	Never mandatory and never invented -- see module docstring. The per-Company default category
+	(SF Trading Settings > Asset Tracking Defaults) is no longer stamped on a tracking Asset: it only
+	ever stood in for a Fixed Asset Account the Asset must not have, and `overrides/asset_class.py`
+	no longer asks for one.
 	"""
-	own = frappe.db.get_value("Item", item_code, "asset_category")
-	if own:
-		return own
-
-	defaults = _company_defaults(company)
-	return defaults.get("default_asset_category") if defaults else None
+	return frappe.db.get_value("Item", item_code, "asset_category") or None
 
 
 def _company_defaults(company):
@@ -292,6 +295,63 @@ def _company_defaults(company):
 		if row.company == company:
 			return row
 	return None
+
+
+SOURCE_DOCTYPES = {
+	"Purchase Invoice": ("Purchase Invoice Item", "pr_detail"),
+	"Purchase Receipt": ("Purchase Receipt Item", "purchase_invoice_item"),
+}
+
+
+@frappe.whitelist()
+def get_tracking_assets(doctype: str, docname: str) -> list[dict]:
+	"""The tracking Assets that came from this Purchase Invoice / Purchase Receipt.
+
+	An Asset belongs here when it was raised from this document (`custom_source_purchase_invoice`, or
+	the core `purchase_receipt` field), or from the row on the other side of a receipt <-> invoice pair
+	that one of this document's rows bills or was billed by -- the same row matching `_already_tracked`
+	uses, so an invoice that bills a tracked receipt line still answers "where is it". Only Assets
+	stamped with `custom_source_row` count: a capitalized Fixed Asset is core's own connection, not
+	this one. `source` says which document actually raised it.
+	"""
+	if doctype not in SOURCE_DOCTYPES:
+		frappe.throw(_("Tracking Assets are raised from a Purchase Invoice or a Purchase Receipt."))
+	frappe.has_permission(doctype, "read", docname, throw=True)
+
+	item_doctype, other_side = SOURCE_DOCTYPES[doctype]
+	row_names = set()
+	for row in frappe.get_all(item_doctype, filters={"parent": docname}, fields=["name", other_side]):
+		row_names.add(row.name)
+		if row.get(other_side):
+			row_names.add(row.get(other_side))
+
+	own_link = SOURCE_PI_FIELD if doctype == "Purchase Invoice" else "purchase_receipt"
+	assets = frappe.get_list(
+		"Asset",
+		filters={SOURCE_ROW_FIELD: ["is", "set"]},
+		or_filters=[[SOURCE_ROW_FIELD, "in", list(row_names) or [""]], [own_link, "=", docname]],
+		fields=[
+			"name", "asset_name", "item_code", "item_name", "location", "custodian", "status",
+			"docstatus", "purchase_receipt", SOURCE_PI_FIELD,
+		],
+		order_by="creation asc",
+		limit_page_length=0,
+	)
+
+	custodians = {}
+	names = {a.custodian for a in assets if a.custodian}
+	if names:
+		custodians = dict(frappe.get_all("Employee", filters={"name": ["in", list(names)]},
+			fields=["name", "employee_name"], as_list=True))
+
+	for asset in assets:
+		asset["custodian_name"] = custodians.get(asset.custodian)
+		asset["source_doctype"], asset["source"] = (
+			("Purchase Invoice", asset.get(SOURCE_PI_FIELD))
+			if asset.get(SOURCE_PI_FIELD)
+			else ("Purchase Receipt", asset.get("purchase_receipt"))
+		)
+	return assets
 
 
 @frappe.whitelist()

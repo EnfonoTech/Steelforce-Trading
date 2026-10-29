@@ -245,3 +245,50 @@ class TestAssetTrackingItem(FrappeTestCase):
 		# idempotent: running it again must not duplicate
 		backfill_tracking_assets(item_code=late_item)
 		self.assertEqual(len(self.tracking_assets(pi)), 1)
+
+	def test_a_submitted_tracking_asset_opens_cancels_and_posts_no_gl(self):
+		"""The "Please set Fixed Asset Account in Asset Category None" fix (2026-10-29).
+
+		A submitted tracking Asset has no category and no Fixed Asset Account, and must not need
+		either: the form's value chart (get_manual_depreciation_entries), submit, and cancel all went
+		looking for that account in core. Nothing here may throw, and the Asset books no GL."""
+		pi = self.make_invoice(self.tracked_item, asset_location=self.location)
+		asset = frappe.get_doc("Asset", self.tracking_assets(pi)[0].name)
+		self.assertFalse(asset.asset_category, "no category is stamped on a tracking Asset")
+
+		asset.submit()
+		asset.reload()
+		self.assertEqual(asset.get_manual_depreciation_entries(), [], "the form's chart call")
+		self.assertFalse(
+			frappe.db.exists("GL Entry", {"voucher_type": "Asset", "voucher_no": asset.name}),
+			"a tracking Asset must book no GL of its own",
+		)
+
+		asset.cancel()  # core's delete_depreciation_entries read the account too
+		self.assertEqual(asset.docstatus, 2)
+
+	def test_a_capitalized_asset_still_needs_its_fixed_asset_account(self):
+		"""Regression: the override answers only a tracking Asset. Any other Asset with no category
+		still gets core's own refusal."""
+		asset = frappe.get_doc({"doctype": "Asset", "company": self.company})
+		with self.assertRaises(frappe.ValidationError):
+			asset.get_manual_depreciation_entries()
+
+	def test_the_purchase_invoice_lists_its_tracking_assets(self):
+		from sf_trading.asset_tracking_item import get_tracking_assets
+
+		pi = self.make_invoice(self.tracked_item, asset_location=self.location)
+		listed = get_tracking_assets("Purchase Invoice", pi.name)
+		self.assertEqual(len(listed), 1)
+		self.assertEqual(listed[0].name, self.tracking_assets(pi)[0].name)
+		self.assertEqual(listed[0].source, pi.name)
+		self.assertEqual(listed[0].location, self.location)
+
+		other = self.make_invoice(self.plain_item, asset_location=self.location)
+		self.assertEqual(get_tracking_assets("Purchase Invoice", other.name), [])
+
+	def test_only_a_purchase_document_can_be_asked(self):
+		from sf_trading.asset_tracking_item import get_tracking_assets
+
+		with self.assertRaises(frappe.ValidationError):
+			get_tracking_assets("Sales Invoice", "X")

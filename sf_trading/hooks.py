@@ -183,6 +183,8 @@ doctype_js = {
 		"public/js/supplier_quick_edit.js",
 		# a popup when the customer / supplier picked on a new voucher would be refused -- see party_alert.py
 		"public/js/party_gate_alert.js",
+		# the tracking Assets this receipt raised, as their own Asset Tracking section
+		"public/js/asset_tracking_links.js",
 	],
 	"Landed Cost Voucher": "public/js/landed_cost.js",
 	# Payment Advice sits in the Create menu beside Payment Request, under the same conditions
@@ -219,7 +221,11 @@ doctype_js = {
 		"public/js/party_gate_alert.js",
 		# the Return Reason Template picker on a debit note, as on a sales return
 		"public/js/sales_return_reason.js",
+		# the tracking Assets this invoice raised, as their own Asset Tracking section
+		"public/js/asset_tracking_links.js",
 	],
+	# a tracking-only Asset (asset_tracking_item.py) offers no capitalization actions
+	"Asset": "public/js/asset_tracking_links.js",
 	# cancelling a payment must not demand the advice behind it be cancelled as well;
 	# and a cleared post-dated cheque is banked from the cheque's own entry
 	"Payment Entry":      [
