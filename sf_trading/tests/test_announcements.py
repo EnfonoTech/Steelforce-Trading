@@ -48,6 +48,8 @@ def _make_employee(user, company, department=None, branch=None):
 		{
 			"doctype": "Employee",
 			"first_name": user.split("@")[0],
+			# sft-uat's Employee form also requires a number (hr_suite)
+			"employee_number": "T-" + user.split("@")[0],
 			"gender": "Male",
 			"date_of_birth": "1990-01-01",
 			"date_of_joining": "2020-01-01",
