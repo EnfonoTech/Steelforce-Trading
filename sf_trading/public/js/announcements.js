@@ -35,6 +35,7 @@
 		inbox: '<path d="M3 13l3-8h12l3 8"/><path d="M3 13v6a1 1 0 0 0 1 1h16a1 1 0 0 0 1-1v-6h-5l-1 2h-6l-1-2z"/>',
 		clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
 		alert: '<path d="M12 4l9 16H3z"/><path d="M12 10v4"/><path d="M12 17.5v.01"/>',
+		sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"/>',
 	};
 	const svg = (name) => `<svg class="sf-ico" viewBox="0 0 24 24" aria-hidden="true">${ICONS[name] || ""}</svg>`;
 
@@ -468,6 +469,44 @@
 		});
 	}
 
+	// ── The daily motivation card ──────────────────────────────────────────────────────
+	// A soft card at the top of the screen, once a day, on the first desk load. It never blocks the
+	// work: a must-read pop-up can open over it, and the cross or "Let's go" closes it. The server
+	// is told it was shown the moment it appears, so a reload before closing it does not bring it back.
+	function show_motivation(m, opts = {}) {
+		if (!m || !m.message) return;
+		$(".sf-mot").remove();
+		const hour = new Date().getHours();
+		const greeting = hour < 12 ? __("Good morning") : hour < 17 ? __("Good afternoon") : __("Good evening");
+		const name = (frappe.boot.user && frappe.boot.user.first_name) || frappe.session.user_fullname || "";
+		const $card = $(`
+			<aside class="sf-mot" role="status" aria-live="polite">
+				<button type="button" class="sf-mot-x" aria-label="${esc(__("Close"))}">&times;</button>
+				<div class="sf-mot-sun">${svg("sun")}</div>
+				<div class="sf-mot-body">
+					<div class="sf-mot-kicker">${esc(greeting + (name ? ", " + name : ""))} &middot; ${esc(m.title || __("Thought for today"))}</div>
+					<blockquote class="sf-mot-text">${esc(m.message)}</blockquote>
+					${m.author ? `<div class="sf-mot-author">${esc(m.author)}</div>` : ""}
+					<button type="button" class="sf-btn is-primary sf-mot-go">${esc(__("Let's go"))}</button>
+				</div>
+			</aside>`).appendTo("body");
+
+		const close = () => {
+			$card.addClass("is-leaving");
+			setTimeout(() => $card.remove(), 260);
+		};
+		$card.find(".sf-mot-x, .sf-mot-go").on("click", close);
+
+		if (!opts.preview) {
+			frappe.call({
+				method: "sf_trading.motivation.mark_motivation_seen",
+				args: { motivation: m.name },
+				silent: true,
+				error() {},
+			});
+		}
+	}
+
 	// ── A new update arrives while the desk is open ────────────────────────────────────
 	function on_live(message) {
 		call("get_summary").then((counts) => {
@@ -520,6 +559,8 @@
 		Object.assign(state.counts, boot);
 		wait_for_navbar(40);
 		frappe.realtime.on("sf_announcement", on_live);
+		// the boot payload carries today's motivation only until this person has been shown it
+		if (boot.motivation) setTimeout(() => show_motivation(boot.motivation), 900);
 		setTimeout(check_popup, 1800);
 		setInterval(poll, 120000);
 		document.addEventListener("visibilitychange", () => {
@@ -544,5 +585,6 @@
 		counts: () => state.counts,
 		reach_dialog,
 		reach_bars,
+		show_motivation,
 	};
 })();

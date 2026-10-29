@@ -62,6 +62,7 @@ class SfUpdatesHub {
 					<div>
 						<h2 class="sf-hero-title"></h2>
 						<p class="sf-hero-sub"></p>
+						<div class="sf-hero-quote" hidden></div>
 					</div>
 					<div class="sf-hero-art">${A.svg("megaphone")}</div>
 				</section>
@@ -181,6 +182,7 @@ class SfUpdatesHub {
 	show() {
 		const A = window.sf_ann;
 		A.call("get_summary").then((counts) => A.set_counts(counts));
+		A.call("get_motivation").then((m) => this.paint_quote(m));
 		this.load(true);
 		this.load_reports(this.$root.find("[data-region=reports] input").val());
 
@@ -233,6 +235,19 @@ class SfUpdatesHub {
 			: __("You are all caught up. New rules, reports and notices will show up here.");
 		this.$root.find(".sf-hero-title").text(`${greeting}${name ? ", " + name : ""}`);
 		this.$root.find(".sf-hero-sub").text(sub);
+	}
+
+	// today's motivation, kept at the top of the page all day (a manager can switch this off in the settings)
+	paint_quote(m) {
+		const A = window.sf_ann;
+		const $quote = this.$root.find(".sf-hero-quote");
+		if (!m || !m.message || !m.show_in_hub) {
+			$quote.prop("hidden", true).empty();
+			return;
+		}
+		$quote
+			.html(`${A.svg("sun")}<span>&ldquo;${A.esc(m.message)}&rdquo;${m.author ? ` <em>&mdash; ${A.esc(m.author)}</em>` : ""}</span>`)
+			.prop("hidden", false);
 	}
 
 	paint_tiles(counts) {

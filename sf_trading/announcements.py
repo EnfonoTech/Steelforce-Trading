@@ -153,12 +153,12 @@ def user_profile(user) -> frappe._dict:
 	)
 
 
-def visible_names(user=None) -> list:
-	"""The live updates meant for this person: published, not past `expires_on`, and an audience row that fits them."""
-	user = user or frappe.session.user
-	profile = user_profile(user)
-	announcement, audience = frappe.qb.DocType(DOCTYPE), frappe.qb.DocType(AUDIENCE)
+def audience_fits(audience, user, profile):
+	"""A query condition: this audience row (the query-builder table `audience`) is meant for this person.
 
+	One definition for everything that has an audience table -- the updates and the daily motivations --
+	so they cannot drift apart. `resolve_audience` is the same rule asked the other way round.
+	"""
 	fits = [
 		audience.audience_type == "Everyone",
 		(audience.audience_type == "User") & (audience.user == user),
@@ -175,6 +175,14 @@ def visible_names(user=None) -> list:
 		)
 	if profile.branches:
 		fits.append((audience.audience_type == "Branch") & audience.branch.isin(list(profile.branches)))
+	return reduce(or_, fits)
+
+
+def visible_names(user=None) -> list:
+	"""The live updates meant for this person: published, not past `expires_on`, and an audience row that fits them."""
+	user = user or frappe.session.user
+	profile = user_profile(user)
+	announcement, audience = frappe.qb.DocType(DOCTYPE), frappe.qb.DocType(AUDIENCE)
 
 	return (
 		frappe.qb.from_(announcement)
@@ -185,7 +193,7 @@ def visible_names(user=None) -> list:
 		.where(announcement.status == PUBLISHED)
 		.where(audience.parenttype == DOCTYPE)
 		.where(announcement.expires_on.isnull() | (announcement.expires_on > now_datetime()))
-		.where(reduce(or_, fits))
+		.where(audience_fits(audience, user, profile))
 	).run(pluck=True)
 
 
@@ -250,7 +258,7 @@ def validate_announcement(doc):
 			)
 		)
 	_check_link(doc)
-	_check_audience(doc)
+	check_audience(doc)
 	_check_times(doc)
 	if doc.status in (SCHEDULED, PUBLISHED) and not doc.get("audience"):
 		frappe.throw(_("Add who should see this update before it goes out."))
@@ -280,7 +288,8 @@ def _check_link(doc):
 		doc.link_label = _("Open")
 
 
-def _check_audience(doc):
+def check_audience(doc):
+	"""Every audience row names who it means, and keeps no value left over from an earlier choice."""
 	for row in doc.get("audience") or ():
 		field = AUDIENCE_FIELD.get(row.audience_type)
 		if field and not row.get(field):
@@ -971,6 +980,8 @@ SHORTCUTS = (
 	{"label": "Post an Announcement", "type": "DocType", "link_to": DOCTYPE, "doc_view": "New"},
 	{"label": "All Announcements", "type": "DocType", "link_to": DOCTYPE, "doc_view": "List"},
 	{"label": "Who Has Read What", "type": "DocType", "link_to": READ_LOG, "doc_view": "List"},
+	{"label": "Daily Motivation", "type": "DocType", "link_to": "SF Motivation", "doc_view": "List"},
+	{"label": "Motivation Settings", "type": "DocType", "link_to": "SF Motivation Settings"},
 )
 
 
@@ -1039,6 +1050,15 @@ def boot_session(bootinfo):
 			return
 		if frappe.db.get_value("User", user, "user_type") != "System User":
 			return
-		bootinfo.sf_announcements = {**summary(user), "can_post": is_manager(user), "page": PAGE}
+		bootinfo.sf_announcements = {**summary(user), "can_post": is_manager(user), "page": PAGE, "motivation": None}
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), "sf_trading announcements: boot payload failed")
+		return
+
+	# the first desk load of the day carries today's motivation; a failure here never costs the person their bell
+	try:
+		from sf_trading import motivation
+
+		bootinfo.sf_announcements["motivation"] = motivation.for_boot(user)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "sf_trading motivation: boot payload failed")

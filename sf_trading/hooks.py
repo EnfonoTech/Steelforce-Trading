@@ -1587,6 +1587,8 @@ scheduler_events = {
 		"sf_trading.document_expiry.check_expiring_documents",
 		# a ticket that stayed Resolved for the wait closes by itself -- see ticket.py
 		"sf_trading.ticket.close_resolved_tickets",
+		# only today's "shown the motivation card" row is ever read; older ones are dropped -- see motivation.py
+		"sf_trading.motivation.prune_seen",
 	],
 	# every tick: each Payment Automation Settings row names its own weekday + time,
 	# and the engine fences itself with last_execution

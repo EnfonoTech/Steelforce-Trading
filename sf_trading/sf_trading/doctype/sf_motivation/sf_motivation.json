@@ -1,0 +1,113 @@
+{
+ "actions": [],
+ "autoname": "format:MOT-{#####}",
+ "creation": "2026-10-29 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "section_message",
+  "message",
+  "author",
+  "column_break_main",
+  "enabled",
+  "show_on",
+  "section_audience",
+  "audience_help",
+  "audience"
+ ],
+ "fields": [
+  {
+   "fieldname": "section_message",
+   "fieldtype": "Section Break",
+   "label": "Message"
+  },
+  {
+   "description": "One or two short lines in simple English.",
+   "fieldname": "message",
+   "fieldtype": "Small Text",
+   "in_list_view": 1,
+   "label": "Message",
+   "reqd": 1
+  },
+  {
+   "description": "Optional. A name, or leave empty.",
+   "fieldname": "author",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Said By"
+  },
+  {
+   "fieldname": "column_break_main",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "1",
+   "fieldname": "enabled",
+   "fieldtype": "Check",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Show This Message"
+  },
+  {
+   "description": "Leave empty to join the daily rotation. Pick a date to show it only on that day; it then comes before the rotation.",
+   "fieldname": "show_on",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Show On"
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "section_audience",
+   "fieldtype": "Section Break",
+   "label": "Who should see it? (optional)"
+  },
+  {
+   "fieldname": "audience_help",
+   "fieldtype": "HTML",
+   "options": "<p class=\"text-muted\">Leave this table empty to show the message to <b>everyone</b>. Add a line to limit it to a role, a department, a branch, or one person.</p>"
+  },
+  {
+   "fieldname": "audience",
+   "fieldtype": "Table",
+   "label": "Audience",
+   "options": "SF Announcement Audience"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-10-29 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Sf Trading",
+ "name": "SF Motivation",
+ "naming_rule": "Expression",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "delete": 1,
+   "export": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Announcement Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "search_fields": "message,author",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "message",
+ "track_changes": 1
+}
