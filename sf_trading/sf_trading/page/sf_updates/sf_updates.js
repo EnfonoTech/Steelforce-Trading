@@ -182,7 +182,7 @@ class SfUpdatesHub {
 	show() {
 		const A = window.sf_ann;
 		A.call("get_summary").then((counts) => A.set_counts(counts));
-		A.call("get_motivation").then((m) => this.paint_quote(m));
+		frappe.xcall("sf_trading.motivation.get_motivation").then((m) => this.paint_quote(m));
 		this.load(true);
 		this.load_reports(this.$root.find("[data-region=reports] input").val());
 
