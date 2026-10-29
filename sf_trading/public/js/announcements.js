@@ -54,6 +54,8 @@
 	// ── Small helpers ──────────────────────────────────────────────────────────────────
 	function when(timestamp) {
 		if (!timestamp) return "";
+		// the form's preview has no publish time yet
+		if (timestamp === "now") return __("just now");
 		try {
 			const m = moment.tz ? moment.tz(timestamp, frappe.boot.time_zone.system) : moment(timestamp);
 			return m.fromNow();
@@ -148,7 +150,7 @@
 		}
 
 		return `
-			<article class="sf-card sf-k-${k.cls}${unread ? " is-unread" : ""}${opts.expanded ? " is-open" : ""}${!live && !opts.posts ? " is-off" : ""}"
+			<article class="sf-card sf-k-${k.cls}${live && item.priority === "Urgent" ? " sf-p-urgent" : ""}${unread ? " is-unread" : ""}${opts.expanded ? " is-open" : ""}${!live && !opts.posts ? " is-off" : ""}"
 				data-name="${esc(item.name)}" data-link="${esc(link ? JSON.stringify(link) : "")}">
 				<div class="sf-card-ico">${svg(k.icon)}</div>
 				<div class="sf-card-main">
@@ -284,7 +286,8 @@
 		const $badge = $nav.find(".sf-ann-badge");
 		$badge.text(n > 99 ? "99+" : n).prop("hidden", !n).toggleClass("is-urgent", !!state.counts.urgent);
 		const $btn = $nav.find(".sf-ann-btn");
-		$btn.attr("title", n ? __("{0} new updates", [n]) : __("Updates"));
+		const label = n ? __("{0} new updates", [n]) : __("Updates");
+		$btn.attr({ title: label, "aria-label": label });
 		if (ring) {
 			$btn.removeClass("is-ring");
 			void $btn[0].offsetWidth;
@@ -480,6 +483,30 @@
 		if (message.priority === "Urgent" || message.require_ack) setTimeout(check_popup, 600);
 	}
 
+	// ── A fallback for when the socket cannot be reached (a proxy, a firewall, socketio down) ──
+	// Every two minutes, and whenever the tab comes back to the front, ask the server for the
+	// counters. Quiet: a failed call (an expired session, a blip) never shows an error.
+	function poll() {
+		if (document.hidden || popup_open) return;
+		frappe.call({
+			method: API + "get_summary",
+			silent: true,
+			callback(r) {
+				const counts = r && r.message;
+				if (!counts) return;
+				const before = Object.assign({}, state.counts);
+				set_counts(counts);
+				const grew =
+					counts.unread > before.unread || counts.need_ack > before.need_ack || counts.urgent > before.urgent;
+				if (!grew) return;
+				paint_badge(true);
+				$(document).trigger("sf_ann:new", [{}]);
+				if (counts.urgent || counts.need_ack) check_popup();
+			},
+			error() {},
+		});
+	}
+
 	// ── Start ──────────────────────────────────────────────────────────────────────────
 	function wait_for_navbar(tries) {
 		if (mount_bell() || tries <= 0) return;
@@ -494,6 +521,10 @@
 		wait_for_navbar(40);
 		frappe.realtime.on("sf_announcement", on_live);
 		setTimeout(check_popup, 1800);
+		setInterval(poll, 120000);
+		document.addEventListener("visibilitychange", () => {
+			if (!document.hidden) poll();
+		});
 	});
 
 	window.sf_ann = {

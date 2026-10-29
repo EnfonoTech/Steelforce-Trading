@@ -78,7 +78,7 @@
 /* ── Filters ──────────────────────────────────────────────────────────────────────── */
 
 .sf-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 8px; margin-bottom: 16px; }
-.sf-chips { display: flex; flex-wrap: wrap; gap: 8px; flex: 1 1 auto; }
+.sf-chips { display: flex; flex-wrap: wrap; gap: 8px; flex: 0 1 auto; }
 .sf-fchip {
 	display: inline-flex;
 	align-items: center;
@@ -96,7 +96,7 @@
 .sf-fchip:hover { color: var(--text-color); border-color: var(--k, var(--primary)); }
 .sf-fchip.is-active { color: #fff; background: var(--k, var(--primary)); border-color: var(--k, var(--primary)); }
 .sf-fchip-sep { width: 1px; align-self: stretch; margin: 4px 4px; background: var(--border-color); }
-.sf-search { flex: 0 1 260px; min-width: 180px; }
+.sf-search { flex: 0 1 220px; min-width: 160px; margin-left: auto; }
 .sf-search input { border-radius: 999px; padding-left: 14px; }
 
 /* ── Layout ───────────────────────────────────────────────────────────────────────── */
@@ -125,6 +125,9 @@
 .sf-card:hover { box-shadow: var(--sf-shadow-hover); }
 .sf-card.is-unread { background: linear-gradient(90deg, var(--k-soft), transparent 38%), var(--card-bg); }
 .sf-card.is-focus { box-shadow: 0 0 0 2px var(--k), var(--sf-shadow-hover); }
+/* an urgent update is red whatever its kind, so it cannot be mistaken for a routine one */
+.sf-card.sf-p-urgent::before { background: #dc2626; }
+.sf-card.sf-p-urgent.is-unread { background: linear-gradient(90deg, rgba(220, 38, 38, 0.09), transparent 38%), var(--card-bg); }
 .sf-card.is-off { opacity: 0.72; }
 
 .sf-card-ico { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 13px; font-size: 22px; color: var(--k); background: var(--k-soft); }
@@ -313,5 +316,7 @@
 	.sf-hero-art { display: none; }
 	.sf-card { padding: 16px 16px 14px 18px; gap: 12px; }
 	.sf-card-ico { width: 38px; height: 38px; font-size: 19px; }
-	.sf-search { flex: 1 1 100%; }
+	.sf-search { flex: 1 1 100%; margin-left: 0; }
+	.sf-chips { flex: 1 1 100%; }
+	.sf-fchip-sep { display: none; }
 }

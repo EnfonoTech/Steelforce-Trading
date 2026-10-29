@@ -20,6 +20,79 @@ frappe.ui.form.on("SF Announcement", {
 		frm.trigger("set_buttons");
 		frm.trigger("preview_audience");
 		frm.trigger("show_reach");
+		frm.trigger("watch_summary");
+	},
+
+	// ── Simple English: a live hint under the short message as it is typed ─────────────
+	watch_summary(frm) {
+		const field = frm.fields_dict.summary;
+		if (!field || !field.$input) return;
+		if (!field._sf_hint_bound) {
+			field._sf_hint_bound = true;
+			field.$input.on("input", () => frm.events.readability(frm, field.$input.val()));
+		}
+		frm.events.readability(frm, frm.doc.summary);
+	},
+
+	readability(frm, text) {
+		const field = frm.fields_dict.summary;
+		// the description line only: set_df_property would redraw the field under the cursor
+		if (field && field.set_description) field.set_description(sf_ann_hint(text));
+	},
+
+	summary(frm) {
+		frm.events.readability(frm, frm.doc.summary);
+	},
+
+	// ── How it will look to a reader, before it is published ─────────────────────────
+	preview(frm) {
+		const A = window.sf_ann;
+		if (!A) {
+			frappe.msgprint(__("Reload the page, then try again."));
+			return;
+		}
+		const d = frm.doc;
+		const labels = (d.audience || []).map(sf_ann_row_label).filter(Boolean);
+		let link = null;
+		if (d.link_type) {
+			const target = d.link_type === "Report" ? d.link_report : d.link_type === "DocType" ? d.link_doctype : d.link_url;
+			link = { type: d.link_type, label: d.link_label || __("Open"), target, can_open: true, route: null, href: d.link_url };
+		}
+		// the message is cleaned by the server the same way it is for readers
+		frappe.xcall(SF_ANN + "sanitize_preview", { html: d.details || "" }).then((details) => {
+			const item = {
+				name: d.name || "preview",
+				title: d.title || __("(no title yet)"),
+				summary: d.summary || "",
+				details,
+				kind: d.kind || "Announcement",
+				priority: d.priority || "Normal",
+				pinned: d.pinned ? 1 : 0,
+				require_ack: d.require_ack ? 1 : 0,
+				status: "Published",
+				published_on: "now",
+				posted_by: frappe.session.user_fullname,
+				audience: labels.length ? labels.slice(0, 3).join(", ") : __("(nobody yet)"),
+				is_read: false,
+				acknowledged: false,
+				link,
+			};
+			const dialog = new frappe.ui.Dialog({
+				title: __("How people will see it"),
+				size: "large",
+				fields: [{ fieldtype: "HTML", fieldname: "body" }],
+			});
+			dialog.fields_dict.body.$wrapper.html(`
+				<div class="sf-hub">
+					<div class="sf-feed">${A.card(item, { expanded: !!details })}</div>
+					<p class="text-muted small" style="margin-top:12px">${__("This is a preview. The buttons do nothing here.")}${
+						d.priority === "Urgent" || d.require_ack
+							? " " + __("People will also get a pop-up until they close or confirm it.")
+							: ""
+					}</p>
+				</div>`);
+			dialog.show();
+		});
 	},
 
 	set_intro(frm) {
@@ -36,6 +109,7 @@ frappe.ui.form.on("SF Announcement", {
 	},
 
 	set_buttons(frm) {
+		frm.add_custom_button(__("Preview"), () => frm.events.preview(frm));
 		if (frm.is_new()) return;
 		const status = frm.doc.status;
 		const set_state = (state, message) => () =>
@@ -194,6 +268,43 @@ frappe.ui.form.on("SF Announcement Audience", {
 	branch: (frm) => frm.trigger("preview_audience"),
 	user: (frm) => frm.trigger("preview_audience"),
 });
+
+// words a manager is likely to write that a plainer one replaces
+const SF_ANN_PLAIN = {
+	"utilize": "use", "commence": "start", "terminate": "end", "facilitate": "help", "prior to": "before",
+	"in order to": "to", "with regard to": "about", "ascertain": "find out", "endeavour": "try", "assist": "help",
+	"approximately": "about", "additional": "more", "purchase": "buy", "subsequently": "later",
+	"regarding": "about", "inform": "tell", "require": "need", "obtain": "get",
+};
+
+function sf_ann_hint(text) {
+	const base = __("One or two short lines. This is what people see on the card.");
+	text = (text || "").trim();
+	if (!text) return base;
+
+	const count = (s) => (s.match(/\S+/g) || []).length;
+	const longest = Math.max(0, ...text.split(/[.!?\n]+/).map(count));
+	const tips = [];
+	if (text.length > 400) tips.push(__("It is {0} characters. The most allowed is 400: put the rest in the full message.", [text.length]));
+	if (longest > 20) tips.push(__("One sentence has {0} words. Try to keep each sentence under 20.", [longest]));
+	const lower = text.toLowerCase();
+	Object.keys(SF_ANN_PLAIN).forEach((word) => {
+		if (new RegExp("\\b" + word + "\\b").test(lower)) tips.push(__("Say \"{0}\" instead of \"{1}\".", [SF_ANN_PLAIN[word], word]));
+	});
+	return __("{0} words.", [count(text)]) + " " + (tips.length ? tips.slice(0, 3).join(" ") : __("Reads simply. Good."));
+}
+
+function sf_ann_row_label(row) {
+	return (
+		{
+			Everyone: __("Everyone"),
+			Role: row.role,
+			Department: row.department ? __("{0} department", [row.department]) : "",
+			Branch: row.branch ? __("{0} branch", [row.branch]) : "",
+			User: row.user,
+		}[row.audience_type] || ""
+	);
+}
 
 function sf_ann_rows(frm) {
 	return (frm.doc.audience || []).map((row) => ({

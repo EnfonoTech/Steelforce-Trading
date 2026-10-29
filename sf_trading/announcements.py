@@ -361,16 +361,34 @@ def set_state(announcement: str, state: str) -> str:
 	return doc.status
 
 
-def _enqueue_notify(announcement, reminder):
+def _enqueue_notify(announcement, reminder, only=None):
 	frappe.enqueue(
 		"sf_trading.announcements.notify_audience",
 		queue="default",
 		timeout=900,
 		announcement=announcement,
 		reminder=reminder,
+		only=only,
 		now=frappe.flags.in_test,
 		enqueue_after_commit=not frappe.flags.in_test,
 	)
+
+
+def notify_new_audience(doc):
+	"""on_update: a published update whose audience was widened tells the people newly in it -- nobody else.
+
+	Without this, adding a role or a branch to something already out would reach those people only if
+	they happened to open the Updates Hub. Going live is `go_live`'s job, so a Draft or Scheduled
+	update, and a document that was not Published before this save, are left alone.
+	"""
+	if doc.status != PUBLISHED or doc.is_new():
+		return
+	before = doc.get_doc_before_save()
+	if not before or before.status != PUBLISHED:
+		return
+	newly = set(resolve_audience(doc.get("audience"))) - set(resolve_audience(before.get("audience")))
+	if newly:
+		_enqueue_notify(doc.name, reminder=0, only=sorted(newly))
 
 
 def _pending_users(doc, users) -> list:
@@ -389,13 +407,18 @@ def _pending_users(doc, users) -> list:
 	]
 
 
-def notify_audience(announcement, reminder=0):
-	"""Ring the bell for each person in the audience. Runs in the background; one failure never stops the rest."""
+def notify_audience(announcement, reminder=0, only=None):
+	"""Ring the bell for each person in the audience. Runs in the background; one failure never stops the rest.
+
+	`only` narrows it to those people (the ones a widened audience just added)."""
 	doc = frappe.get_doc(DOCTYPE, announcement)
 	if doc.status != PUBLISHED:
 		return 0
 
 	users = resolve_audience(doc.get("audience"))
+	if only is not None:
+		wanted = set(only)
+		users = [user for user in users if user in wanted]
 	sender = doc.published_by or doc.owner
 	if reminder:
 		users = _pending_users(doc, users)
@@ -608,7 +631,9 @@ def _shape(rows, show_reach=False) -> list:
 	"""What the screen needs for each update, with every figure already decided here."""
 	if not rows:
 		return []
-	labels = _audience_labels([row.name for row in rows])
+	names = [row.name for row in rows]
+	audience = _audience_rows(names)
+	labels = _audience_labels(names, audience)
 	return [
 		{
 			"name": row.name,
@@ -627,7 +652,7 @@ def _shape(rows, show_reach=False) -> list:
 			"acknowledged": bool(row.acknowledged_on),
 			"acknowledged_on": row.acknowledged_on,
 			"link": _link_for(row),
-			"reach": _reach_counts(row.name) if show_reach and row.status == PUBLISHED else None,
+			"reach": _reach_counts(row.name, audience.get(row.name, [])) if show_reach and row.status == PUBLISHED else None,
 		}
 		for row in rows
 	]
@@ -644,16 +669,23 @@ def _clean_html(html):
 		return escape_html(frappe.utils.strip_html(html))
 
 
-def _audience_labels(names) -> dict:
-	"""A short "who is this for" line per update: "Sales Manager, SFSB branch +1 more"."""
-	rows = frappe.get_all(
+def _audience_rows(names) -> dict:
+	"""The audience rows of all these updates in one query, grouped by update."""
+	grouped = {}
+	for row in frappe.get_all(
 		AUDIENCE,
 		filters={"parent": ["in", list(names)], "parenttype": DOCTYPE},
 		fields=["parent", "audience_type", "role", "department", "include_sub_departments", "branch", "user"],
 		order_by="idx asc",
-	)
+	):
+		grouped.setdefault(row.parent, []).append(row)
+	return grouped
+
+
+def _audience_labels(names, audience) -> dict:
+	"""A short "who is this for" line per update: "Sales Manager, SFSB branch +1 more"."""
 	parts, people = {}, {}
-	for row in rows:
+	for row in (row for rows in audience.values() for row in rows):
 		if row.audience_type == "User":
 			people[row.parent] = people.get(row.parent, 0) + 1
 			continue
@@ -846,9 +878,8 @@ def acknowledge(announcement: str) -> dict:
 
 # ── For the author: who it reaches, who has read it, who cannot open the report ────────
 
-def _reach_counts(announcement) -> dict:
-	doc = frappe.get_doc(DOCTYPE, announcement)
-	users = resolve_audience(doc.get("audience"))
+def _reach_counts(announcement, audience_rows) -> dict:
+	users = resolve_audience(audience_rows)
 	reads = frappe.get_all(
 		READ_LOG,
 		filters={"announcement": announcement, "user": ["in", users or [""]]},
@@ -908,6 +939,13 @@ def preview_audience(rows=None, link_type=None, link_report=None) -> dict:
 	if link_type == "Report" and link_report and users:
 		out["no_report_access"] = _without_report_access(link_report, users)
 	return out
+
+
+@frappe.whitelist()
+def sanitize_preview(html=None) -> str:
+	"""For the form's preview: the full message exactly as it will be cleaned for readers."""
+	_require_manager()
+	return _clean_html(html)
 
 
 def _without_report_access(report, users) -> dict:

@@ -53,7 +53,7 @@
    "fieldtype": "Check",
    "in_list_view": 1,
    "label": "With Sub-departments",
-   "columns": 2
+   "columns": 1
   },
   {
    "depends_on": "eval:doc.audience_type=='Branch'",
@@ -64,7 +64,7 @@
    "label": "Branch",
    "mandatory_depends_on": "eval:doc.audience_type=='Branch'",
    "options": "Branch",
-   "columns": 2
+   "columns": 1
   },
   {
    "depends_on": "eval:doc.audience_type=='User'",

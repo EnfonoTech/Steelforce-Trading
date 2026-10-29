@@ -108,6 +108,8 @@ doctype_js = {
 		"public/js/cash_due_date.js",
 	],
 	"Stock Entry":      "public/js/stock_entry.js",
+	# Actions -> Announce this report: a new Updates Hub post aimed at the roles that may run the report
+	"Report":           "public/js/report_announce.js",
 	# Item Code and Item Name are typed in capitals on the form -- the server enforces it, see item_case.py
 	"Item":             [
 		"public/js/item_uppercase.js",

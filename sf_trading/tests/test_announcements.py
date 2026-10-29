@@ -384,6 +384,42 @@ class TestAnnouncements(FrappeTestCase):
 		self.assertEqual([p["user"] for p in reach["pending"]], [USER_B])
 		self.assertEqual(ann.get_feed(view="posts")["items"][0]["reach"]["seen"], 1)
 
+	def test_widening_a_published_audience_tells_only_the_new_people(self):
+		doc = _announcement([{"audience_type": "User", "user": USER_A}])
+		self.assertEqual((_bells(doc, USER_A), _bells(doc, USER_B)), (1, 0))
+
+		doc = frappe.get_doc(ann.DOCTYPE, doc.name)
+		doc.append("audience", {"audience_type": "User", "user": USER_B})
+		doc.save(ignore_permissions=True)
+		self.assertEqual((_bells(doc, USER_A), _bells(doc, USER_B)), (1, 1), "only the person added is told")
+		self.assertIn(doc.name, ann.visible_names(USER_B))
+
+		doc.title = "Edited title"  # an edit that widens nothing rings nothing
+		doc.save(ignore_permissions=True)
+		self.assertEqual((_bells(doc, USER_A), _bells(doc, USER_B)), (1, 1))
+
+	def test_a_draft_that_gains_people_is_not_announced_before_it_is_published(self):
+		doc = _announcement([{"audience_type": "User", "user": USER_A}], publish=False)
+		doc.append("audience", {"audience_type": "User", "user": USER_B})
+		doc.save(ignore_permissions=True)
+		self.assertEqual((_bells(doc, USER_A), _bells(doc, USER_B)), (0, 0))
+
+	def test_the_audience_line_says_who_it_is_for(self):
+		doc = _announcement(
+			[{"audience_type": "Role", "role": ROLE_A}, {"audience_type": "Branch", "branch": "Ann Test Branch"},
+			 {"audience_type": "User", "user": USER_C}]
+		)
+		frappe.set_user(USER_A)
+		self.assertEqual(ann.get_one(doc.name)["audience"], f"{ROLE_A}, Ann Test Branch branch, 1 named people")
+
+	def test_the_preview_cleans_the_message_the_way_readers_get_it(self):
+		cleaned = ann.sanitize_preview("<p>Hello</p><script>alert(1)</script>")
+		self.assertIn("Hello", cleaned)
+		self.assertNotIn("<script", cleaned)
+		frappe.set_user(USER_A)
+		with self.assertRaises(frappe.PermissionError):
+			ann.sanitize_preview("<p>x</p>")
+
 	def test_the_boot_payload_is_for_staff_and_never_raises(self):
 		frappe.set_user(USER_A)
 		boot = frappe._dict()

@@ -17,5 +17,8 @@ class SFAnnouncement(Document):
 	def validate(self):
 		announcements.validate_announcement(self)
 
+	def on_update(self):
+		announcements.notify_new_audience(self)
+
 	def on_trash(self):
 		announcements.clean_up(self)
