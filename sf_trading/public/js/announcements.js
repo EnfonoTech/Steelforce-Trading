@@ -479,6 +479,9 @@
 		const hour = new Date().getHours();
 		const greeting = hour < 12 ? __("Good morning") : hour < 17 ? __("Good afternoon") : __("Good evening");
 		const name = (frappe.boot.user && frappe.boot.user.first_name) || frappe.session.user_fullname || "";
+		// the way into My Updates, with what is waiting there, so the day starts with one click to what matters
+		const waiting = state.counts.unread || 0;
+		const hub_label = waiting ? __("See what's new ({0})", [waiting]) : __("Open My Updates");
 		const $card = $(`
 			<aside class="sf-mot" role="status" aria-live="polite">
 				<button type="button" class="sf-mot-x" aria-label="${esc(__("Close"))}">&times;</button>
@@ -487,7 +490,10 @@
 					<div class="sf-mot-kicker">${esc(greeting + (name ? ", " + name : ""))} &middot; ${esc(m.title || __("Thought for today"))}</div>
 					<blockquote class="sf-mot-text">${esc(m.message)}</blockquote>
 					${m.author ? `<div class="sf-mot-author">${esc(m.author)}</div>` : ""}
-					<button type="button" class="sf-btn is-primary sf-mot-go">${esc(__("Let's go"))}</button>
+					<div class="sf-mot-actions">
+						<button type="button" class="sf-btn is-primary sf-mot-go">${esc(__("Let's go"))}</button>
+						<button type="button" class="sf-btn sf-mot-hub">${svg("megaphone")} ${esc(hub_label)}</button>
+					</div>
 				</div>
 			</aside>`).appendTo("body");
 
@@ -496,6 +502,10 @@
 			setTimeout(() => $card.remove(), 260);
 		};
 		$card.find(".sf-mot-x, .sf-mot-go").on("click", close);
+		$card.find(".sf-mot-hub").on("click", () => {
+			close();
+			open_hub(null);
+		});
 
 		if (!opts.preview) {
 			frappe.call({
