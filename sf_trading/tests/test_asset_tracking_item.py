@@ -255,6 +255,9 @@ class TestAssetTrackingItem(FrappeTestCase):
 		pi = self.make_invoice(self.tracked_item, asset_location=self.location)
 		asset = frappe.get_doc("Asset", self.tracking_assets(pi)[0].name)
 		self.assertFalse(asset.asset_category, "no category is stamped on a tracking Asset")
+		self.assertEqual(
+			str(asset.available_for_use_date), str(pi.posting_date), "so it can be submitted as it is"
+		)
 
 		asset.submit()
 		asset.reload()

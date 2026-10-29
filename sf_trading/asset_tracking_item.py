@@ -189,6 +189,9 @@ def _create_for_row(doc, row):
 	asset.location = location
 	asset.asset_category = _resolve_asset_category(row.item_code, doc.company)
 	asset.purchase_date = doc.posting_date
+	# core refuses to submit an Asset without it ("Available for use date is required",
+	# Asset.validate_in_use_date): the day it was bought is the day it is in use, and staff can change it
+	asset.available_for_use_date = doc.posting_date
 	asset.asset_quantity = cint(row.qty) or 1
 	asset.gross_purchase_amount = flt(row.base_amount)
 	asset.purchase_amount = flt(row.base_amount)
