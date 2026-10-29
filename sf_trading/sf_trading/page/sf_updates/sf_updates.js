@@ -20,6 +20,11 @@ frappe.pages["sf-updates"].on_page_show = function (wrapper) {
 	if (wrapper.sf_hub) wrapper.sf_hub.show();
 };
 
+// leaving the page always leaves full screen, so the rest of the desk is never left without its navbar
+frappe.pages["sf-updates"].on_page_hide = function (wrapper) {
+	if (wrapper.sf_hub) wrapper.sf_hub.set_full(false);
+};
+
 class SfUpdatesHub {
 	constructor(wrapper, page) {
 		this.wrapper = wrapper;
@@ -111,13 +116,46 @@ class SfUpdatesHub {
 			this.page.set_primary_action(__("New Announcement"), () => frappe.new_doc("SF Announcement"), "add");
 		}
 		this.page.set_secondary_action(__("Mark all as read"), () => this.mark_all_read());
+		this.full = false;
+		this.$full_btn = this.page.add_button(__("Full screen"), () => this.set_full(!this.full), {
+			icon: "es-line-expand",
+		});
 		this.paint_hero();
 		this.paint_chips();
 		this.paint_tiles(A.counts());
 	}
 
+	// ── Full screen ────────────────────────────────────────────────────────────────────
+	// The browser's own full screen plus a body class that hides the navbar and lets the page use the
+	// whole width. Where the browser refuses full screen, the class alone still gives the wide layout.
+	// Esc leaves it (the browser's full-screen Esc, or the keydown below when only the class is on).
+	set_full(on) {
+		on = !!on;
+		if (on === this.full) return;
+		this.full = on;
+		$("body").toggleClass("sf-hub-full", on);
+		this.$full_btn.html(
+			`${frappe.utils.icon("es-line-expand")} ${on ? __("Exit full screen") : __("Full screen")}`
+		);
+		const root = document.documentElement;
+		if (on && root.requestFullscreen) {
+			root.requestFullscreen().catch(() => {});
+		} else if (!on && document.fullscreenElement && document.exitFullscreen) {
+			document.exitFullscreen().catch(() => {});
+		}
+	}
+
 	bind() {
 		const A = window.sf_ann;
+
+		$(document)
+			.off(".sfhubfull")
+			.on("fullscreenchange.sfhubfull", () => {
+				if (this.full && !document.fullscreenElement) this.set_full(false);
+			})
+			.on("keydown.sfhubfull", (event) => {
+				if (event.key === "Escape" && this.full && !document.fullscreenElement) this.set_full(false);
+			});
 
 		// the feed is wired again on every load, because the "posted by us" view draws its cards differently
 		A.wire(this.$focus, { opts: {} });

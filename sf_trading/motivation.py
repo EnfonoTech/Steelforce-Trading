@@ -120,13 +120,41 @@ def _shape(row, options) -> dict:
 
 # ── What the desk asks for ──────────────────────────────────────────────────────────────
 
-def for_boot(user):
-	"""Today's message for the boot payload, but only until this person has been shown it today."""
+def _mark_seen(user, motivation) -> bool:
+	"""Use up today for this person. True only for the call that did it, so two tabs cannot both show the card."""
+	today = nowdate()
+	if frappe.db.exists(SEEN, _seen_name(user, today)):
+		return False
+	try:
+		frappe.get_doc({"doctype": SEEN, "user": user, "on_date": today, "motivation": motivation}).insert(
+			ignore_permissions=True
+		)
+	except frappe.DuplicateEntryError:
+		# another tab got there first
+		frappe.clear_last_message()
+		return False
+	return True
+
+
+def claim(user):
+	"""Today's message for the first desk load of the day, and today is used up in the same step.
+
+	Asked of the server on every load and never read from the boot payload: Frappe caches that payload per
+	person, so a message put in it came back on every refresh until the cache happened to clear.
+	"""
 	options = settings()
-	if not options.enabled or frappe.db.exists(SEEN, _seen_name(user, nowdate())):
+	if not options.enabled:
 		return None
 	row = todays_message(user)
-	return _shape(row, options) if row else None
+	if not row or not _mark_seen(user, row.name):
+		return None
+	return _shape(row, options)
+
+
+@frappe.whitelist(methods=["POST"])
+def claim_motivation():
+	"""The desk's first load of the day gets the card; every later load, in any tab, gets None."""
+	return claim(ann._desk_user())
 
 
 @frappe.whitelist()
@@ -146,22 +174,11 @@ def get_motivation():
 
 @frappe.whitelist()
 def mark_motivation_seen(motivation: str) -> dict:
-	"""The browser has shown the card: today is used up for this person. Safe to call twice."""
+	"""Kept for a browser still running the old script: today is used up for this person. Safe to call twice."""
 	user = ann._desk_user()
 	if not frappe.db.exists(DOCTYPE, motivation):
 		frappe.throw(_("That message no longer exists."), frappe.DoesNotExistError)
-	today = nowdate()
-	if frappe.db.exists(SEEN, _seen_name(user, today)):
-		return {"first": 0}
-	try:
-		frappe.get_doc({"doctype": SEEN, "user": user, "on_date": today, "motivation": motivation}).insert(
-			ignore_permissions=True
-		)
-	except frappe.DuplicateEntryError:
-		# another tab got there first
-		frappe.clear_last_message()
-		return {"first": 0}
-	return {"first": 1}
+	return {"first": 1 if _mark_seen(user, motivation) else 0}
 
 
 # ── Filling the bank ────────────────────────────────────────────────────────────────────

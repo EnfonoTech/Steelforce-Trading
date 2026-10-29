@@ -364,3 +364,11 @@
 	.sf-chips { flex: 1 1 100%; }
 	.sf-fchip-sep { display: none; }
 }
+
+/* ── My Updates, full screen ─────────────────────────────────────────────────────────────
+   body.sf-hub-full is set by the page (sf_updates.js): the navbar goes, the page header sticks to the top
+   and the content uses the whole width. Scoped to this page's route, so nothing else on the desk changes. */
+body.sf-hub-full .navbar { display: none !important; }
+body.sf-hub-full [data-page-route="sf-updates"] .page-head { top: 0; }
+body.sf-hub-full [data-page-route="sf-updates"] .container { max-width: none; padding-left: 28px; padding-right: 28px; }
+body.sf-hub-full [data-page-route="sf-updates"] .sf-hub-grid { grid-template-columns: minmax(0, 1fr) 380px; }

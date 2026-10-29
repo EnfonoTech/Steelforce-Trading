@@ -472,8 +472,8 @@
 	// ── The daily motivation card ──────────────────────────────────────────────────────
 	// A soft card at the top of the screen, once a day, on the first desk load. It never blocks the
 	// work: a must-read pop-up can open over it, and the cross or "Let's go" closes it. The server
-	// is told it was shown the moment it appears, so a reload before closing it does not bring it back.
-	function show_motivation(m, opts = {}) {
+	// is told it was shown the moment it is handed out, so a reload before closing it does not bring it back.
+	function show_motivation(m) {
 		if (!m || !m.message) return;
 		$(".sf-mot").remove();
 		const hour = new Date().getHours();
@@ -507,14 +507,6 @@
 			open_hub(null);
 		});
 
-		if (!opts.preview) {
-			frappe.call({
-				method: "sf_trading.motivation.mark_motivation_seen",
-				args: { motivation: m.name },
-				silent: true,
-				error() {},
-			});
-		}
 	}
 
 	// ── A new update arrives while the desk is open ────────────────────────────────────
@@ -569,8 +561,14 @@
 		Object.assign(state.counts, boot);
 		wait_for_navbar(40);
 		frappe.realtime.on("sf_announcement", on_live);
-		// the boot payload carries today's motivation only until this person has been shown it
-		if (boot.motivation) setTimeout(() => show_motivation(boot.motivation), 900);
+		// asked of the server, never read from the boot payload (Frappe caches that per person, so the card
+		// came back on every refresh); the server hands it out once a day and uses the day up in the same call
+		setTimeout(() => {
+			frappe
+				.xcall("sf_trading.motivation.claim_motivation")
+				.then((m) => show_motivation(m))
+				.catch(() => {});
+		}, 900);
 		setTimeout(check_popup, 1800);
 		setInterval(poll, 120000);
 		document.addEventListener("visibilitychange", () => {

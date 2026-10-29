@@ -1050,15 +1050,8 @@ def boot_session(bootinfo):
 			return
 		if frappe.db.get_value("User", user, "user_type") != "System User":
 			return
-		bootinfo.sf_announcements = {**summary(user), "can_post": is_manager(user), "page": PAGE, "motivation": None}
+		bootinfo.sf_announcements = {**summary(user), "can_post": is_manager(user), "page": PAGE}
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), "sf_trading announcements: boot payload failed")
 		return
 
-	# the first desk load of the day carries today's motivation; a failure here never costs the person their bell
-	try:
-		from sf_trading import motivation
-
-		bootinfo.sf_announcements["motivation"] = motivation.for_boot(user)
-	except Exception:
-		frappe.log_error(frappe.get_traceback(), "sf_trading motivation: boot payload failed")

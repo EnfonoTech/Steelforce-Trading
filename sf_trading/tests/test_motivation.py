@@ -132,23 +132,34 @@ class TestMotivation(FrappeTestCase):
 	def test_nothing_to_show_is_none(self):
 		with _settings():
 			self.assertIsNone(mot.todays_message(USER_A))
-			self.assertIsNone(mot.for_boot(USER_A))
+			self.assertIsNone(mot.claim(USER_A))
 
 	# ── Once a day ─────────────────────────────────────────────────────────────────────
 
 	def test_the_card_comes_with_the_first_load_of_the_day_and_not_again(self):
 		first = _message("Only message")
 		with _settings():
-			payload = mot.for_boot(USER_A)
+			payload = mot.claim(USER_A)
 			self.assertEqual((payload["name"], payload["message"], payload["title"]), (first.name, "Only message", "Thought for today"))
 
-			frappe.set_user(USER_A)
-			self.assertEqual(mot.mark_motivation_seen(first.name), {"first": 1})
-			self.assertEqual(mot.mark_motivation_seen(first.name), {"first": 0}, "a second tab does not count twice")
-			frappe.set_user("Administrator")
+			self.assertIsNone(mot.claim(USER_A), "a refresh, or a second tab, does not bring it back")
+			self.assertIsNone(mot.claim(USER_A))
+			self.assertIsNotNone(mot.claim(USER_B), "one person's day is not another's")
+		self.assertEqual(frappe.db.count(mot.SEEN, {"user": USER_A}), 1)
 
-			self.assertIsNone(mot.for_boot(USER_A), "shown today, so not again today")
-			self.assertIsNotNone(mot.for_boot(USER_B), "one person's day is not another's")
+	def test_the_whitelisted_call_hands_it_out_once_for_the_signed_in_person(self):
+		_message("Via the desk")
+		with _settings():
+			frappe.set_user(USER_A)
+			self.assertEqual(mot.claim_motivation()["message"], "Via the desk")
+			self.assertIsNone(mot.claim_motivation())
+
+	def test_an_old_browser_marking_it_seen_after_the_claim_counts_nothing_twice(self):
+		only = _message("Old script")
+		with _settings():
+			mot.claim(USER_A)
+			frappe.set_user(USER_A)
+			self.assertEqual(mot.mark_motivation_seen(only.name), {"first": 0})
 		self.assertEqual(frappe.db.count(mot.SEEN, {"user": USER_A}), 1)
 
 	def test_my_updates_keeps_the_message_the_person_was_shown(self):
@@ -168,7 +179,7 @@ class TestMotivation(FrappeTestCase):
 	def test_the_switch_turns_the_whole_thing_off(self):
 		_message("Anything")
 		with _settings(enabled=0):
-			self.assertIsNone(mot.for_boot(USER_A))
+			self.assertIsNone(mot.claim(USER_A))
 			frappe.set_user(USER_A)
 			self.assertIsNone(mot.get_motivation())
 
@@ -177,18 +188,14 @@ class TestMotivation(FrappeTestCase):
 		with self.assertRaises(frappe.DoesNotExistError):
 			mot.mark_motivation_seen("MOT-NOPE")
 
-	def test_the_boot_payload_carries_it_for_staff_and_never_raises(self):
-		_message("Boot me")
+	def test_the_boot_payload_no_longer_carries_the_message(self):
+		# Frappe caches the boot payload per person, so anything in it comes back on every refresh
+		_message("Not in boot")
 		with _settings():
 			frappe.set_user(USER_A)
 			boot = frappe._dict()
 			ann.boot_session(boot)
-			self.assertEqual(boot.sf_announcements["motivation"]["message"], "Boot me")
-
-			frappe.set_user("Guest")
-			boot = frappe._dict()
-			ann.boot_session(boot)
-			self.assertNotIn("sf_announcements", boot)
+			self.assertNotIn("motivation", boot.sf_announcements)
 
 	# ── Filling and keeping the bank ───────────────────────────────────────────────────
 
