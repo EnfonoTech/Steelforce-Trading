@@ -107,7 +107,7 @@ class TestBankedBy(FrappeTestCase):
         from sf_trading.sf_trading.report.pdc_report.pdc_report import get_columns
 
         fieldnames = [c["fieldname"] for c in get_columns()]
-        for expected in ("banked_by", "clearing_journal", "journal_date", "journal_amount", "cross_check"):
+        for expected in ("banked_by", "banking_document", "banking_date", "banking_amount", "cross_check"):
             self.assertIn(expected, fieldnames)
 
     def test_a_cheque_naming_a_journal_is_cleared_by_it(self):
@@ -175,3 +175,23 @@ class TestBankedBy(FrappeTestCase):
         pe = self._cheque()
         pos = position_of(pe, transfers=[], returns=[], journals={})
         self.assertEqual(banked_by_of(pe, pos, [], None), ("", None, ""))
+
+    def test_one_column_names_the_transfer_or_the_journal(self):
+        from sf_trading.sf_trading.report.pdc_report.pdc_report import banking_document, get_columns
+
+        link = next(c for c in get_columns() if c["fieldname"] == "banking_document")
+        self.assertEqual((link["fieldtype"], link["options"]), ("Dynamic Link", "banking_doctype"))
+
+        pe = self._cheque(100)
+        first = frappe._dict(name="T1", docstatus=1, paid_amount=40, posting_date="2026-09-01")
+        second = frappe._dict(name="T2", docstatus=1, paid_amount=60, posting_date="2026-09-05")
+        doc = banking_document(pe, "Internal Transfer", [first, second], None)
+        self.assertEqual((doc.doctype, doc.name, doc.amount), ("Payment Entry", "T2", 100.0))
+        self.assertEqual(str(doc.date), "2026-09-05")
+
+        doc = banking_document(pe, "Journal Entry", [], self._journal(100.0))
+        self.assertEqual((doc.doctype, doc.name, doc.amount), ("Journal Entry", "ACC-JV-X", 100.0))
+        self.assertEqual(str(doc.date), "2026-09-09")
+
+        none = banking_document(pe, "", [], None)
+        self.assertEqual((none.doctype, none.name), (None, None))

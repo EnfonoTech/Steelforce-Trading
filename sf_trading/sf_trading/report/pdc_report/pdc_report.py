@@ -19,8 +19,9 @@ documents (`pdc_transfer.position_of`), so the report is right even where the st
 on the cheque has not been refreshed yet.
 
 Cross-check: every cleared cheque shows the document that banked it -- the Internal Transfer, or the
-Journal Entry the cheque names in `custom_pdc_clearing_journal` (with its date, the line it posted to the
-holding account and whether that line is the cheque's size). A cheque cleared by a date alone, with no
+Journal Entry the cheque names in `custom_pdc_clearing_journal`, in ONE column (Banking Document) with its
+date and the amount it banked (the transfers' total, or the journal's line on the holding account), and a
+cross-check on whether that amount is the cheque's. A cheque cleared by a date alone, with no
 document behind it, says so: those are the ones to chase.
 """
 
@@ -169,6 +170,7 @@ def get_data(filters):
         banked_by, journal, cross_check = banked_by_of(r, pos, cheque_transfers, journals.get(r.name))
         if banked_filter and banked_filter != banked_by:
             continue
+        banking = banking_document(r, banked_by, submitted, journal)
         settled = r.docstatus == 1
         out.append({
             "payment_entry": r.name,
@@ -196,9 +198,10 @@ def get_data(filters):
             "remaining_amount": pos.remaining if settled else 0,
             "return_journal": (returns.get(r.name) or [frappe._dict(name=None)])[-1].name,
             "banked_by": banked_by,
-            "clearing_journal": journal.name if journal else None,
-            "journal_date": getdate(journal.posting_date) if journal else None,
-            "journal_amount": journal_line(journal, r) if journal else None,
+            "banking_doctype": banking.doctype,
+            "banking_document": banking.name,
+            "banking_date": banking.date,
+            "banking_amount": banking.amount,
             "cross_check": cross_check,
             "currency": currency,
             "bank_account": bank,
@@ -216,6 +219,26 @@ def journal_line(journal, pe):
     amount = cheque_amount(pe)
     exact = [c for c in credits if abs(c - amount) <= 0.0005]
     return flt(exact[0] if exact else sum(credits))
+
+
+def banking_document(pe, banked_by, submitted_transfers, journal):
+    """The one document an accountant opens to check a cleared cheque, whichever kind it is: the Internal
+    Transfer (its latest submitted one, with the total banked by all of them) or the Journal Entry (with the
+    line it posted to the holding account). Date and amount are that document's own."""
+    if banked_by == "Internal Transfer" and submitted_transfers:
+        latest = submitted_transfers[-1]
+        return frappe._dict(
+            doctype="Payment Entry", name=latest.name,
+            date=getdate(latest.posting_date) if latest.posting_date else None,
+            amount=flt(sum(flt(t.paid_amount) for t in submitted_transfers), 3),
+        )
+    if banked_by == "Journal Entry" and journal:
+        return frappe._dict(
+            doctype="Journal Entry", name=journal.name,
+            date=getdate(journal.posting_date) if journal.posting_date else None,
+            amount=journal_line(journal, pe),
+        )
+    return frappe._dict(doctype=None, name=None, date=None, amount=None)
 
 
 def banked_by_of(pe, pos, cheque_transfers, journal):
@@ -257,9 +280,9 @@ def get_columns():
         {"label": _("Transferred On"), "fieldname": "transfer_date", "fieldtype": "Date", "width": 110},
         {"label": _("Transferred To"), "fieldname": "transfer_account", "fieldtype": "Link", "options": "Account", "width": 170},
         {"label": _("Banked By"), "fieldname": "banked_by", "fieldtype": "Data", "width": 150},
-        {"label": _("Banking Journal"), "fieldname": "clearing_journal", "fieldtype": "Link", "options": "Journal Entry", "width": 150},
-        {"label": _("Journal Date"), "fieldname": "journal_date", "fieldtype": "Date", "width": 100},
-        {"label": _("Journal Line"), "fieldname": "journal_amount", "fieldtype": "Currency", "options": "currency", "width": 115},
+        {"label": _("Banking Document"), "fieldname": "banking_document", "fieldtype": "Dynamic Link", "options": "banking_doctype", "width": 165},
+        {"label": _("Banking Date"), "fieldname": "banking_date", "fieldtype": "Date", "width": 100},
+        {"label": _("Banked Amount"), "fieldname": "banking_amount", "fieldtype": "Currency", "options": "currency", "width": 115},
         {"label": _("Cross-check"), "fieldname": "cross_check", "fieldtype": "Data", "width": 230},
         {"label": _("Party Type"), "fieldname": "party_type", "fieldtype": "Data", "width": 90},
         {"label": _("Party"), "fieldname": "party", "fieldtype": "Dynamic Link", "options": "party_type", "width": 150},
