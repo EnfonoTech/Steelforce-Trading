@@ -8,19 +8,22 @@ Who cancelled, and when, is read from the document's own Version history -- the 
 need not be the one who cancelled it. A document whose doctype keeps no history (Quotation) falls
 back to `modified_by` / `modified`, which for a cancelled document is almost always the cancel itself.
 
-Where the cancel went through an approval (the Sales Order Cancellation workflow), the history also
-holds the request: the save that moved `workflow_state` into a cancellation state while the document
-was still submitted. That user and time are the Initiated By / Initiated On columns, and the reason
-the request carried is shown where the document keeps one.
+Where the cancel went through an approval (the Sales Order or Quotation Cancellation workflow), the
+history also holds the request: the save that moved `workflow_state` into a cancellation state while
+the document was still submitted. That user and time are the Initiated By / Initiated On columns, and
+the reason the request carried is shown where the document keeps one. A doctype that keeps no history
+(Quotation) is read from the workflow's own timeline comments instead -- "Moved to Cancellation
+Requested" -- which the approval engine writes as the user who acted.
 
 The date filters are on the cancel date, not the document's own date.
 """
 
 import json
+import re
 
 import frappe
 from frappe import _
-from frappe.utils import flt, get_datetime, getdate
+from frappe.utils import flt, get_datetime, getdate, strip_html
 
 from sf_trading.sales_target import allowed_branches
 
@@ -43,6 +46,8 @@ SOURCES = (
 	("Stock Entry", "posting_date", None, None, None, "total_outgoing_value"),
 )
 DOCTYPES = [s[0] for s in SOURCES]
+#: "Moved to <state>" in the approval engine's timeline comment
+WORKFLOW_MOVE = re.compile(r"Moved to\s+(.+?)(?:\s*💬|$)")
 #: the reason a cancel or a cancellation request carried, on the documents that keep one
 REASON_FIELDS = ("custom_cancellation_remark", "custom_cancellation_reason")
 
@@ -78,6 +83,7 @@ def execute(filters=None):
 		and (not filters.cancelled_by or r["cancelled_by"] == filters.cancelled_by)
 	]
 	data.sort(key=lambda r: get_datetime(r["cancelled_on"]), reverse=True)
+	add_user_names(data)
 	return get_columns(), data, None, None, get_summary(data)
 
 
@@ -154,11 +160,40 @@ def cancel_history(doctype, names) -> dict:
 			entry = out.setdefault(v.docname, {})
 			if "docstatus" in changes and changes["docstatus"][1] == 1 and changes["docstatus"][2] == 2:
 				entry["cancelled_by"], entry["cancelled_on"] = v.owner, v.creation
+				entry["_cancelled_from_version"] = True
 			elif "workflow_state" in changes and "cancel" in str(changes["workflow_state"][2] or "").lower():
 				# a request: the state moved toward cancellation while the document stayed submitted.
 				# The latest one wins -- a request that was rejected and raised again is the one that counted.
 				entry["initiated_by"], entry["initiated_on"] = v.owner, v.creation
+				entry["_initiated_from_version"] = True
+
+		# what the history did not answer, the workflow's timeline comments do
+		for c in frappe.get_all(
+			"Comment",
+			filters={"reference_doctype": doctype, "reference_name": ["in", chunk], "comment_type": "Workflow"},
+			fields=["reference_name", "owner", "creation", "content"],
+			order_by="creation asc",
+		):
+			match = WORKFLOW_MOVE.search(strip_html(c.content or ""))
+			if not match:
+				continue
+			state = match.group(1).strip().lower()
+			entry = out.setdefault(c.reference_name, {})
+			if "cancel" in state and state != "cancelled" and not entry.get("_initiated_from_version"):
+				entry["initiated_by"], entry["initiated_on"] = c.owner, c.creation
+			elif state == "cancelled" and not entry.get("_cancelled_from_version"):
+				entry["cancelled_by"], entry["cancelled_on"] = c.owner, c.creation
 	return out
+
+
+def add_user_names(data):
+	"""The users' full names beside their IDs: an email address is not how anyone knows a colleague."""
+	users = {r[f] for r in data for f in ("cancelled_by", "initiated_by") if r.get(f)}
+	names = dict(frappe.get_all("User", filters={"name": ["in", list(users)]}, fields=["name", "full_name"],
+		as_list=True)) if users else {}
+	for r in data:
+		for f in ("cancelled_by", "initiated_by"):
+			r[f + "_name"] = (names.get(r[f]) or r[f]) if r.get(f) else None
 
 
 def get_summary(data):
@@ -180,8 +215,10 @@ def get_columns():
 		{"label": _("Party"), "fieldname": "party", "fieldtype": "Dynamic Link", "options": "party_type", "width": 180},
 		{"label": _("Amount"), "fieldname": "amount", "fieldtype": "Currency", "options": "currency", "width": 120},
 		{"label": _("Initiated By"), "fieldname": "initiated_by", "fieldtype": "Link", "options": "User", "width": 160},
+		{"label": _("Initiated By Name"), "fieldname": "initiated_by_name", "fieldtype": "Data", "width": 150},
 		{"label": _("Initiated On"), "fieldname": "initiated_on", "fieldtype": "Datetime", "width": 150},
 		{"label": _("Cancelled By"), "fieldname": "cancelled_by", "fieldtype": "Link", "options": "User", "width": 160},
+		{"label": _("Cancelled By Name"), "fieldname": "cancelled_by_name", "fieldtype": "Data", "width": 150},
 		{"label": _("Cancelled On"), "fieldname": "cancelled_on", "fieldtype": "Datetime", "width": 150},
 		{"label": _("Reason"), "fieldname": "reason", "fieldtype": "Data", "width": 220},
 		{"label": _("Currency"), "fieldname": "currency", "fieldtype": "Link", "options": "Currency", "hidden": 1, "width": 80},
