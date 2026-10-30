@@ -87,6 +87,8 @@ app_include_js = [
 # doctype_js: loaded only when that specific doctype form opens
 doctype_js = {
 	"Sales Invoice":    [
+		# View > COGS Calculation -- how this invoice's cost was reached (cogs_breakdown.py)
+		"public/js/cogs_breakdown.js",
 		"public/js/sales_invoice.js",
 		# declines to paint Return / Credit Note once the return window has closed, and says why
 		"public/js/sales_return_window.js",
@@ -107,7 +109,11 @@ doctype_js = {
 		# a Cash sale is due the day it is made, whatever terms the customer carries -- see cash_due_date.py
 		"public/js/cash_due_date.js",
 	],
-	"Stock Entry":      "public/js/stock_entry.js",
+	"Stock Entry":      [
+		"public/js/stock_entry.js",
+		# View > Transfer Cost Breakdown on a Material Transfer -- see cogs_breakdown.py
+		"public/js/cogs_breakdown.js",
+	],
 	# Actions -> Announce this report: a new Updates Hub post aimed at the roles that may run the report
 	"Report":           "public/js/report_announce.js",
 	# Item Code and Item Name are typed in capitals on the form -- the server enforces it, see item_case.py
@@ -171,6 +177,8 @@ doctype_js = {
 	# same Sales Team restriction as Sales Invoice / Sales Order -- Delivery Note carries the same
 	# child table but no other doctype-specific script of its own yet; also the SO -> DN -> SI chain
 	"Delivery Note":    [
+		# View > COGS Calculation -- how this note's cost was reached (cogs_breakdown.py)
+		"public/js/cogs_breakdown.js",
 		"public/js/salesperson_by_company.js",
 		"public/js/document_trail.js",
 		# a popup the moment a customer the approval holds back is picked -- see party_alert.py
