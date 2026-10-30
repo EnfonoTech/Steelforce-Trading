@@ -54,6 +54,27 @@ frappe.query_reports["Transfer Cost Breakdown"] = {
 			options: "Warehouse",
 		},
 		{
+			fieldname: "branch",
+			label: __("Branch"),
+			fieldtype: "Link",
+			options: "Branch",
+			description: __(
+				"Transfers into or out of the warehouses this branch lists. A warehouse can sit under several branches."
+			),
+		},
+		{
+			fieldname: "only_gaps",
+			label: __("Only Gaps"),
+			fieldtype: "Check",
+			description: __("Lines that arrived worth a different amount than they left."),
+		},
+		{
+			fieldname: "only_review",
+			label: __("Only Lines To Review"),
+			fieldtype: "Check",
+			description: __("Lines the Check column does not call a match, or with a value gap."),
+		},
+		{
 			fieldname: "expand_chain",
 			label: __("Expand Transfer Chain"),
 			fieldtype: "Check",
@@ -80,14 +101,19 @@ frappe.query_reports["Transfer Cost Breakdown"] = {
 		if (!data.indent) value = `<b>${value}</b>`;
 
 		const red = (html) => `<span style="color:var(--red-500)">${html}</span>`;
-		if (column.fieldname === "check" && data.check_flag && data.check_flag !== "ok")
-			value = red(value);
+		if (column.fieldname === "check" && sf_needs_review(data.check_flag)) value = red(value);
+		if (column.fieldname === "value_gap" && data.differs) value = red(value);
 		if (data.gap && ["source_type", "qty", "rate", "value"].includes(column.fieldname))
 			value = red(value);
 		if (data.component) value = `<i style="color:var(--text-muted)">${value}</i>`;
 		return value;
 	},
 };
+
+// the flags the engine puts on the "lines to review" list
+function sf_needs_review(flag) {
+	return ["negative", "differs", "return_differs", "gap"].includes(flag);
+}
 
 // Opening Transfer Cost Breakdown from inside itself is the same route with other filters, which the
 // router does not reload -- so there the filter is changed in place, and anywhere else the route is set.

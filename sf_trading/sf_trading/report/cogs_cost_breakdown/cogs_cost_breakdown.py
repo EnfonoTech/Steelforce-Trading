@@ -13,10 +13,16 @@ Breakdown -- or, with Expand Transfer Chain ticked, the documents *its* source w
 hops back. A Purchase Receipt that carried landed cost or taxes in valuation is split into price,
 taxes and landed cost.
 
-The voucher totals (COGS, GL Booked, Difference, Sales) always cover the whole voucher, whatever the
-Item and Warehouse filters hide from the lines below. A Sales Invoice that moved no stock itself is
-answered by the Delivery Notes it billed. A return line shows as negative COGS, without a source
-breakdown. Read only: it recomputes on every open.
+A return line shows as negative COGS. Its Check says whether the stock went back in at the cost the
+original sale took it out at (Original Rate), is a standalone return with no original invoice (ERPNext
+then restocks it at the current valuation rate), or was restocked at a different cost.
+
+Filters that narrow the VOUCHERS: Returns (include / exclude / only), Branch, Customer Group, Sales
+Person, Customer, and Only Differences (the ledger and the GL disagree). Filters that narrow the LINES:
+Item, Item Group, Warehouse, Cost Center, Margin (below cost / over 5x cost) and Only Lines To Review
+(the Check is not a match). The voucher totals (COGS, GL Booked, Difference, Sales) always cover the
+whole voucher, whatever the line filters hide. A Sales Invoice that moved no stock itself is answered by
+the Delivery Notes it billed. Read only: it recomputes on every open.
 
 Permissions: `frappe.db.sql` applies none, so the User Permissions on Company, Customer, Branch,
 Warehouse and Cost Center are applied here, the way the desk list applies them.
@@ -33,10 +39,25 @@ from sf_trading import cogs_breakdown as cb
 VOUCHER_TYPES = ("Delivery Note", "Sales Invoice")
 #: past this many item lines the source documents are left out -- pick a voucher to see them
 MAX_EXPANDED_LINES = 300
+#: Only Lines To Review checks every candidate line against the ledger, so it may look at more
+MAX_REVIEW_LINES = 3000
 #: past this many vouchers only the newest are read -- every one costs reads of its own
 MAX_VOUCHERS = 1000
+
+#: the Returns filter
+INCLUDE_RETURNS, EXCLUDE_RETURNS, ONLY_RETURNS = "Include", "Exclude", "Only"
+#: the Margin filter (the second option names cb.HIGH_MARGIN_RATIO)
+BELOW_COST, HIGH_MARGIN = "Below cost", "Over 5x cost"
+
 #: the Check column, by the engine's flag
-CHECK_LABELS = {cb.OK: "Matches ledger", cb.NEGATIVE: "Negative stock", cb.DIFFERS: "Replay differs"}
+CHECK_LABELS = {
+	cb.OK: "Matches ledger",
+	cb.NEGATIVE: "Negative stock",
+	cb.DIFFERS: "Replay differs",
+	cb.RETURN_OK: "Return at original cost",
+	cb.RETURN_DIFFERS: "Return at a different cost",
+	cb.RETURN_STANDALONE: "Standalone return",
+}
 
 
 def execute(filters=None):
@@ -59,7 +80,21 @@ def execute(filters=None):
 	messages = []
 	vouchers = get_vouchers(filters, messages)
 	headers = get_headers(vouchers)
-	vouchers = [v for v in vouchers if headers.get(v) and visible_header(headers[v], v[0], filters, scope)]
+	ctx = frappe._dict(
+		scope=scope,
+		customers=cb.customer_info(h.customer for h in headers.values()),
+		customer_groups=cb.group_members("Customer Group", filters.customer_group)
+		if filters.customer_group
+		else None,
+		persons=cb.sales_persons(vouchers) if filters.sales_person else None,
+	)
+	vouchers = [v for v in vouchers if headers.get(v) and visible_header(headers[v], v, filters, ctx)]
+
+	booked = None
+	if cint(filters.only_differences):
+		booked = cb.gl_cogs_many(vouchers)
+		costs = cb.ledger_cost_many(vouchers)
+		vouchers = [v for v in vouchers if differs(costs.get(v, 0.0), booked.get(v, 0.0))]
 	if len(vouchers) > MAX_VOUCHERS:
 		messages.append(
 			_(
@@ -67,38 +102,87 @@ def execute(filters=None):
 			).format(MAX_VOUCHERS, len(vouchers))
 		)
 		vouchers = vouchers[:MAX_VOUCHERS]
+	if booked is None:
+		booked = cb.gl_cogs_many(vouchers)
 
 	entries = cb.entries_for_vouchers(vouchers)
 	item_rows = get_item_rows(vouchers)
 	vouchers = [v for v in vouchers if visible_lines(entries.get(v, []), item_rows.get(v, []), v[0], scope)]
+	persons = ctx.persons if ctx.persons is not None else cb.sales_persons(vouchers)
 
-	shown = {v: [e for e in entries.get(v, []) if line_matches(e, filters)] for v in vouchers}
+	items = cb.item_info(e.item_code for v in vouchers for e in entries.get(v, []))
+	by_detail = {r.name: r for rows in item_rows.values() for r in rows}
+	line_ctx = frappe._dict(
+		item_by_code=items,
+		by_detail=by_detail,
+		item_groups=cb.group_members("Item Group", filters.item_group) if filters.item_group else None,
+	)
+	candidates = {v: [e for e in entries.get(v, []) if line_matches(e, filters, line_ctx)] for v in vouchers}
+	vouchers = [v for v in vouchers if candidates[v]]
+
+	review = cint(filters.only_review)
+	line_count = sum(len(candidates[v]) for v in vouchers)
+	checkable = line_count <= (MAX_REVIEW_LINES if review else MAX_EXPANDED_LINES)
+	if review and not checkable:
+		messages.append(
+			_(
+				"{0} lines are more than Only Lines To Review can check at once. Narrow the dates or pick a "
+				"branch, customer, item group or voucher."
+			).format(line_count)
+		)
+		return get_columns(), [], "<br>".join(messages), None, get_summary([], None)
+
+	currency = frappe.get_cached_value("Company", filters.company, "default_currency")
+	checks = check_lines(vouchers, candidates, headers, checkable)
+	shown = {
+		v: [e for e in candidates[v] if not review or checks.flags.get(e.name) in cb.REVIEW_FLAGS]
+		for v in vouchers
+	}
 	vouchers = [v for v in vouchers if shown[v]]
 	hidden = sum(len(entries[v]) - len(shown[v]) for v in vouchers)
 	if hidden:
 		messages.append(
 			_(
-				"The Item / Warehouse filter hides {0} line(s) of these vouchers. COGS, GL Booked, Sales and "
-				"Difference still cover the whole voucher."
+				"The line filters hide {0} line(s) of these vouchers. COGS, GL Booked, Sales and Difference "
+				"still cover the whole voucher."
 			).format(hidden)
 		)
 
-	line_count = sum(len(shown[v]) for v in vouchers)
-	expand = line_count <= MAX_EXPANDED_LINES
+	shown_count = sum(len(shown[v]) for v in vouchers)
+	expand = checkable and shown_count <= MAX_EXPANDED_LINES
 	if not expand:
 		messages.append(
 			_(
 				"{0} item lines: source documents are shown for one voucher at a time. Pick a Voucher No to see them."
-			).format(line_count)
+			).format(shown_count)
 		)
 
-	currency = frappe.get_cached_value("Company", filters.company, "default_currency")
-	booked = cb.gl_cogs_many(vouchers)
 	rows, counts, chain_spent = build_rows(
-		vouchers, entries, shown, headers, item_rows, booked, filters, expand, currency
+		vouchers,
+		entries,
+		shown,
+		headers,
+		booked,
+		frappe._dict(
+			filters=filters,
+			expand=expand,
+			currency=currency,
+			checks=checks,
+			ctx=ctx,
+			customers=ctx.customers,
+			persons=persons,
+			item_by_code=items,
+			by_detail=by_detail,
+		),
 	)
 	messages += check_messages(counts, chain_spent)
 	return get_columns(), rows, "<br>".join(messages) or None, None, get_summary(rows, currency)
+
+
+def differs(cost: float, booked: float) -> bool:
+	"""The ledger and the GL disagree: both come from the same posting, so any gap beyond a fil's
+	rounding is a real one (unlike a replay against the ledger, which rounds apart as it goes)."""
+	return abs(cost - booked) > cb.tolerance()
 
 
 def get_vouchers(filters, messages) -> list:
@@ -191,7 +275,7 @@ def billed_notes(invoice: str, messages) -> list:
 
 
 def get_headers(vouchers) -> dict:
-	"""{(voucher_type, voucher_no): company, customer, branch, docstatus}, a query per type and chunk."""
+	"""{(voucher_type, voucher_no): company, customer, branch, docstatus, is_return, return_against}."""
 	by_type = defaultdict(list)
 	for voucher_type, voucher_no in vouchers:
 		by_type[voucher_type].append(voucher_no)
@@ -199,7 +283,7 @@ def get_headers(vouchers) -> dict:
 	out = {}
 	for voucher_type, names in by_type.items():
 		doc = frappe.qb.DocType(voucher_type)
-		columns = [doc.name, doc.company, doc.customer, doc.docstatus]
+		columns = [doc.name, doc.company, doc.customer, doc.docstatus, doc.is_return, doc.return_against]
 		if frappe.get_meta(voucher_type).has_field("branch"):
 			columns.append(doc.branch)
 		for chunk in cb.chunks(names):
@@ -229,12 +313,26 @@ def get_item_rows(vouchers) -> dict:
 	return out
 
 
-def visible_header(header, voucher_type: str, filters, scope) -> bool:
-	"""The customer filter, and the User Permissions that sit on the voucher's own header."""
+def visible_header(header, voucher, filters, ctx) -> bool:
+	"""The filters that narrow vouchers, and the User Permissions that sit on the voucher's own header."""
+	voucher_type = voucher[0]
 	if filters.customer and header.customer != filters.customer:
 		return False
+	if filters.branch and header.get("branch") != filters.branch:
+		return False
+	mode = filters.returns or INCLUDE_RETURNS
+	if (mode == EXCLUDE_RETURNS and cint(header.is_return)) or (
+		mode == ONLY_RETURNS and not cint(header.is_return)
+	):
+		return False
+	if ctx.customer_groups is not None:
+		customer = ctx.customers.get(header.customer)
+		if not customer or customer.customer_group not in ctx.customer_groups:
+			return False
+	if filters.sales_person and filters.sales_person not in ctx.persons.get(voucher, []):
+		return False
 	return all(
-		cb.permitted(scope, doctype, header.get(field), voucher_type)
+		cb.permitted(ctx.scope, doctype, header.get(field), voucher_type)
 		for doctype, field in (("Company", "company"), ("Customer", "customer"), ("Branch", "branch"))
 	)
 
@@ -253,76 +351,142 @@ def visible_lines(entries, item_rows, voucher_type: str, scope) -> bool:
 	)
 
 
-def line_matches(entry, filters) -> bool:
-	return not (
-		(filters.item_code and entry.item_code != filters.item_code)
-		or (filters.warehouse and entry.warehouse != filters.warehouse)
+def line_matches(entry, filters, ctx) -> bool:
+	"""The filters that narrow lines. The Margin ones only judge a sale line: a return's cost and sales are
+	both negative and say nothing about the price."""
+	if filters.item_code and entry.item_code != filters.item_code:
+		return False
+	if filters.warehouse and entry.warehouse != filters.warehouse:
+		return False
+	row = ctx.by_detail.get(entry.voucher_detail_no)
+	if filters.cost_center and (not row or row.cost_center != filters.cost_center):
+		return False
+	if ctx.item_groups is not None:
+		item = ctx.item_by_code.get(entry.item_code)
+		if not item or item.item_group not in ctx.item_groups:
+			return False
+	if filters.margin:
+		if entry.actual_qty >= 0 or not row:
+			return False
+		return margin_matches(filters.margin, flt(row.base_net_amount), -flt(entry.stock_value_difference))
+	return True
+
+
+def margin_matches(mode: str, sales: float, cost: float) -> bool:
+	if cost <= 0:
+		return False
+	if mode == BELOW_COST:
+		return sales < cost - cb.tolerance(cost)
+	if mode == HIGH_MARGIN:
+		return sales > cb.HIGH_MARGIN_RATIO * cost
+	return True
+
+
+def check_lines(vouchers, candidates, headers, checkable: bool) -> frappe._dict:
+	"""Check every candidate line against the ledger: the replay for a sale line, the original sale's cost
+	for a return line. `flags` is {line name: flag}; `explained`, `originals` feed the rows."""
+	checks = frappe._dict(flags={}, explained={}, originals={}, return_rates={})
+	if not checkable:
+		return checks
+
+	outgoing = [e for v in vouchers for e in candidates[v] if e.actual_qty < 0]
+	snapshots = cb.sources_before_many(outgoing)
+	for e in outgoing:
+		ex = checks.explained[e.name] = cb.explain(e, snapshots[e.name])
+		checks.flags[e.name] = ex.flag
+
+	returns = [v for v in vouchers if cint(headers[v].is_return)]
+	checks.originals = cb.original_costs(
+		{(v[0], headers[v].return_against) for v in returns if headers[v].return_against}
 	)
+	for v in returns:
+		for e in candidates[v]:
+			if e.actual_qty > 0:
+				flag, rate = cb.return_check(v[0], headers[v].return_against, e, checks.originals)
+				checks.flags[e.name] = flag
+				checks.return_rates[e.name] = rate
+	return checks
 
 
-def build_rows(vouchers, entries, shown, headers, item_rows, booked, filters, expand, currency):
+def build_rows(vouchers, entries, shown, headers, booked, c):
 	"""The report rows, the count of lines by Check flag, and whether the chain budget ran out."""
-	explained = {}
 	budget = cb.new_budget()
-	if expand:
-		outgoing = [e for v in vouchers for e in shown[v] if e.actual_qty < 0]
-		snapshots = cb.sources_before_many(outgoing)
-		for e in outgoing:
-			ex = explained[e.name] = cb.explain(e, snapshots[e.name])
-			if cint(filters.expand_chain):
-				cb.attach_chain(ex.rows, e.item_code, budget)
-	totals = receipt_totals_of(explained.values())
+	if c.expand and cint(c.filters.expand_chain):
+		for v in vouchers:
+			for e in shown[v]:
+				if e.name in c.checks.explained:
+					cb.attach_chain(c.checks.explained[e.name].rows, e.item_code, budget)
+	totals = {}
+	if c.expand:
+		totals = receipt_totals_of(
+			c.checks.explained[e.name] for v in vouchers for e in shown[v] if e.name in c.checks.explained
+		)
+	sales = {name: flt(r.base_net_amount) for name, r in c.by_detail.items()}
+	default_method = cb.default_valuation_method()
 
-	sales = {r.name: flt(r.base_net_amount) for rows in item_rows.values() for r in rows}
 	counts = defaultdict(int)
 	rows = []
 	for voucher in vouchers:
 		whole = entries[voucher]
+		header = headers[voucher]
 		cogs = sum(-flt(e.stock_value_difference) for e in whole)
 		sold = voucher_sales(whole, sales)
 		voucher_booked = flt(booked.get(voucher))
+		customer = c.customers.get(header.customer)
 		rows.append(
 			{
 				"indent": 0,
 				"doc_type": voucher[0],
 				"document": voucher[1],
 				"posting_date": whole[0].posting_date,
-				"customer": headers[voucher].customer,
+				"branch": header.get("branch"),
+				"customer": header.customer,
+				"customer_name": customer.customer_name if customer else None,
+				"sales_person": ", ".join(c.persons.get(voucher, [])) or None,
+				"return_against": header.return_against if cint(header.is_return) else None,
 				"value": cogs,
 				"gl_cogs": voucher_booked,
 				"difference": cogs - voucher_booked,
+				"differs": 1 if differs(cogs, voucher_booked) else 0,
 				"sales": sold,
 				"margin": (sold - cogs) if sold is not None else None,
 				"margin_pct": margin_pct(sold, cogs),
-				"currency": currency,
+				"currency": c.currency,
 			}
 		)
 		for e in shown[voucher]:
 			qty = -flt(e.actual_qty)
 			value = -flt(e.stock_value_difference)
 			line_sales = sales.get(e.voucher_detail_no)
-			ex = explained.get(e.name)
+			flag = c.checks.flags.get(e.name)
+			ex = c.checks.explained.get(e.name)
+			item = c.item_by_code.get(e.item_code)
+			detail = c.by_detail.get(e.voucher_detail_no)
 			rows.append(
 				{
 					"indent": 1,
 					"item_code": e.item_code,
-					"item_name": frappe.get_cached_value("Item", e.item_code, "item_name"),
+					"item_name": item.item_name if item else e.item_code,
+					"item_group": item.item_group if item else None,
 					"warehouse": e.warehouse,
-					"valuation_method": cb.valuation_method(e.item_code),
+					"cost_center": detail.cost_center if detail else None,
+					"valuation_method": (item.valuation_method if item else None) or default_method,
 					"qty": qty,
 					"rate": (value / qty) if qty else 0,
+					"original_rate": c.checks.return_rates.get(e.name),
 					"value": value,
 					"sales": line_sales,
 					"margin": (line_sales - value) if line_sales is not None else None,
 					"margin_pct": margin_pct(line_sales, value),
-					"check": _(CHECK_LABELS[ex.flag]) if ex else None,
-					"check_flag": ex.flag if ex else None,
-					"currency": currency,
+					"check": _(CHECK_LABELS[flag]) if flag else None,
+					"check_flag": flag,
+					"currency": c.currency,
 				}
 			)
-			if ex:
-				counts[ex.flag] += 1
-				emit_sources(ex.rows, 2, e, totals, filters.company, currency, rows)
+			if flag:
+				counts[flag] += 1
+			if ex and c.expand:
+				emit_sources(ex.rows, 2, e, totals, c.filters.company, c.currency, rows)
 	return rows, counts, budget.spent
 
 
@@ -402,6 +566,13 @@ def check_messages(counts, chain_spent) -> list:
 				"'Not explained' row carries the difference."
 			).format(counts[cb.DIFFERS])
 		)
+	if counts.get(cb.RETURN_DIFFERS):
+		messages.append(
+			_(
+				"{0} return line(s) went back into stock at a different cost than the sale they return: see "
+				"Original Rate."
+			).format(counts[cb.RETURN_DIFFERS])
+		)
 	if chain_spent:
 		messages.append(
 			_(
@@ -419,6 +590,7 @@ def get_summary(rows, currency):
 	priced = [r for r in vouchers if r["sales"] is not None]
 	sold = sum(flt(r["sales"]) for r in priced)
 	cost = sum(flt(r["value"]) for r in priced)
+	apart = sum(1 for r in vouchers if r["differs"])
 	return [
 		{"label": _("Vouchers"), "value": len(vouchers), "datatype": "Int"},
 		{"label": _("COGS"), "value": cogs, "datatype": "Currency", "currency": currency},
@@ -428,7 +600,13 @@ def get_summary(rows, currency):
 			"value": cogs - booked,
 			"datatype": "Currency",
 			"currency": currency,
-			"indicator": "Green" if abs(cogs - booked) < 0.01 else "Red",
+			"indicator": "Red" if apart else "Green",
+		},
+		{
+			"label": _("Vouchers Apart"),
+			"value": apart,
+			"datatype": "Int",
+			"indicator": "Red" if apart else "Green",
 		},
 		{"label": _("Sales"), "value": sold, "datatype": "Currency", "currency": currency},
 		{"label": _("Margin %"), "value": margin_pct(sold, cost) or 0, "datatype": "Percent"},
@@ -452,6 +630,7 @@ def get_columns():
 			"width": 180,
 		},
 		{"label": _("Date"), "fieldname": "posting_date", "fieldtype": "Date", "width": 95},
+		{"label": _("Branch"), "fieldname": "branch", "fieldtype": "Link", "options": "Branch", "width": 110},
 		{
 			"label": _("Customer"),
 			"fieldname": "customer",
@@ -459,8 +638,24 @@ def get_columns():
 			"options": "Customer",
 			"width": 160,
 		},
+		{"label": _("Customer Name"), "fieldname": "customer_name", "fieldtype": "Data", "width": 170},
+		{"label": _("Sales Person"), "fieldname": "sales_person", "fieldtype": "Data", "width": 130},
+		{
+			"label": _("Return Against"),
+			"fieldname": "return_against",
+			"fieldtype": "Dynamic Link",
+			"options": "doc_type",
+			"width": 170,
+		},
 		{"label": _("Item"), "fieldname": "item_code", "fieldtype": "Link", "options": "Item", "width": 120},
 		{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 160},
+		{
+			"label": _("Item Group"),
+			"fieldname": "item_group",
+			"fieldtype": "Link",
+			"options": "Item Group",
+			"width": 130,
+		},
 		{
 			"label": _("Warehouse"),
 			"fieldname": "warehouse",
@@ -468,12 +663,27 @@ def get_columns():
 			"options": "Warehouse",
 			"width": 120,
 		},
+		{
+			"label": _("Cost Center"),
+			"fieldname": "cost_center",
+			"fieldtype": "Link",
+			"options": "Cost Center",
+			"width": 140,
+		},
 		{"label": _("Valuation Method"), "fieldname": "valuation_method", "fieldtype": "Data", "width": 120},
 		{"label": _("Source"), "fieldname": "source_type", "fieldtype": "Data", "width": 190},
 		{"label": _("Qty"), "fieldname": "qty", "fieldtype": "Float", "precision": 3, "width": 80},
 		{
 			"label": _("Rate"),
 			"fieldname": "rate",
+			"fieldtype": "Currency",
+			"options": "currency",
+			"precision": 4,
+			"width": 110,
+		},
+		{
+			"label": _("Original Rate"),
+			"fieldname": "original_rate",
 			"fieldtype": "Currency",
 			"options": "currency",
 			"precision": 4,
@@ -515,7 +725,7 @@ def get_columns():
 			"width": 100,
 		},
 		{"label": _("Margin %"), "fieldname": "margin_pct", "fieldtype": "Percent", "width": 80},
-		{"label": _("Check"), "fieldname": "check", "fieldtype": "Data", "width": 120},
+		{"label": _("Check"), "fieldname": "check", "fieldtype": "Data", "width": 170},
 		{"label": _("Cost Breakdown"), "fieldname": "breakdown", "fieldtype": "Data", "width": 140},
 		{
 			"label": _("Currency"),
