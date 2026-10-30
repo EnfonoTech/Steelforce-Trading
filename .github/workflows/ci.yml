@@ -17,6 +17,7 @@ jobs:
     strategy:
       fail-fast: false
     name: Server
+    timeout-minutes: 90
 
     services:
       redis-cache:
@@ -77,21 +78,27 @@ jobs:
             ${{ runner.os }}-yarn-
 
       - name: Install MariaDB Client
-        run: sudo apt-get install mariadb-client-10.6
+        # the versioned package name (mariadb-client-10.6) is gone from the ubuntu-latest image
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mariadb-client
 
       - name: Setup
         run: |
           pip install frappe-bench
-          bench init --skip-redis-config-generation --skip-assets --python "$(which python)" ~/frappe-bench
+          bench init --skip-redis-config-generation --skip-assets --frappe-branch version-15 --python "$(which python)" ~/frappe-bench
           mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL character_set_server = 'utf8mb4'"
           mariadb --host 127.0.0.1 --port 3306 -u root -proot -e "SET GLOBAL collation_server = 'utf8mb4_unicode_ci'"
 
       - name: Install
         working-directory: /home/runner/frappe-bench
         run: |
+          # sf_trading is an ERPNext app (sdbnb.py, the stock and accounts hooks): it cannot install without it
+          bench get-app erpnext --branch version-15
           bench get-app sf_trading $GITHUB_WORKSPACE
           bench setup requirements --dev
           bench new-site --db-root-password root --admin-password admin test_site
+          bench --site test_site install-app erpnext
           bench --site test_site install-app sf_trading
           bench build
         env:

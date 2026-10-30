@@ -308,6 +308,7 @@ You do not need us to build a view. Most questions are already answered.
 | What happened in the cash drawer today? | DCR Report, DCR Detailed |
 | What is waiting for approval? | Work Flow Approval |
 | Which cheques are coming due? | PDC Report |
+| How was this cost reached? | COGS Cost Breakdown, Transfer Cost Breakdown |
 
 **Business Dashboard** (`/app/business-dashboard`) shows sales, expenses, profit, cash and bank balances and trends on one screen.
 
@@ -355,6 +356,8 @@ To check either: search `Scheduled Job Type`, find it, and look at **Last Execut
 **Reorder levels.** Nothing on this site has one configured yet. The **Reorder Recommendation** report proposes a level and a quantity per item and warehouse from real sales history. Read it before setting anything, and remember: transfers between your own warehouses are deliberately excluded, and most items fall back to the default lead time in the filter.
 
 **Negative stock.** If a warehouse goes negative, stop and tell us. It usually means documents were posted out of order and the fix has accounting consequences.
+
+**Cost breakdowns.** *COGS Cost Breakdown* (View > COGS Calculation on a Delivery Note or Sales Invoice) and *Transfer Cost Breakdown* (View > Transfer Cost Breakdown on a Material Transfer) replay the Stock Ledger under Moving Average and show which documents a cost was made of (`sf_trading/cogs_breakdown.py`). They are read only and recompute on every open, so a backdated entry shows its new cost the next time the report opens. Read the **Check** column first: *Replay differs* means the replay and the ledger disagree by more than rounding (a thousandth of the line, never under a fil and a half), and the gap is its own row. On the live ledger 99.98% of 18,883 lines agreed. The ones that do not are stock that left an empty bin (the entries written by the migration, before Allow Negative Stock was switched off) and a handful of lines with an unexplained gap; send us the voucher number of any other. The reports apply the same User Permissions the desk lists do, so a user restricted to a warehouse or branch sees only the vouchers inside it.
 
 ### 9.5 Closing a period
 
