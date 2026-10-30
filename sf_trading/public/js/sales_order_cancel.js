@@ -1,14 +1,20 @@
 // sf_trading/public/js/sales_order_cancel.js
-// Cancelling a Sales Order or Purchase Order asks why, as a sales return does: a reason picked from
+// Cancelling a Sales Order, Purchase Order or Quotation asks why, as a sales return does: a reason picked from
 // the Order Cancellation Reason list, plus details where the reason needs them ("Other" always).
 // sf_trading/order_cancellation.py stores both on the order; the before_cancel guards refuse a
 // cancel without them, so this dialog is the convenience and the server is the gate -- an order can
 // also be cancelled through the API or a script, with no browser in the loop.
 //
-// On a Sales Order only a Sales Manager cancels. Everyone else uses Request Cancellation, which
-// records the same reason and sends the order to the Sales Manager (sf_trading/approval_routing.py).
+// On a Sales Order or a Quotation only a Sales Manager cancels. Everyone else uses Request Cancellation,
+// which records the same reason and sends it to the Sales Manager (sf_trading/approval_routing.py).
 
 const SF_CANCEL_OTHER = "Other";
+// the reasons each document may pick, by the reason's Applies To (order_cancellation.REASON_SCOPE)
+const SF_CANCEL_REASON_SCOPE = {
+	"Sales Order": ["Sales and Purchase Orders", "Sales Order"],
+	"Purchase Order": ["Sales and Purchase Orders", "Purchase Order"],
+	Quotation: ["Sales and Purchase Orders", "Sales Order"],
+};
 
 function sf_cancellation_dialog(frm, title, primary_label, on_pick) {
 	let d = null;
@@ -25,7 +31,7 @@ function sf_cancellation_dialog(frm, title, primary_label, on_pick) {
 				get_query: () => ({
 					filters: {
 						disabled: 0,
-						applies_to: ["in", ["Sales and Purchase Orders", frm.doctype]],
+						applies_to: ["in", SF_CANCEL_REASON_SCOPE[frm.doctype] || ["Sales and Purchase Orders", frm.doctype]],
 					},
 				}),
 				onchange() {
@@ -82,8 +88,8 @@ function sf_prompt_cancellation_remark(frm, title) {
 function sf_request_cancellation(frm) {
 	sf_cancellation_dialog(frm, __("Request Cancellation"), __("Send to Sales Manager"), (values) => {
 		frappe.call({
-			method: "sf_trading.order_cancellation.request_sales_order_cancellation",
-			args: { sales_order: frm.doc.name, reason: values.reason, details: values.details },
+			method: "sf_trading.order_cancellation.request_cancellation",
+			args: { doctype: frm.doctype, name: frm.doc.name, reason: values.reason, details: values.details },
 			freeze: true,
 			freeze_message: __("Sending the request..."),
 			callback() {
@@ -94,35 +100,41 @@ function sf_request_cancellation(frm) {
 	});
 }
 
-frappe.ui.form.on("Sales Order", {
-	refresh(frm) {
-		if (frm.doc.docstatus !== 1 || frm.doc.workflow_state === "Cancellation Requested") return;
-		if (["Closed", "Completed"].includes(frm.doc.status)) return;
-		frappe
-			.xcall("sf_trading.order_cancellation.can_request_cancellation", { sales_order: frm.doc.name })
-			.then((allowed) => {
-				if (allowed && frm.doc.docstatus === 1) {
-					frm.add_custom_button(__("Request Cancellation"), () => sf_request_cancellation(frm), __("Actions"));
-				}
-			});
-	},
+// Sales Order and Quotation: the Request Cancellation button, and a direct cancel by a Sales Manager only
+function sf_requestable_cancel_events(prompt_title) {
+	return {
+		refresh(frm) {
+			if (frm.doc.docstatus !== 1 || frm.doc.workflow_state === "Cancellation Requested") return;
+			if (["Closed", "Completed", "Ordered", "Partially Ordered"].includes(frm.doc.status)) return;
+			frappe
+				.xcall("sf_trading.order_cancellation.can_request", { doctype: frm.doctype, name: frm.doc.name })
+				.then((allowed) => {
+					if (allowed && frm.doc.docstatus === 1) {
+						frm.add_custom_button(__("Request Cancellation"), () => sf_request_cancellation(frm), __("Actions"));
+					}
+				});
+		},
 
-	before_cancel(frm) {
-		// Only a Sales Manager cancels an order (sales_order_governance.CANCEL_APPROVER_ROLES);
-		// anyone else asks, and the Sales Manager's approval does the cancelling.
-		if (!frappe.user.has_role(["Sales Manager", "System Manager"])) {
-			frappe.msgprint({
-				title: __("Approval Required"),
-				indicator: "orange",
-				message: __("A Sales Manager approves order cancellations. Use Actions > Request Cancellation and pick the reason."),
-			});
-			// the form's own cancel flow stops cleanly when a before_cancel handler clears this
-			frappe.validated = false;
-			return Promise.resolve();
-		}
-		return sf_prompt_cancellation_remark(frm, __("Why is this order being cancelled?"));
-	},
-});
+		before_cancel(frm) {
+			// Only a Sales Manager cancels (sales_order_governance.CANCEL_APPROVER_ROLES); anyone else
+			// asks, and the Sales Manager's approval does the cancelling.
+			if (!frappe.user.has_role(["Sales Manager", "System Manager"])) {
+				frappe.msgprint({
+					title: __("Approval Required"),
+					indicator: "orange",
+					message: __("A Sales Manager approves cancellations. Use Actions > Request Cancellation and pick the reason."),
+				});
+				// the form's own cancel flow stops cleanly when a before_cancel handler clears this
+				frappe.validated = false;
+				return Promise.resolve();
+			}
+			return sf_prompt_cancellation_remark(frm, prompt_title);
+		},
+	};
+}
+
+frappe.ui.form.on("Sales Order", sf_requestable_cancel_events(__("Why is this order being cancelled?")));
+frappe.ui.form.on("Quotation", sf_requestable_cancel_events(__("Why is this quotation being cancelled?")));
 
 frappe.ui.form.on("Purchase Order", {
 	before_cancel(frm) {

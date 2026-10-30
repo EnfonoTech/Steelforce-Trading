@@ -1,13 +1,14 @@
 # sf_trading/approval_routing.py
 """Two approvals routed through permission_manager's PM Workflow engine.
 
-**Sales Order cancellation.** A submitted order is not cancelled by whoever presses Cancel. A sales
+**Sales Order and Quotation cancellation.** A submitted order is not cancelled by whoever presses Cancel. A sales
 user asks for it -- Actions > Request Cancellation on the order, with a reason -- and a Sales
 Manager approves it from the Approvals page or the order itself, at which point the engine cancels
 the order, or rejects it, which puts the order back as it was. Submitting an order is untouched:
 the workflow governs submitted orders only (`workflow_applicability`), so a draft submits exactly
 as before. The reason lands in the order's own Cancellation Remark, the field the cancel guard in
-sales_order_governance.py already demands.
+sales_order_governance.py already demands. A Quotation goes through the same request, in its own
+Quotation Cancellation workflow (`ensure_quotation_workflow`).
 
 **Stock Reconciliation approval.** A stock reconciliation (purpose "Stock Reconciliation", not an
 opening-stock load) goes to the Inventory Head and then to the Operations Head (2026-10-13, client:
@@ -28,9 +29,13 @@ from frappe import _
 from frappe.utils import cint, cstr
 
 SALES_ORDER = "Sales Order"
+QUOTATION = "Quotation"
 STOCK_RECONCILIATION = "Stock Reconciliation"
 
 SO_WORKFLOW = "Sales Order Cancellation"
+QTN_WORKFLOW = "Quotation Cancellation"
+#: the documents cancelled through a request, and the workflow that carries it
+CANCELLATION_WORKFLOWS = {SALES_ORDER: SO_WORKFLOW, QUOTATION: QTN_WORKFLOW}
 SUBMITTED = "Submitted"
 REQUESTED = "Cancellation Requested"
 CANCELLED = "Cancelled"
@@ -70,7 +75,7 @@ def workflow_applicability(doctype: str, doc=None):
 	Both are routed in part, so both are `conditional`: they stay off the boot-time list of
 	wholly-governed doctypes, and the engine asks about each document.
 	"""
-	if doctype == SALES_ORDER:
+	if doctype in CANCELLATION_WORKFLOWS:
 		if doc is None:
 			return {"conditional": True}
 		return {"conditional": True, "applies": cint(doc.get("docstatus")) >= 1}
@@ -86,7 +91,7 @@ def workflow_applicability(doctype: str, doc=None):
 
 
 def capture_cancellation_reason(doc, _method=None):
-	"""Sales Order before_update_after_submit: a cancellation request carries its reason.
+	"""Sales Order and Quotation before_update_after_submit: a cancellation request carries its reason.
 
 	The engine moves the order into Cancellation Requested with a save; the comment given with the
 	action reaches the document through `doc.flags.pm_workflow_comment` (permission_manager's
@@ -94,13 +99,14 @@ def capture_cancellation_reason(doc, _method=None):
 	rejected request clears the remark, so the next request -- or a later direct cancel -- has to
 	give its own.
 	"""
-	if doc.flags.get("pm_workflow_action"):
-		# runs before the save's own validation: an order raised before a field became mandatory
-		# (Sales Person, say) must still be able to ask for, and get, its cancellation
-		doc.flags.ignore_mandatory = True
 	before = doc.get_doc_before_save()
 	was = before.get("workflow_state") if before else None
 	now = doc.get("workflow_state")
+	if doc.flags.get("pm_workflow_action") or REQUESTED in (was, now):
+		# runs before the save's own validation: a document raised before a field became mandatory
+		# (Sales Person, say) must still be able to ask for, and get, its cancellation. The engine
+		# does not flag its own saves, so a move into or out of Cancellation Requested is the sign.
+		doc.flags.ignore_mandatory = True
 	if now == REQUESTED and was != REQUESTED:
 		reason = cstr(doc.flags.get("pm_workflow_comment")).strip() or cstr(doc.get(REMARK_FIELD)).strip()
 		if not reason:
@@ -159,22 +165,53 @@ REQUEST_CONDITION = 'doc.get("custom_cancellation_reason")'
 
 
 def ensure_request_condition():
-	"""after_migrate: an existing Sales Order Cancellation workflow gets the request condition too
+	"""after_migrate: an existing cancellation workflow gets the request condition too
 	(ensure_workflows never touches a workflow that already exists)."""
-	if not frappe.db.exists("PM Workflow", SO_WORKFLOW):
+	for doctype, workflow in CANCELLATION_WORKFLOWS.items():
+		if not frappe.db.exists("PM Workflow", workflow):
+			continue
+		rows = frappe.get_all("PM Workflow Transition", filters={"parent": workflow, "parenttype": "PM Workflow",
+			"action": REQUEST}, fields=["name", "condition"])
+		changed = False
+		for row in rows:
+			if not cstr(row.condition).strip():
+				frappe.db.set_value("PM Workflow Transition", row.name, "condition", REQUEST_CONDITION,
+					update_modified=False)
+				changed = True
+		if changed:
+			frappe.clear_cache(doctype=doctype)
+
+
+def ensure_quotation_workflow():
+	"""after_migrate: a site that cancels its Sales Orders through a request gets the same for Quotations.
+
+	Follows the Sales Order's: only where that workflow exists and is active, and never over a Quotation
+	Cancellation someone has already set up or changed."""
+	if frappe.db.exists("PM Workflow", QTN_WORKFLOW):
 		return
-	rows = frappe.get_all("PM Workflow Transition", filters={"parent": SO_WORKFLOW, "parenttype": "PM Workflow",
-		"action": REQUEST}, fields=["name", "condition"])
-	changed = False
-	for row in rows:
-		if not cstr(row.condition).strip():
-			frappe.db.set_value("PM Workflow Transition", row.name, "condition", REQUEST_CONDITION, update_modified=False)
-			changed = True
-	if changed:
-		frappe.clear_cache(doctype="Sales Order")
+	if not frappe.db.exists("PM Workflow", {"name": SO_WORKFLOW, "is_active": 1}):
+		return
+	definition = quotation_workflow()
+	_ensure_masters(definition)
+	# The engine stamps every existing Quotation's workflow_state with set_value, which also moves its
+	# `modified` / `modified_by` to now and the deploying user: every quotation would read as edited
+	# today, and a cancelled one as cancelled today. Put both back as they were.
+	stamps = frappe.db.sql("select name, modified, modified_by from `tabQuotation`", as_dict=True)
+	frappe.get_doc(definition).insert(ignore_permissions=True)
+	for row in stamps:
+		frappe.db.sql("update `tabQuotation` set modified = %s, modified_by = %s where name = %s",
+			(row.modified, row.modified_by, row.name))
 
 
 def sales_order_workflow() -> dict:
+	return _cancellation_workflow(SO_WORKFLOW, SALES_ORDER)
+
+
+def quotation_workflow() -> dict:
+	return _cancellation_workflow(QTN_WORKFLOW, QUOTATION)
+
+
+def _cancellation_workflow(workflow_name: str, doctype: str) -> dict:
 	transitions = [_transition(SUBMITTED, REQUEST, REQUESTED, role, require_comment=1, condition=REQUEST_CONDITION)
 		for role in REQUESTER_ROLES]
 	transitions += [
@@ -183,8 +220,8 @@ def sales_order_workflow() -> dict:
 	]
 	return {
 		"doctype": "PM Workflow",
-		"workflow_name": SO_WORKFLOW,
-		"document_type": SALES_ORDER,
+		"workflow_name": workflow_name,
+		"document_type": doctype,
 		"is_active": 1,
 		"override_status": 1,
 		"workflow_state_field": "workflow_state",
