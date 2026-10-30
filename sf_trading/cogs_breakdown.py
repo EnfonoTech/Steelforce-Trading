@@ -7,8 +7,8 @@ time they open, so a backdated entry shows its new cost on the next open with no
 THE METHOD
 ----------
 This site values every item at Moving Average (Stock Settings, and no item overrides it with FIFO;
-there are no batch, serial, bundle or transit-warehouse movements), so this replays Moving Average:
-the outgoing rate of a movement is the warehouse's balance value / balance qty just before it.
+there are no batch, serial or bundle movements), so this replays Moving Average: the outgoing rate of
+a movement is the warehouse's balance value / balance qty just before it.
 
 Moving Average blends everything in the warehouse into one rate, so "which documents is this cost
 made of" can only be answered pro rata. The warehouse balance just before a movement is held as
@@ -20,6 +20,15 @@ bucket's own rate -- which adds up to the movement's own value.
 "Adds up to" is checked, not assumed: `explain` compares the buckets with the ledger's own balance and
 the rows with the line's own value, flags a line that does not match, and adds an explicit row for
 whatever the replay cannot explain, so the rows under a line sum to the line to within rounding.
+
+TRANSFERS THROUGH "In Transit"
+------------------------------
+About half of the transfers go through a plain warehouse called "In Transit": a Send moves stock into
+it and an Accept moves it out, as two ordinary Material Transfers. Nothing links an Accept to its Send
+(no outgoing_stock_entry, no custom field), and the transit bin is valued at Moving Average like any
+other, so an Accept draws pro rata from everything that sat in transit at that moment, never from
+"its" Send. The breakdown shows exactly that mix, and Expand Transfer Chain follows each Send back to
+where it came from.
 
 WHERE THE REPLAY STARTS
 -----------------------
@@ -84,6 +93,19 @@ REL_TOLERANCE = 0.001
 OK = "ok"
 NEGATIVE = "negative"
 DIFFERS = "differs"
+#: a return line against the sale it returns: stock restocked at what it was sold at, or not
+RETURN_OK = "return_ok"
+RETURN_DIFFERS = "return_differs"
+#: a return with no original invoice (most of them here): ERPNext restocks it at the current valuation rate
+RETURN_STANDALONE = "return_standalone"
+#: a transfer line whose receiving leg is worth something other than what left the source
+GAP = "gap"
+#: flags that put a line on the "lines to review" list. A standalone return is routine, so it is not one.
+REVIEW_FLAGS = (NEGATIVE, DIFFERS, RETURN_DIFFERS, GAP)
+#: a return is restocked "at a different cost" when it is further than this share from the sale's
+RETURN_RATE_TOLERANCE = 0.01
+#: "Over 5x cost": a margin that high is a price typed wrong far more often than a bargain
+HIGH_MARGIN_RATIO = 5
 
 #: the item table that carries a stock voucher's rows, for its sales amount and cost centre
 SALES_ITEM_DOCTYPE = {"Delivery Note": "Delivery Note Item", "Sales Invoice": "Sales Invoice Item"}
@@ -116,12 +138,12 @@ def tolerance(value: float = 0.0) -> float:
 	return max(1.5 * 10**-precision, REL_TOLERANCE * abs(value))
 
 
+def default_valuation_method() -> str:
+	return frappe.db.get_single_value("Stock Settings", "valuation_method") or "FIFO"
+
+
 def valuation_method(item_code: str) -> str:
-	return (
-		frappe.get_cached_value("Item", item_code, "valuation_method")
-		or frappe.db.get_single_value("Stock Settings", "valuation_method")
-		or "FIFO"
-	)
+	return frappe.get_cached_value("Item", item_code, "valuation_method") or default_valuation_method()
 
 
 # ---------------------------------------------------------------------------
@@ -538,6 +560,164 @@ def receipt_components(s, totals: dict, item_code: str) -> list:
 	if abs(residual) > tolerance(s.value):
 		rows.append(frappe._dict(component=_("Rate adjustments"), rate=residual / s.qty, value=residual))
 	return rows
+
+
+# ---------------------------------------------------------------------------
+# Lookups the reports share: items, customers, groups, sales people, returns, transfers
+# ---------------------------------------------------------------------------
+def item_info(codes) -> dict:
+	"""{item_code: item_name, item_group, valuation_method}, one query per chunk instead of one per line."""
+	out = {}
+	for chunk in chunks(sorted({c for c in codes if c})):
+		for r in item_fields(chunk):
+			out[r.name] = r
+	return out
+
+
+def item_fields(codes) -> list:
+	item = frappe.qb.DocType("Item")
+	return (
+		frappe.qb.from_(item)
+		.select(item.name, item.item_name, item.item_group, item.valuation_method)
+		.where(item.name.isin(list(codes)))
+		.run(as_dict=True)
+	)
+
+
+def customer_info(names) -> dict:
+	"""{customer: customer_name, customer_group}."""
+	out = {}
+	for chunk in chunks(sorted({n for n in names if n})):
+		for r in customer_fields(chunk):
+			out[r.name] = r
+	return out
+
+
+def customer_fields(names) -> list:
+	customer = frappe.qb.DocType("Customer")
+	return (
+		frappe.qb.from_(customer)
+		.select(customer.name, customer.customer_name, customer.customer_group)
+		.where(customer.name.isin(list(names)))
+		.run(as_dict=True)
+	)
+
+
+def group_members(doctype: str, name: str) -> set:
+	"""`name` and everything under it in a nested-set tree (Item Group, Customer Group), as the stock
+	reports of ERPNext read a group filter."""
+	from frappe.utils.nestedset import get_descendants_of
+
+	return {name, *get_descendants_of(doctype, name, ignore_permissions=True)}
+
+
+def sales_persons(vouchers) -> dict:
+	"""{(voucher_type, voucher_no): [sales person, ...]} from the voucher's Sales Team."""
+	by_type = defaultdict(list)
+	for voucher_type, voucher_no in vouchers:
+		by_type[voucher_type].append(voucher_no)
+
+	out = defaultdict(list)
+	for voucher_type, names in by_type.items():
+		for chunk in chunks(names):
+			for r in sales_team_rows(voucher_type, chunk):
+				if r.sales_person not in out[(voucher_type, r.parent)]:
+					out[(voucher_type, r.parent)].append(r.sales_person)
+	return out
+
+
+def sales_team_rows(voucher_type: str, parents) -> list:
+	team = frappe.qb.DocType("Sales Team")
+	return (
+		frappe.qb.from_(team)
+		.select(team.parent, team.sales_person)
+		.where((team.parenttype == voucher_type) & team.parent.isin(list(parents)))
+		.orderby(team.idx)
+		.run(as_dict=True)
+	)
+
+
+def ledger_cost_many(vouchers) -> dict:
+	"""{(voucher_type, voucher_no): what its stock cost per the ledger}, grouped in the database."""
+	by_type = defaultdict(list)
+	for voucher_type, voucher_no in vouchers:
+		by_type[voucher_type].append(voucher_no)
+
+	out = {}
+	for voucher_type, names in by_type.items():
+		for chunk in chunks(names):
+			rows = frappe.db.sql(
+				"""select voucher_no, sum(-stock_value_difference) from `tabStock Ledger Entry`
+				where voucher_type = %s and voucher_no in %s and is_cancelled = 0
+				group by voucher_no""",
+				(voucher_type, tuple(chunk)),
+			)
+			for voucher_no, cost in rows:
+				out[(voucher_type, voucher_no)] = flt(cost)
+	return out
+
+
+def original_costs(originals) -> dict:
+	"""{(voucher_type, voucher_no, item_code): cost and qty the sale took out}, for the sales given returns
+	were made against. `originals` are (voucher_type, voucher_no) pairs."""
+	by_type = defaultdict(set)
+	for voucher_type, voucher_no in originals:
+		by_type[voucher_type].add(voucher_no)
+
+	out = {}
+	for voucher_type, names in by_type.items():
+		for chunk in chunks(sorted(names)):
+			rows = frappe.db.sql(
+				"""select voucher_no, item_code, sum(-stock_value_difference), sum(-actual_qty)
+				from `tabStock Ledger Entry`
+				where voucher_type = %s and voucher_no in %s and actual_qty < 0 and is_cancelled = 0
+				group by voucher_no, item_code""",
+				(voucher_type, tuple(chunk)),
+			)
+			for voucher_no, item_code, cost, qty in rows:
+				out[(voucher_type, voucher_no, item_code)] = frappe._dict(cost=flt(cost), qty=flt(qty))
+	return out
+
+
+def return_check(voucher_type: str, return_against, entry, originals: dict):
+	"""(flag, original rate) of a return line: restocked at what the sale took it out at, or not."""
+	original = originals.get((voucher_type, return_against, entry.item_code)) if return_against else None
+	if not original or original.qty <= EPSILON:
+		return RETURN_STANDALONE, None
+	rate = original.cost / original.qty
+	value = flt(entry.stock_value_difference)
+	expected = flt(entry.actual_qty) * rate
+	if abs(value - expected) <= max(tolerance(value), RETURN_RATE_TOLERANCE * abs(expected)):
+		return RETURN_OK, rate
+	return RETURN_DIFFERS, rate
+
+
+def incoming_legs(details) -> dict:
+	"""{voucher_detail_no: qty and value that arrived} -- the receiving leg of each Stock Entry row."""
+	out = {}
+	for chunk in chunks(sorted({d for d in details if d})):
+		rows = frappe.db.sql(
+			"""select voucher_detail_no, sum(actual_qty), sum(stock_value_difference)
+			from `tabStock Ledger Entry`
+			where voucher_type = 'Stock Entry' and voucher_detail_no in %s
+			  and actual_qty > 0 and is_cancelled = 0
+			group by voucher_detail_no""",
+			(tuple(chunk),),
+		)
+		for detail, qty, value in rows:
+			out[detail] = frappe._dict(qty=flt(qty), value=flt(value))
+	return out
+
+
+def branch_warehouses(branch: str) -> set:
+	"""The warehouses a Branch Configuration lists for the branch. A warehouse can sit under several."""
+	row = frappe.qb.DocType("Branch Configuration Warehouse")
+	return set(
+		frappe.qb.from_(row)
+		.select(row.warehouse)
+		.where((row.parent == branch) & (row.parenttype == "Branch Configuration"))
+		.run(pluck=True)
+	)
 
 
 # ---------------------------------------------------------------------------

@@ -116,6 +116,29 @@ class Ledger:
 				],
 				key=key,
 			)
+		if "group by voucher_detail_no" in query:
+			(details,) = values
+			out = {}
+			for e in self.entries:
+				if e.voucher_type == "Stock Entry" and e.voucher_detail_no in details and e.actual_qty > 0:
+					qty, value = out.get(e.voucher_detail_no, (0.0, 0.0))
+					out[e.voucher_detail_no] = (qty + e.actual_qty, value + e.stock_value_difference)
+			return [(d, q, v) for d, (q, v) in out.items()]
+		if "group by voucher_no, item_code" in query:
+			voucher_type, names = values
+			out = {}
+			for e in self.entries:
+				if e.voucher_type == voucher_type and e.voucher_no in names and e.actual_qty < 0:
+					cost, qty = out.get((e.voucher_no, e.item_code), (0.0, 0.0))
+					out[(e.voucher_no, e.item_code)] = (cost - e.stock_value_difference, qty - e.actual_qty)
+			return [(v, i, c, q) for (v, i), (c, q) in out.items()]
+		if "group by voucher_no" in query:
+			voucher_type, names = values
+			out = {}
+			for e in self.entries:
+				if e.voucher_type == voucher_type and e.voucher_no in names:
+					out[e.voucher_no] = out.get(e.voucher_no, 0.0) - e.stock_value_difference
+			return list(out.items())
 		if "voucher_no in %s" in query:
 			voucher_type, names = values
 			return sorted(
@@ -137,6 +160,10 @@ class EngineCase(unittest.TestCase):
 	def setUp(self):
 		self.ledger = Ledger()
 		self.purposes = {}
+		self.item_groups = {}
+		self.customer_groups = {}
+		self.teams = {}
+		self.group_children = {}
 		frappe.local.db = self.ledger
 		self.addCleanup(lambda: delattr(frappe.local, "db"))
 		for target in (
@@ -144,12 +171,45 @@ class EngineCase(unittest.TestCase):
 			patch("frappe.get_cached_value", side_effect=self.cached_value),
 			patch("frappe.throw", side_effect=raising),
 			patch.object(cb, "receipt_item_rows", return_value=[]),
+			patch.object(cb, "item_fields", side_effect=self.item_fields),
+			patch.object(cb, "customer_fields", side_effect=self.customer_fields),
+			patch.object(cb, "sales_team_rows", side_effect=self.sales_team_rows),
+			patch.object(cb, "group_members", side_effect=self.group_members),
 			patch.object(cb, "_", side_effect=lambda s: s),
 			patch.object(cogs_report, "_", side_effect=lambda s: s),
 			patch.object(transfer_report, "_", side_effect=lambda s: s),
 		):
 			target.start()
 			self.addCleanup(target.stop)
+
+	def item_fields(self, codes):
+		return [
+			frappe._dict(
+				name=c,
+				item_name=f"{c} name",
+				item_group=self.item_groups.get(c, "Paints"),
+				valuation_method=None,
+			)
+			for c in codes
+		]
+
+	def customer_fields(self, names):
+		return [
+			frappe._dict(
+				name=n, customer_name=f"{n} name", customer_group=self.customer_groups.get(n, "Retail")
+			)
+			for n in names
+		]
+
+	def sales_team_rows(self, voucher_type, parents):
+		return [
+			frappe._dict(parent=p, sales_person=person)
+			for p in parents
+			for person in self.teams.get((voucher_type, p), [])
+		]
+
+	def group_members(self, doctype, name):
+		return {name, *self.group_children.get(name, ())}
 
 	def cached_value(self, doctype, name, fieldname=None, *args, **kwargs):
 		if doctype == "Stock Entry" and fieldname == "purpose":
@@ -159,6 +219,15 @@ class EngineCase(unittest.TestCase):
 		if doctype == "Company" and fieldname == "default_currency":
 			return "BHD"
 		return None
+
+	def run_transfers(self, legs, filters=None, scope=None):
+		filters = {"company": "Test Co", **(filters or {})}
+		with (
+			patch.object(transfer_report, "get_outgoing_legs", return_value=legs),
+			patch.object(cb, "permission_scope", return_value=scope or {}),
+			patch("frappe.has_permission", return_value=True),
+		):
+			return transfer_report.execute(filters)
 
 	def rows_sum(self, rows) -> float:
 		return sum(r.value for r in rows)
@@ -474,7 +543,9 @@ class TestPermissions(unittest.TestCase):
 			self.assertEqual(cb.permission_scope("a@b.c"), {"Warehouse": [("WH - A", "")]})
 
 
-class TestCogsReport(EngineCase):
+class CogsFixture(EngineCase):
+	"""Invoice SI-1 sold 10 of ITEM-1 (cost 20, sold 30) and 5 of ITEM-2 (cost 20, sold 50)."""
+
 	def setUp(self):
 		super().setUp()
 		self.b1 = self.ledger.bin(item="ITEM-1")
@@ -485,7 +556,13 @@ class TestCogsReport(EngineCase):
 		self.sale2 = self.b2.issue("SI-1", 5)  # cost 20
 		self.header = {
 			("Sales Invoice", "SI-1"): frappe._dict(
-				name="SI-1", company="Test Co", customer="CUST-1", docstatus=1, branch="B1"
+				name="SI-1",
+				company="Test Co",
+				customer="CUST-1",
+				docstatus=1,
+				branch="B1",
+				is_return=0,
+				return_against=None,
 			)
 		}
 		self.item_rows = {
@@ -507,18 +584,51 @@ class TestCogsReport(EngineCase):
 			]
 		}
 
-	def run_report(self, filters=None, scope=None, headers=None, booked=40.0):
+	def add_voucher(self, name, header=None, rows=(), voucher_type="Sales Invoice"):
+		"""Register a header and item rows for a voucher the ledger already holds entries of."""
+		self.header[(voucher_type, name)] = frappe._dict(
+			dict(
+				name=name,
+				company="Test Co",
+				customer="CUST-1",
+				docstatus=1,
+				branch="B1",
+				is_return=0,
+				return_against=None,
+			),
+			**(header or {}),
+		)
+		self.item_rows[(voucher_type, name)] = [
+			frappe._dict(
+				name=f"{name}-{item}",
+				parent=name,
+				warehouse="WH - A",
+				cost_center=cost_center,
+				base_net_amount=sold,
+			)
+			for item, sold, cost_center in rows
+		]
+
+	def run_report(self, filters=None, scope=None, headers=None, booked=40.0, booked_map=None):
 		filters = {"company": "Test Co", **(filters or {})}
+		vouchers = sorted(self.header, key=lambda v: v[1])
+		booked_map = booked_map or {("Sales Invoice", "SI-1"): booked}
 		with (
-			patch.object(cogs_report, "get_vouchers", return_value=[("Sales Invoice", "SI-1")]),
+			patch.object(cogs_report, "get_vouchers", return_value=vouchers),
 			patch.object(cogs_report, "get_headers", return_value=headers or self.header),
-			patch.object(cogs_report, "get_item_rows", return_value=self.item_rows),
-			patch.object(cb, "gl_cogs_many", return_value={("Sales Invoice", "SI-1"): booked}),
+			patch.object(
+				cogs_report,
+				"get_item_rows",
+				side_effect=lambda vs: {v: self.item_rows.get(v, []) for v in vs},
+			),
+			patch.object(cb, "gl_cogs_many", return_value=booked_map),
 			patch.object(cb, "permission_scope", return_value=scope or {}),
 			patch("frappe.has_permission", return_value=True),
 		):
 			return cogs_report.execute(filters)
 
+
+class TestCogsReport(CogsFixture):
 	def test_voucher_totals_and_margin(self):
 		_cols, rows, message, _chart, summary = self.run_report()
 		voucher = rows[0]
@@ -540,7 +650,7 @@ class TestCogsReport(EngineCase):
 		self.assertAlmostEqual(voucher["value"], 40.0)  # the whole voucher, not the 20 of ITEM-1
 		self.assertAlmostEqual(voucher["difference"], 0.0)  # so it is not red against a GL of 40
 		self.assertEqual([r["item_code"] for r in rows if r["indent"] == 1], ["ITEM-1"])
-		self.assertIn("hides 1 line(s)", message)
+		self.assertIn("hide 1 line(s)", message)
 
 	def test_a_difference_is_the_ledger_against_the_gl(self):
 		_cols, rows, _m, _c, summary = self.run_report(booked=39.0)
@@ -645,7 +755,7 @@ class TestTransferReport(EngineCase):
 		store.receive("PR-1", 10, 2.0)
 		leg = store.issue("SE-1", 4, voucher_type="Stock Entry")
 		leg.target_warehouse = "SHOP - A"
-		rows, counts, spent = transfer_report.build_rows([leg], frappe._dict(company="Test Co"), True, "BHD")
+		_cols, rows, message, _c, _s = self.run_transfers([leg])
 		self.assertEqual([r["indent"] for r in rows], [0, 1])
 		line, source = rows
 		self.assertAlmostEqual(line["balance_qty"], 10.0)
@@ -653,8 +763,337 @@ class TestTransferReport(EngineCase):
 		self.assertEqual(line["check"], "Matches ledger")
 		self.assertEqual(source["document"], "PR-1")
 		self.assertAlmostEqual(source["value"], line["value"])
-		self.assertEqual(dict(counts), {cb.OK: 1})
-		self.assertFalse(spent)
+		self.assertIsNone(message)
+
+
+class TestLookups(EngineCase):
+	def test_a_return_at_the_cost_the_sale_took_it_out_at_is_ok(self):
+		line = frappe._dict(item_code="ITEM-1", actual_qty=2.0, stock_value_difference=4.0)
+		originals = {("Sales Invoice", "SI-1", "ITEM-1"): frappe._dict(cost=20.0, qty=10.0)}
+		self.assertEqual(cb.return_check("Sales Invoice", "SI-1", line, originals), (cb.RETURN_OK, 2.0))
+
+	def test_a_return_a_percent_or_more_away_from_the_sale_is_flagged(self):
+		line = frappe._dict(item_code="ITEM-1", actual_qty=2.0, stock_value_difference=6.0)
+		originals = {("Sales Invoice", "SI-1", "ITEM-1"): frappe._dict(cost=20.0, qty=10.0)}
+		self.assertEqual(cb.return_check("Sales Invoice", "SI-1", line, originals), (cb.RETURN_DIFFERS, 2.0))
+		line.stock_value_difference = 4.02  # half a percent: rounding
+		self.assertEqual(cb.return_check("Sales Invoice", "SI-1", line, originals)[0], cb.RETURN_OK)
+
+	def test_a_return_with_no_original_is_standalone(self):
+		line = frappe._dict(item_code="ITEM-1", actual_qty=2.0, stock_value_difference=4.0)
+		self.assertEqual(cb.return_check("Sales Invoice", None, line, {}), (cb.RETURN_STANDALONE, None))
+		self.assertEqual(cb.return_check("Sales Invoice", "SI-9", line, {}), (cb.RETURN_STANDALONE, None))
+
+	def test_original_costs_are_the_outgoing_cost_and_qty_per_item(self):
+		b = self.ledger.bin()
+		b.receive("PR-1", 100, 2.0)
+		b.issue("SI-1", 10)
+		b.issue("SI-1", 5)
+		got = cb.original_costs([("Sales Invoice", "SI-1")])
+		self.assertAlmostEqual(got[("Sales Invoice", "SI-1", "ITEM-1")].cost, 30.0)
+		self.assertAlmostEqual(got[("Sales Invoice", "SI-1", "ITEM-1")].qty, 15.0)
+
+	def test_ledger_cost_is_summed_per_voucher(self):
+		b = self.ledger.bin()
+		b.receive("PR-1", 100, 2.0)
+		b.issue("SI-1", 10)
+		b.issue("SI-2", 5)
+		self.assertEqual(
+			cb.ledger_cost_many([("Sales Invoice", "SI-1"), ("Sales Invoice", "SI-2")]),
+			{("Sales Invoice", "SI-1"): 20.0, ("Sales Invoice", "SI-2"): 10.0},
+		)
+
+	def test_the_receiving_leg_is_found_by_its_row(self):
+		store, shop = self.ledger.bin(warehouse="STORE - A"), self.ledger.bin(warehouse="SHOP - A")
+		store.receive("PR-1", 10, 2.0)
+		leg = store.issue("SE-1", 4, voucher_type="Stock Entry")
+		shop.receive("SE-1", 4, 2.0, voucher_type="Stock Entry")
+		got = cb.incoming_legs([leg.voucher_detail_no, "", None])
+		self.assertEqual(list(got), [leg.voucher_detail_no])
+		self.assertAlmostEqual(got[leg.voucher_detail_no].value, 8.0)
+		self.assertEqual(cb.incoming_legs([]), {})
+
+	def test_sales_people_are_listed_once_in_order(self):
+		self.teams = {("Sales Invoice", "SI-1"): ["Akhil", "Rahul", "Akhil"]}
+		self.assertEqual(
+			cb.sales_persons([("Sales Invoice", "SI-1"), ("Sales Invoice", "SI-2")]),
+			{("Sales Invoice", "SI-1"): ["Akhil", "Rahul"]},
+		)
+
+	def test_items_and_customers_are_read_in_one_go_and_blanks_skipped(self):
+		self.item_groups = {"ITEM-1": "Wall Paints"}
+		self.assertEqual(cb.item_info(["ITEM-1", None, ""])["ITEM-1"].item_group, "Wall Paints")
+		self.assertEqual(cb.customer_info([None, "C-1"])["C-1"].customer_group, "Retail")
+
+
+class TestCogsFilters(CogsFixture):
+	"""Each filter narrows what it says it narrows, and the voucher totals still cover the whole voucher."""
+
+	def add_return(self, name, against, bin_, qty, rate, sold=-6.0, **header):
+		bin_.receive(name, qty, rate, voucher_type="Sales Invoice")
+		self.add_voucher(name, dict(is_return=1, return_against=against, **header), [(bin_.item, sold, "CC")])
+
+	def docs(self, rows):
+		return [r["document"] for r in rows if r["indent"] == 0]
+
+	def lines(self, rows):
+		return [r for r in rows if r["indent"] == 1]
+
+	def books(self, **extra):
+		return {("Sales Invoice", "SI-1"): 40.0, **{("Sales Invoice", k): v for k, v in extra.items()}}
+
+	# --- returns
+	def test_returns_can_be_included_left_out_or_shown_alone(self):
+		self.add_return("SI-2", "SI-1", self.b1, 2, 2.0)
+		books = self.books(**{"SI-2": -4.0})
+		self.assertEqual(self.docs(self.run_report(booked_map=books)[1]), ["SI-1", "SI-2"])
+		self.assertEqual(self.docs(self.run_report({"returns": "Exclude"}, booked_map=books)[1]), ["SI-1"])
+		self.assertEqual(self.docs(self.run_report({"returns": "Only"}, booked_map=books)[1]), ["SI-2"])
+
+	def test_a_return_at_the_original_cost_says_so_and_shows_the_original_rate(self):
+		self.add_return("SI-2", "SI-1", self.b1, 2, 2.0)
+		rows = self.run_report({"returns": "Only"}, booked_map=self.books(**{"SI-2": -4.0}))[1]
+		(line,) = self.lines(rows)
+		self.assertEqual(line["check"], "Return at original cost")
+		self.assertEqual(line["check_flag"], cb.RETURN_OK)
+		self.assertAlmostEqual(line["original_rate"], 2.0)
+		self.assertEqual(rows[0]["return_against"], "SI-1")
+
+	def test_a_return_at_a_different_cost_is_flagged_and_explained_in_the_banner(self):
+		self.add_return("SI-2", "SI-1", self.b1, 2, 3.0)
+		_cols, rows, message, _c, _s = self.run_report(
+			{"returns": "Only"}, booked_map=self.books(**{"SI-2": -6.0})
+		)
+		(line,) = self.lines(rows)
+		self.assertEqual(line["check"], "Return at a different cost")
+		self.assertAlmostEqual(line["original_rate"], 2.0)
+		self.assertAlmostEqual(line["rate"], 3.0)  # negative value over negative qty: a rate stays a rate
+		self.assertIn("1 return line(s) went back into stock at a different cost", message)
+
+	def test_a_standalone_return_is_noted_but_is_not_a_line_to_review(self):
+		self.add_return("SI-2", None, self.b1, 2, 3.0)
+		books = self.books(**{"SI-2": -6.0})
+		(line,) = self.lines(self.run_report({"returns": "Only"}, booked_map=books)[1])
+		self.assertEqual(line["check_flag"], cb.RETURN_STANDALONE)
+		self.assertIsNone(line["original_rate"])
+		self.assertEqual(self.run_report({"returns": "Only", "only_review": 1}, booked_map=books)[1], [])
+
+	# --- vouchers
+	def test_branch_narrows_vouchers(self):
+		self.b1.issue("SI-3", 1)
+		self.add_voucher("SI-3", {"branch": "B2"}, [("ITEM-1", 5.0, "CC")])
+		books = self.books(**{"SI-3": 2.0})
+		self.assertEqual(self.docs(self.run_report({"branch": "B2"}, booked_map=books)[1]), ["SI-3"])
+		self.assertEqual(self.docs(self.run_report({"branch": "B1"}, booked_map=books)[1]), ["SI-1"])
+
+	def test_customer_group_includes_the_groups_below_it(self):
+		self.b1.issue("SI-3", 1)
+		self.add_voucher("SI-3", {"customer": "CUST-2"}, [("ITEM-1", 5.0, "CC")])
+		self.customer_groups = {"CUST-2": "Ministry"}
+		self.group_children = {"Government": {"Ministry"}}
+		books = self.books(**{"SI-3": 2.0})
+		self.assertEqual(
+			self.docs(self.run_report({"customer_group": "Government"}, booked_map=books)[1]), ["SI-3"]
+		)
+		self.assertEqual(
+			self.docs(self.run_report({"customer_group": "Retail"}, booked_map=books)[1]), ["SI-1"]
+		)
+
+	def test_sales_person_narrows_vouchers_and_is_listed_on_the_row(self):
+		self.b1.issue("SI-3", 1)
+		self.add_voucher("SI-3", {}, [("ITEM-1", 5.0, "CC")])
+		self.teams = {("Sales Invoice", "SI-1"): ["Akhil", "Rahul"], ("Sales Invoice", "SI-3"): ["Mujahid"]}
+		books = self.books(**{"SI-3": 2.0})
+		rows = self.run_report({"sales_person": "Akhil"}, booked_map=books)[1]
+		self.assertEqual(self.docs(rows), ["SI-1"])
+		self.assertEqual(rows[0]["sales_person"], "Akhil, Rahul")
+
+	def test_customer_name_and_branch_are_on_the_voucher_row(self):
+		voucher = self.run_report()[1][0]
+		self.assertEqual(
+			(voucher["branch"], voucher["customer"], voucher["customer_name"]),
+			("B1", "CUST-1", "CUST-1 name"),
+		)
+
+	def test_only_differences_keeps_the_vouchers_where_the_ledger_and_the_gl_disagree(self):
+		self.b1.issue("SI-3", 1)  # cost 2.0
+		self.add_voucher("SI-3", {}, [("ITEM-1", 5.0, "CC")])
+		_cols, rows, _m, _c, summary = self.run_report(
+			{"only_differences": 1}, booked_map=self.books(**{"SI-3": 5.0})
+		)
+		self.assertEqual(self.docs(rows), ["SI-3"])
+		self.assertEqual(rows[0]["differs"], 1)
+		self.assertAlmostEqual(rows[0]["difference"], -3.0)
+		self.assertEqual(next(s for s in summary if s["label"] == "Vouchers Apart")["value"], 1)
+
+	def test_only_differences_with_nothing_apart_is_empty(self):
+		self.assertEqual(self.run_report({"only_differences": 1})[1], [])
+
+	def test_a_voucher_row_says_whether_it_is_apart(self):
+		self.assertEqual(self.run_report()[1][0]["differs"], 0)
+		self.assertEqual(self.run_report(booked=39.0)[1][0]["differs"], 1)
+
+	# --- lines
+	def test_margin_below_cost_keeps_the_sale_lines_sold_for_less_than_they_cost(self):
+		self.item_rows[("Sales Invoice", "SI-1")][0].base_net_amount = 15.0  # cost 20
+		_cols, rows, message, _c, _s = self.run_report({"margin": "Below cost"})
+		self.assertEqual([r["item_code"] for r in self.lines(rows)], ["ITEM-1"])
+		self.assertAlmostEqual(rows[0]["value"], 40.0)  # the whole voucher, not the 20 of the line
+		self.assertIn("hide 1 line(s)", message)
+
+	def test_margin_over_five_times_cost_keeps_the_lines_that_look_mispriced(self):
+		self.item_rows[("Sales Invoice", "SI-1")][1].base_net_amount = 150.0  # cost 20: 7.5x
+		self.assertEqual(
+			[r["item_code"] for r in self.lines(self.run_report({"margin": "Over 5x cost"})[1])], ["ITEM-2"]
+		)
+		self.item_rows[("Sales Invoice", "SI-1")][1].base_net_amount = 100.0  # exactly 5x is not over it
+		self.assertEqual(self.run_report({"margin": "Over 5x cost"})[1], [])
+
+	def test_the_margin_filters_leave_returns_alone(self):
+		self.add_return(
+			"SI-2", "SI-1", self.b1, 2, 2.0, sold=-100.0
+		)  # negative both ways, says nothing about the price
+		books = self.books(**{"SI-2": -4.0})
+		for mode in ("Below cost", "Over 5x cost"):
+			self.assertNotIn("SI-2", self.docs(self.run_report({"margin": mode}, booked_map=books)[1]))
+
+	def test_cost_center_narrows_lines_and_is_a_column(self):
+		self.item_rows[("Sales Invoice", "SI-1")][1].cost_center = "CC2"
+		rows = self.run_report({"cost_center": "CC2"})[1]
+		self.assertEqual([(r["item_code"], r["cost_center"]) for r in self.lines(rows)], [("ITEM-2", "CC2")])
+
+	def test_item_group_includes_the_groups_below_it_and_is_a_column(self):
+		self.item_groups = {"ITEM-1": "Wall Paints", "ITEM-2": "Tools"}
+		self.group_children = {"Paints": {"Wall Paints"}}
+		rows = self.run_report({"item_group": "Paints"})[1]
+		self.assertEqual(
+			[(r["item_code"], r["item_group"]) for r in self.lines(rows)], [("ITEM-1", "Wall Paints")]
+		)
+
+	def test_only_review_keeps_the_flagged_lines_and_drops_vouchers_with_none(self):
+		self.ledger.bin(item="ITEM-3").issue("SI-5", 4)  # out of an empty bin
+		self.add_voucher("SI-5", {}, [("ITEM-3", 9.0, "CC")])
+		_cols, rows, _m, _c, _s = self.run_report({"only_review": 1}, booked_map=self.books(**{"SI-5": 0.0}))
+		self.assertEqual(self.docs(rows), ["SI-5"])
+		self.assertEqual([r["check_flag"] for r in self.lines(rows)], [cb.NEGATIVE])
+
+	def test_only_review_shows_the_check_even_where_the_sources_would_be_left_out(self):
+		with patch.object(cogs_report, "MAX_EXPANDED_LINES", 1):
+			self.ledger.bin(item="ITEM-3").issue("SI-5", 4)
+			self.add_voucher("SI-5", {}, [("ITEM-3", 9.0, "CC")])
+			rows = self.run_report({"only_review": 1}, booked_map=self.books(**{"SI-5": 0.0}))[1]
+		self.assertEqual([r["check_flag"] for r in self.lines(rows)], [cb.NEGATIVE])
+
+	def test_only_review_refuses_more_lines_than_it_can_check(self):
+		with patch.object(cogs_report, "MAX_REVIEW_LINES", 1):
+			_cols, rows, message, _c, _s = self.run_report({"only_review": 1})
+		self.assertEqual(rows, [])
+		self.assertIn("more than Only Lines To Review can check", message)
+
+	def test_a_clean_report_has_no_lines_to_review(self):
+		self.assertEqual(self.run_report({"only_review": 1})[1], [])
+
+
+class TestTransferFilters(EngineCase):
+	def setUp(self):
+		super().setUp()
+		self.store = self.ledger.bin(warehouse="STORE - A")
+		self.shop = self.ledger.bin(warehouse="SHOP - A")
+		self.store.receive("PR-1", 100, 2.0)
+
+	def transfer(self, name, qty, arrives_as=None):
+		"""A transfer of ITEM-1 from STORE to SHOP; `arrives_as` is the value the receiving leg is posted at."""
+		leg = self.store.issue(name, qty, voucher_type="Stock Entry")
+		value = -leg.stock_value_difference
+		self.shop._write("Stock Entry", name, qty, value if arrives_as is None else arrives_as)
+		leg.target_warehouse = "SHOP - A"
+		return leg
+
+	def lines(self, rows):
+		return [r for r in rows if r["indent"] == 0]
+
+	def test_a_receiving_leg_posted_at_zero_is_a_value_gap(self):
+		leg = self.transfer("SE-1", 10, arrives_as=0.0)
+		_cols, rows, message, _c, summary = self.run_transfers([leg])
+		(line,) = self.lines(rows)
+		self.assertAlmostEqual(line["received_value"], 0.0)
+		self.assertAlmostEqual(line["value_gap"], 20.0)
+		self.assertEqual(line["differs"], 1)
+		self.assertEqual((line["check"], line["check_flag"]), ("Received value differs", cb.GAP))
+		self.assertIn("1 transfer line(s) arrived worth a different amount", message)
+		cards = {s["label"]: s["value"] for s in summary}
+		self.assertEqual(cards["Lines With A Value Gap"], 1)
+		self.assertAlmostEqual(cards["Value Gap"], 20.0)
+
+	def test_a_transfer_that_arrives_whole_has_no_gap(self):
+		leg = self.transfer("SE-1", 10)
+		_cols, rows, message, _c, summary = self.run_transfers([leg])
+		(line,) = self.lines(rows)
+		self.assertAlmostEqual(line["received_value"], 20.0)
+		self.assertAlmostEqual(line["value_gap"], 0.0)
+		self.assertEqual((line["differs"], line["check"]), (0, "Matches ledger"))
+		self.assertIsNone(message)
+		self.assertEqual({s["label"]: s["value"] for s in summary}["Lines With A Value Gap"], 0)
+
+	def test_a_line_with_no_receiving_leg_has_nothing_to_compare(self):
+		leg = self.store.issue("SE-1", 4, voucher_type="Stock Entry")
+		self.assertEqual(transfer_value_gap(leg, {}), (None, False))
+
+	def test_only_gaps_keeps_just_the_lines_that_arrived_worth_something_else(self):
+		whole, short = self.transfer("SE-1", 10), self.transfer("SE-2", 5, arrives_as=1.0)
+		rows = self.run_transfers([whole, short], {"only_gaps": 1})[1]
+		self.assertEqual([r["document"] for r in self.lines(rows)], ["SE-2"])
+
+	def test_only_review_keeps_gap_lines_and_negative_stock_lines(self):
+		whole = self.transfer("SE-1", 10)
+		gap = self.transfer("SE-2", 5, arrives_as=0.0)
+		empty = self.ledger.bin(item="ITEM-9", warehouse="STORE - A")
+		out = empty.issue("SE-3", 3, voucher_type="Stock Entry")
+		out.target_warehouse = "SHOP - A"
+		rows = self.run_transfers([whole, gap, out], {"only_review": 1})[1]
+		self.assertEqual(sorted(r["document"] for r in self.lines(rows)), ["SE-2", "SE-3"])
+
+	def test_a_negative_stock_flag_is_not_hidden_by_a_value_gap(self):
+		empty = self.ledger.bin(item="ITEM-9", warehouse="STORE - A")
+		out = empty.issue("SE-3", 3, voucher_type="Stock Entry", rate=2.0)
+		self.ledger.bin(item="ITEM-9", warehouse="SHOP - A")._write("Stock Entry", "SE-3", 3, 0.0)
+		out.target_warehouse = "SHOP - A"
+		(line,) = self.lines(self.run_transfers([out])[1])
+		self.assertEqual(line["check_flag"], cb.NEGATIVE)
+		self.assertEqual(line["differs"], 1)
+
+	def test_a_branch_that_lists_no_warehouses_says_so(self):
+		with patch.object(cb, "branch_warehouses", return_value=set()):
+			_cols, rows, message, _c, _s = self.run_transfers(
+				[self.transfer("SE-1", 10)], {"branch": "Nowhere"}
+			)
+		self.assertEqual(rows, [])
+		self.assertIn("Branch Nowhere lists no warehouses", message)
+
+	def test_branch_asks_for_the_transfers_touching_its_warehouses(self):
+		asked = []
+		leg = self.transfer("SE-1", 10)
+		with (
+			patch.object(cb, "branch_warehouses", return_value={"STORE - A"}),
+			patch.object(
+				transfer_report, "get_outgoing_legs", side_effect=lambda f, w=None: asked.append(w) or [leg]
+			),
+			patch.object(cb, "permission_scope", return_value={}),
+			patch("frappe.has_permission", return_value=True),
+		):
+			rows = transfer_report.execute({"company": "Test Co", "branch": "SFSB"})[1]
+		self.assertEqual(asked, [{"STORE - A"}])
+		self.assertEqual(len(self.lines(rows)), 1)
+
+	def test_only_review_refuses_more_lines_than_it_can_check(self):
+		legs = [self.transfer("SE-1", 1), self.transfer("SE-2", 1)]
+		with patch.object(transfer_report, "MAX_REVIEW_LEGS", 1):
+			_cols, rows, message, _c, _s = self.run_transfers(legs, {"only_review": 1})
+		self.assertEqual(rows, [])
+		self.assertIn("more than Only Lines To Review can check", message)
+
+
+transfer_value_gap = transfer_report.value_gap
 
 
 class TestGlBooked(EngineCase):

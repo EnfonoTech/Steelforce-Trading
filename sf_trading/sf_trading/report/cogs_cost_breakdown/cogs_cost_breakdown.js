@@ -46,6 +46,65 @@ frappe.query_reports["COGS Cost Breakdown"] = {
 			fieldtype: "Link",
 			options: "Warehouse",
 		},
+		{ fieldname: "branch", label: __("Branch"), fieldtype: "Link", options: "Branch" },
+		{
+			fieldname: "cost_center",
+			label: __("Cost Center"),
+			fieldtype: "Link",
+			options: "Cost Center",
+			get_query: () => ({
+				filters: { company: frappe.query_report.get_filter_value("company") },
+			}),
+		},
+		{
+			fieldname: "item_group",
+			label: __("Item Group"),
+			fieldtype: "Link",
+			options: "Item Group",
+		},
+		{
+			fieldname: "customer_group",
+			label: __("Customer Group"),
+			fieldtype: "Link",
+			options: "Customer Group",
+		},
+		{
+			fieldname: "sales_person",
+			label: __("Sales Person"),
+			fieldtype: "Link",
+			options: "Sales Person",
+		},
+		{
+			fieldname: "returns",
+			label: __("Returns"),
+			fieldtype: "Select",
+			options: ["Include", "Exclude", "Only"],
+			default: "Include",
+			description: __(
+				"Credit notes with Update Stock; ERPNext's Gross Profit leaves them out."
+			),
+		},
+		{
+			fieldname: "margin",
+			label: __("Margin"),
+			fieldtype: "Select",
+			options: ["", "Below cost", "Over 5x cost"],
+			description: __(
+				"Sale lines sold below what the stock cost, or at over five times it."
+			),
+		},
+		{
+			fieldname: "only_differences",
+			label: __("Only Differences"),
+			fieldtype: "Check",
+			description: __("Vouchers where the ledger cost and the GL do not agree."),
+		},
+		{
+			fieldname: "only_review",
+			label: __("Only Lines To Review"),
+			fieldtype: "Check",
+			description: __("Lines the Check column does not call a match."),
+		},
 		{
 			fieldname: "expand_chain",
 			label: __("Expand Transfer Chain"),
@@ -81,15 +140,20 @@ function sf_cost_breakdown_format(value, row, column, data, default_formatter) {
 	if (!data.indent) value = `<b>${value}</b>`;
 
 	const red = (html) => `<span style="color:var(--red-500)">${html}</span>`;
-	if (column.fieldname === "difference" && Math.abs(flt(data.difference)) >= 0.01)
-		value = red(value);
+	if (column.fieldname === "difference" && data.differs) value = red(value);
 	if (column.fieldname === "margin" && flt(data.margin) < 0) value = red(value);
-	if (column.fieldname === "check" && data.check_flag && data.check_flag !== "ok")
+	if (column.fieldname === "check" && sf_needs_review(data.check_flag)) value = red(value);
+	if (column.fieldname === "original_rate" && data.check_flag === "return_differs")
 		value = red(value);
 	if (data.gap && ["source_type", "qty", "rate", "value"].includes(column.fieldname))
 		value = red(value);
 	if (data.component) value = `<i style="color:var(--text-muted)">${value}</i>`;
 	return value;
+}
+
+// the flags the engine puts on the "lines to review" list (a standalone return is routine, so it is not one)
+function sf_needs_review(flag) {
+	return ["negative", "differs", "return_differs", "gap"].includes(flag);
 }
 
 // Opening Transfer Cost Breakdown from inside itself is the same route with other filters, which the

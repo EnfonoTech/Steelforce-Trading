@@ -350,6 +350,25 @@ Things to know before you rely on them:
 - You see only the vouchers your User Permissions allow (company, customer, branch, warehouse, cost centre). A voucher with one line in a warehouse you cannot see is not shown at all, because a partial voucher would show a wrong total.
 - Over 300 lines the source documents are left out, and over 1,000 vouchers only the newest are read. Narrow the filters or pick one voucher.
 
+**Filters on the COGS Cost Breakdown.** Some narrow the vouchers and some the lines; the voucher totals never change with the line filters.
+
+| Filter | What it keeps |
+|---|---|
+| **Returns** | *Include* (the default), *Exclude*, or *Only* credit notes with Update Stock. ERPNext's own Gross Profit leaves returns out, so use *Exclude* to compare with it |
+| **Only Differences** | Vouchers where the ledger cost and the GL do not agree. This is the list to work through when the books look wrong |
+| **Only Lines To Review** | Lines whose Check is not a match: negative stock, a replay that differs, or a return at a different cost |
+| **Margin** | *Below cost*: sale lines sold for less than the stock cost. *Over 5x cost*: lines priced at more than five times cost, which is nearly always a price typed wrong |
+| **Branch, Cost Center, Item Group, Customer Group, Sales Person** | Exactly that. Item Group and Customer Group include the groups below them |
+
+Returns have their own Check. *Return at original cost* means the stock went back in at the cost the sale took it out at (**Original Rate** shows that cost). *Return at a different cost* is worth a look. *Standalone return* has no original invoice, so ERPNext restocked it at the current valuation rate; most returns here are standalone, so these are not counted as lines to review.
+
+**Filters and columns on the Transfer Cost Breakdown.**
+
+- **Received Value** and **Value Gap** compare what left the source warehouse with what the receiving entry in the target warehouse is worth. They are the same posting, so any gap is stock that arrived worth less or more than it left. Look at the receiving entry first.
+- **Only Gaps** keeps those lines. **Only Lines To Review** keeps them together with the negative-stock lines.
+- **Branch** keeps transfers into or out of the warehouses that branch lists in its Branch Configuration. A warehouse can sit under several branches, so this says "touches", not "belongs to".
+- About half of the transfers go through the **In Transit** warehouse: a Send moves stock into it and an Accept moves it out, as two separate transfers. Nothing links an Accept to its Send, so an Accept's sources are the mix of everything that sat in transit at that moment, not one particular Send. Tick **Expand Transfer Chain** to follow each Send back to where it came from.
+
 ### 5.4 Daily cash — the DCR family
 
 | Report | What it answers |
