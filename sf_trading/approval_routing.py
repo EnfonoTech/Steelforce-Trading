@@ -99,13 +99,14 @@ def capture_cancellation_reason(doc, _method=None):
 	rejected request clears the remark, so the next request -- or a later direct cancel -- has to
 	give its own.
 	"""
-	if doc.flags.get("pm_workflow_action"):
-		# runs before the save's own validation: an order raised before a field became mandatory
-		# (Sales Person, say) must still be able to ask for, and get, its cancellation
-		doc.flags.ignore_mandatory = True
 	before = doc.get_doc_before_save()
 	was = before.get("workflow_state") if before else None
 	now = doc.get("workflow_state")
+	if doc.flags.get("pm_workflow_action") or REQUESTED in (was, now):
+		# runs before the save's own validation: a document raised before a field became mandatory
+		# (Sales Person, say) must still be able to ask for, and get, its cancellation. The engine
+		# does not flag its own saves, so a move into or out of Cancellation Requested is the sign.
+		doc.flags.ignore_mandatory = True
 	if now == REQUESTED and was != REQUESTED:
 		reason = cstr(doc.flags.get("pm_workflow_comment")).strip() or cstr(doc.get(REMARK_FIELD)).strip()
 		if not reason:
@@ -192,7 +193,14 @@ def ensure_quotation_workflow():
 		return
 	definition = quotation_workflow()
 	_ensure_masters(definition)
+	# The engine stamps every existing Quotation's workflow_state with set_value, which also moves its
+	# `modified` / `modified_by` to now and the deploying user: every quotation would read as edited
+	# today, and a cancelled one as cancelled today. Put both back as they were.
+	stamps = frappe.db.sql("select name, modified, modified_by from `tabQuotation`", as_dict=True)
 	frappe.get_doc(definition).insert(ignore_permissions=True)
+	for row in stamps:
+		frappe.db.sql("update `tabQuotation` set modified = %s, modified_by = %s where name = %s",
+			(row.modified, row.modified_by, row.name))
 
 
 def sales_order_workflow() -> dict:

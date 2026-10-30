@@ -20,6 +20,7 @@ would have become is).
 import frappe
 from frappe import _
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
+from frappe.custom.doctype.property_setter.property_setter import make_property_setter
 from frappe.utils import cint, cstr
 
 MASTER = "Order Cancellation Reason"
@@ -70,6 +71,10 @@ def ensure_custom_fields():
 
 	The Sales Order and Purchase Order remark fields belong to their own modules (sales_order_governance,
 	purchase_order_cancel); the Quotation's is made here, the same field the Sales Order has."""
+	# a Quotation keeps no Version history by default, so who cancelled it (or asked to) was nowhere to read
+	if not frappe.get_meta("Quotation").track_changes:
+		make_property_setter("Quotation", None, "track_changes", 1, "Check", for_doctype=True,
+			validate_fields_for_doctype=False)
 	create_custom_fields({"Quotation": [{
 		"fieldname": REMARK_FIELD,
 		"label": "Cancellation Remark",
