@@ -325,6 +325,8 @@ All reports are in the Awesomebar by name. Every one of them has a Company filte
 | Report | What it answers | Notes |
 |---|---|---|
 | **Reorder Recommendation** | What to order, how much, and when to reorder each item | Works out a reorder level and quantity per item and warehouse from what actually sold. See below |
+| **COGS Cost Breakdown** | How the cost of a sale was reached, line by line, and what it was sold for | Open it from **View > COGS Calculation** on a submitted Delivery Note or Sales Invoice. Cost, GL booked, difference, sales and margin per voucher; under each item line, the receipts, transfers and reconciliations its stock was made of |
+| **Transfer Cost Breakdown** | How a transfer between warehouses was costed | Open it from **View > Transfer Cost Breakdown** on a submitted Material Transfer. The source warehouse's balance just before the transfer, and what it was made of |
 
 **Reorder Recommendation in short.** Suggested level = average daily sales × lead days + safety stock. Suggested quantity tops the item back up to that level plus the coverage days you choose, less what is already on order.
 
@@ -333,6 +335,20 @@ Three things to know before you trust the numbers:
 - Transfers between your own warehouses are left out of both demand and supply. On this site they move more quantity than sales do, so counting them would order stock that is already in the building.
 - Lead time comes from purchase history where receipts name their purchase order, then the item master, then the filter default. Most rows fall back to the filter default, and the **Lead From** column tells you which was used.
 - Nothing has a reorder level configured on this site, so every suggestion is new. The report proposes; it does not change the Item.
+
+**The cost breakdowns in short.** Stock here is valued at Moving Average, which blends every receipt in a warehouse into one rate, so a sale's cost cannot be traced to a single receipt, only shared out pro rata. Both reports replay the Stock Ledger to show that share: sell 10 units from a warehouse holding 20 made of two receipts and each receipt supplies 5 units at its own rate. The rows under a line add up to its cost, to within rounding.
+
+Things to know before you rely on them:
+
+- **Check** says whether the replay agrees with the ledger. *Matches ledger* is the normal answer. *Replay differs* adds a **Not explained** row for the gap; tell us when one is more than a few fils. *Negative stock* means the line left more than the warehouse held: that part has no document behind it and is its own row, at the item's last valuation rate. Nothing negative can be posted any more, but entries from the migration are still in the history.
+- **The totals cover the whole voucher.** COGS, GL Booked, Difference and Sales do not change with the Item or Warehouse filter; the filter only hides lines, and the banner says how many.
+- **Difference** is the ledger's cost against what the GL booked to Cost of Goods Sold (or to Stock Delivered But Not Billed, for a Delivery Note held until it is invoiced). Red means they disagree.
+- **Margin** is net sales, VAT excluded, against cost. A return shows as negatives.
+- A Sales Invoice that moved no stock itself shows the Delivery Notes it billed.
+- A transfer row links to its own breakdown. Tick **Expand Transfer Chain** to follow it back in the same table, up to five transfers deep.
+- A Purchase Receipt that carried landed cost or taxes in valuation is split into price, taxes and landed cost; a plain receipt is just its price.
+- You see only the vouchers your User Permissions allow (company, customer, branch, warehouse, cost centre). A voucher with one line in a warehouse you cannot see is not shown at all, because a partial voucher would show a wrong total.
+- Over 300 lines the source documents are left out, and over 1,000 vouchers only the newest are read. Narrow the filters or pick one voucher.
 
 ### 5.4 Daily cash — the DCR family
 
@@ -587,6 +603,9 @@ The quantity is more than the warehouse holds. Reduce it, change warehouse, or r
 
 **Items show a value but no quantity.**
 Stranded valuation, usually left over from a migration. A Stock Reconciliation with the quantity and rate set to zero clears it, and the write-off posts to the Company's Stock Reconciliation Difference Account (Accounts tab) — make sure that is not COGS.
+
+**A sale or transfer cost looks wrong.**
+Open **View > COGS Calculation** (Delivery Note, Sales Invoice) or **View > Transfer Cost Breakdown** (Material Transfer). It shows which receipts, transfers and reconciliations the warehouse stock was made of at that moment. A bad cost almost always traces to one of them: a receipt entered at the wrong rate, or a transfer out of a warehouse that held nothing.
 
 **A reorder suggestion looks far too high.**
 Check the **Busiest Day** and **Variability** columns. One large sale in the window raises safety stock for the whole item. Drop the service level to 85%, or shorten the window.

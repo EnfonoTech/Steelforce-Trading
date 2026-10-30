@@ -17,7 +17,11 @@ function sf_open_cogs_breakdown(frm) {
 	frappe.ui.form.on(doctype, {
 		refresh(frm) {
 			if (frm.doc.docstatus !== 1) return;
-			frm.add_custom_button(__("COGS Calculation"), () => sf_open_cogs_breakdown(frm), __("View"));
+			frm.add_custom_button(
+				__("COGS Calculation"),
+				() => sf_open_cogs_breakdown(frm),
+				__("View")
+			);
 		},
 	});
 });
@@ -27,12 +31,13 @@ frappe.ui.form.on("Stock Entry", {
 		if (frm.doc.docstatus !== 1 || frm.doc.purpose !== "Material Transfer") return;
 		frm.add_custom_button(
 			__("Transfer Cost Breakdown"),
-			() => frappe.set_route("query-report", "Transfer Cost Breakdown", {
-				company: frm.doc.company,
-				stock_entry: frm.doc.name,
-				from_date: frm.doc.posting_date,
-				to_date: frm.doc.posting_date,
-			}),
+			() =>
+				frappe.set_route("query-report", "Transfer Cost Breakdown", {
+					company: frm.doc.company,
+					stock_entry: frm.doc.name,
+					from_date: frm.doc.posting_date,
+					to_date: frm.doc.posting_date,
+				}),
 			__("View")
 		);
 	},

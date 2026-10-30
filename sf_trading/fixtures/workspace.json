@@ -216,7 +216,7 @@
  },
  {
   "charts": [],
-  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Open Items</b></span>\", \"col\": 12}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Pending Delivery Value\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Unbilled Deliveries Value\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Unbilled Receipts Value\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Pending Receipt Value\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Reports</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Invoiced Items To Be Delivered\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivered Items Pending Billing\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Received Items Pending Billing\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Billed Items Pending Receipt\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivery Notes Pending Return\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Purchase Receipts Pending Return\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Sales\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Purchase\", \"col\": 4}}]",
+  "content": "[{\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Open Items</b></span>\", \"col\": 12}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Pending Delivery Value\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Unbilled Deliveries Value\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Unbilled Receipts Value\", \"col\": 3}}, {\"type\": \"number_card\", \"data\": {\"number_card_name\": \"Pending Receipt Value\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"header\", \"data\": {\"text\": \"<span class=\\\"h4\\\"><b>Reports</b></span>\", \"col\": 12}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Invoiced Items To Be Delivered\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivered Items Pending Billing\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Received Items Pending Billing\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Billed Items Pending Receipt\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Delivery Notes Pending Return\", \"col\": 3}}, {\"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Purchase Receipts Pending Return\", \"col\": 3}}, {\"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Sales\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Purchase\", \"col\": 4}}, {\"type\": \"card\", \"data\": {\"card_name\": \"Costing\", \"col\": 4}}]",
   "creation": "2026-08-09 13:00:00.000000",
   "docstatus": 0,
   "doctype": "Workspace",
@@ -394,9 +394,45 @@
     "link_type": "Report",
     "onboard": 0,
     "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 15,
+    "is_query_report": 0,
+    "label": "Costing",
+    "link_count": 2,
+    "link_to": null,
+    "link_type": null,
+    "onboard": 0,
+    "type": "Card Break"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 16,
+    "is_query_report": 1,
+    "label": "COGS Cost Breakdown",
+    "link_count": 0,
+    "link_to": "COGS Cost Breakdown",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 17,
+    "is_query_report": 1,
+    "label": "Transfer Cost Breakdown",
+    "link_count": 0,
+    "link_to": "Transfer Cost Breakdown",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
    }
   ],
-  "modified": "2026-10-10 02:30:00.000000",
+  "modified": "2026-10-30 21:00:00.000000",
   "modified_by": "Administrator",
   "module": "Sf Trading",
   "name": "Open Items",
