@@ -210,7 +210,7 @@ CANCEL_APPROVER_ROLES = ("Sales Manager", "System Manager")
 
 
 def before_cancel_require_remark_and_branch_head(doc, _method=None):
-	"""Sales Order before_cancel: a remark is mandatory, and only a Sales Manager may cancel.
+	"""Sales Order and Quotation before_cancel: a remark is mandatory, and only a Sales Manager may cancel.
 
 	(The name is kept from when the role was Branch Head; hooks and tests refer to it.)
 
@@ -225,7 +225,7 @@ def before_cancel_require_remark_and_branch_head(doc, _method=None):
 	"""
 	if not cstr(doc.get("custom_cancellation_remark")).strip():
 		frappe.throw(
-			_("A remark is required to cancel a Sales Order."),
+			_("A remark is required to cancel a {0}.").format(_(doc.doctype)),
 			title=_("Cancellation Remark Required"),
 		)
 	# the reason picked from the Order Cancellation Reason list, as on a sales return
@@ -236,7 +236,8 @@ def before_cancel_require_remark_and_branch_head(doc, _method=None):
 	user_roles = set(frappe.get_roles(frappe.session.user))
 	if not user_roles & set(CANCEL_APPROVER_ROLES):
 		frappe.throw(
-			_("Only a Sales Manager may cancel a Sales Order. Use Actions > Request Cancellation to ask for it."),
+			_("Only a Sales Manager may cancel a {0}. Use Actions > Request Cancellation to ask for it.").format(
+				_(doc.doctype)),
 			title=_("Approval Required"),
 		)
 

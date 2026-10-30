@@ -379,6 +379,8 @@ after_migrate = [
 	"sf_trading.party_documents.seed_document_types",
 	# the documents grid at the end of each master's Settings tab, saved field orders included
 	"sf_trading.party_documents.place_documents_grid",
+	# a Quotation is cancelled through a request too, where the Sales Order is
+	"sf_trading.approval_routing.ensure_quotation_workflow",
 	# PM's own Actions entry for a cancellation request stays hidden until a reason is picked
 	"sf_trading.approval_routing.ensure_request_condition",
 	# Strict Stock Reservation switches: Company check + Warehouse override
@@ -847,6 +849,9 @@ doc_events = {
 	"Quotation": {
 		"before_validate": [_CC_HOOK, _BPL_HOOK],
 		"validate": [_LH_HOOK, _SP_HOOK, _BPL_GUARD],
+		# cancelled as a Sales Order is: a reason, and only a Sales Manager -- everyone else requests it
+		"before_cancel": "sf_trading.sales_order_governance.before_cancel_require_remark_and_branch_head",
+		"before_update_after_submit": "sf_trading.approval_routing.capture_cancellation_reason",
 	},
 	"Delivery Note": {
 		"before_validate": [_CC_HOOK, _BPL_HOOK],
@@ -1578,7 +1583,7 @@ fixtures = [
 # the Submit button off every ordinary sale. Policy lives here, the machinery stays there.
 pm_workflow_applicability = [
 	"sf_trading.sales_return.workflow_applicability",
-	# Sales Order cancellation + Stock Reconciliation approval -- see sf_trading/approval_routing.py
+	# Sales Order / Quotation cancellation + Stock Reconciliation approval -- see sf_trading/approval_routing.py
 	"sf_trading.approval_routing.workflow_applicability",
 	# a system-generated journal (asset depreciation and the like) is governed by no workflow
 	"sf_trading.system_entries.workflow_applicability",
