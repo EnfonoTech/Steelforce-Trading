@@ -77,8 +77,6 @@ RECONCILIATION = "Stock Reconciliation"
 EPSILON = 1e-9
 #: ledger quantities carry nine decimals; a gap smaller than this is float noise, not a missing movement
 QTY_TOLERANCE = 1e-6
-#: a line always lists its largest sources, however small a share of it they are
-MIN_SOURCES_SHOWN = 8
 #: how many hops back a chain of transfers is followed when the user asks for it
 MAX_CHAIN_DEPTH = 5
 #: transfer hops one report run may look up before it stops following chains (each hop is a few queries)
@@ -342,36 +340,6 @@ def split(buckets: list, qty: float) -> list:
 	return rows
 
 
-def compact(rows: list, share: float = 0.01) -> list:
-	"""Shares under `share` of the movement (a sliver of an old receipt, worn down by every sale since) as one row.
-
-	The largest `MIN_SOURCES_SHOWN` stay listed whatever their share -- a line made of a hundred equal
-	slivers would otherwise collapse into nothing -- and a lone leftover is shown as itself. Kept as a
-	row rather than dropped, so the source rows still add up to the line they explain."""
-	floor = sum(r.qty for r in rows) * share
-	largest = sorted(range(len(rows)), key=lambda i: -rows[i].qty)[:MIN_SOURCES_SHOWN]
-	listed = {i for i, r in enumerate(rows) if r.qty >= floor} | set(largest)
-	shown = [r for i, r in enumerate(rows) if i in listed]
-	rest = [r for i, r in enumerate(rows) if i not in listed]
-	if len(rest) == 1:
-		shown.append(rest[0])
-	elif rest:
-		qty = sum(r.qty for r in rest)
-		value = sum(r.value for r in rest)
-		shown.append(
-			frappe._dict(
-				voucher_type=None,
-				voucher_no=None,
-				posting_date=None,
-				qty=qty,
-				rate=(value / qty) if qty else 0,
-				value=value,
-				others=len(rest),
-			)
-		)
-	return shown
-
-
 def gap_row(qty: float, value: float, label: str) -> frappe._dict:
 	"""A source row for cost no document explains, so the rows under a line still sum to it."""
 	return frappe._dict(
@@ -385,7 +353,7 @@ def gap_row(qty: float, value: float, label: str) -> frappe._dict:
 	)
 
 
-def explain(entry, buckets: list, share: float = 0.01) -> frappe._dict:
+def explain(entry, buckets: list) -> frappe._dict:
 	"""The documents behind one outgoing line, whether they add up to it, and a row for what they do not.
 
 	`flag` is OK when the replay agrees with the ledger (balance qty before, the line's value within
@@ -399,7 +367,8 @@ def explain(entry, buckets: list, share: float = 0.01) -> frappe._dict:
 	parts = split(buckets, from_bin)
 	residual = value - sum(p.value for p in parts)
 	short = qty - from_bin
-	rows = compact(parts, share)
+	# every document, however small its part: the accounts team reads them all
+	rows = parts
 
 	if short > QTY_TOLERANCE:
 		flag = NEGATIVE
@@ -431,7 +400,7 @@ def source_type(s) -> str:
 		return s.gap
 	if s.voucher_type:
 		return _(source_label(s.voucher_type, s.voucher_no))
-	return _("Other documents ({0})").format(s.others)
+	return ""
 
 
 def is_transfer(voucher_type: str, voucher_no: str) -> bool:
@@ -448,7 +417,7 @@ def new_budget(lookups: int = MAX_CHAIN_LOOKUPS) -> frappe._dict:
 	return frappe._dict(left=lookups, spent=False)
 
 
-def attach_chain(rows: list, item_code: str, budget, level: int = 0, seen=frozenset(), share=0.01) -> None:
+def attach_chain(rows: list, item_code: str, budget, level: int = 0, seen=frozenset()) -> None:
 	"""Give each Material Transfer source row the documents *its* source warehouse held, `children`.
 
 	Without this a transfer is one row with a link to its own breakdown and a chain is read a hop at a
@@ -475,7 +444,7 @@ def attach_chain(rows: list, item_code: str, budget, level: int = 0, seen=frozen
 		kids = []
 		for leg in legs:
 			leg_qty = s.qty * (-flt(leg.actual_qty)) / total
-			part = compact(split(snapshots[leg.name], leg_qty), share)
+			part = split(snapshots[leg.name], leg_qty)
 			for k in part:
 				k.warehouse = leg.warehouse
 			kids.extend(part)
@@ -484,7 +453,7 @@ def attach_chain(rows: list, item_code: str, budget, level: int = 0, seen=frozen
 			kids.append(gap_row(0, residual, _("Not explained by the ledger replay")))
 		s.children = kids
 		s.followed = True
-		attach_chain(kids, item_code, budget, level + 1, seen | {s.voucher_no}, share)
+		attach_chain(kids, item_code, budget, level + 1, seen | {s.voucher_no})
 
 
 def walk(rows: list, level: int = 0):

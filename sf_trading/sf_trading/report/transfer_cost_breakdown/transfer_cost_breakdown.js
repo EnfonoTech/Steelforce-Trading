@@ -5,6 +5,7 @@
 // documents the source balance was made of. An earlier transfer links to its own breakdown, or is
 // followed back in place when Expand Transfer Chain is ticked.
 frappe.query_reports["Transfer Cost Breakdown"] = {
+	onload: (report) => window.sf_rerun_with_item && window.sf_rerun_with_item(report),
 	filters: [
 		{
 			fieldname: "company",
@@ -117,18 +118,36 @@ function sf_needs_review(flag) {
 
 // Opening Transfer Cost Breakdown from inside itself is the same route with other filters, which the
 // router does not reload -- so there the filter is changed in place, and anywhere else the route is set.
-window.sf_open_transfer_breakdown = function (company, stock_entry) {
+window.sf_open_transfer_breakdown = function (company, stock_entry, item_code) {
+	// a transfer may move several items: open it on the one this row is about
+	const filters = { company, stock_entry, item_code: item_code || "" };
 	const report = frappe.query_report;
 	if (report && report.report_name === "Transfer Cost Breakdown") {
-		report.set_filter_value({ company, stock_entry });
+		report.set_filter_value(filters);
 		return;
 	}
-	frappe.set_route("query-report", "Transfer Cost Breakdown", { company, stock_entry });
+	// the Item filter shows the item's name, fetched after the report's first run -- which then went out
+	// without it; Transfer Cost Breakdown's onload runs it again once the item is in (sf_rerun_with_item)
+	window.sf_transfer_wanted_item = filters.item_code;
+	frappe.set_route("query-report", "Transfer Cost Breakdown", filters);
+};
+
+// Transfer Cost Breakdown onload: the item a link asked for is in the filter only after the first run
+window.sf_rerun_with_item = function (report) {
+	const wanted = window.sf_transfer_wanted_item;
+	window.sf_transfer_wanted_item = null;
+	if (!wanted) return;
+	let tries = 25;
+	const check = () => {
+		if (report.get_filter_value("item_code") === wanted) report.refresh();
+		else if (--tries > 0) setTimeout(check, 200);
+	};
+	setTimeout(check, 200);
 };
 
 // the names go through JSON so a quote in a company name is a character in a string, not the end of it
 function sf_transfer_breakdown_link(data) {
-	const args = [data.company || "", data.document || ""]
+	const args = [data.company || "", data.document || "", data.breakdown_item || ""]
 		.map((v) => frappe.utils.escape_html(JSON.stringify(v)))
 		.join(", ");
 	return `<a href="#" onclick="sf_open_transfer_breakdown(${args}); return false;">${__(

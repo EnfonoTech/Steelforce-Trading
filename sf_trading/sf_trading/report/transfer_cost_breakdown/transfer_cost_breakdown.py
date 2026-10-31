@@ -311,6 +311,8 @@ def emit_sources(tree, indent, leg, totals, company, currency, rows) -> None:
 			"currency": currency,
 			"breakdown": 1 if transfer else 0,
 			"company": company,
+			# the item the link opens the transfer on: a transfer may move several items
+			"breakdown_item": leg.item_code if transfer else None,
 			"gap": 1 if s.get("gap") else 0,
 		}
 		if s.qty:
