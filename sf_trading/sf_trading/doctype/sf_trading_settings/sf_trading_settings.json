@@ -20,6 +20,11 @@
   "purchasing_tab",
   "supplier_validation_section",
   "enforce_supplier_completeness",
+  "procurement_flow_section",
+  "allow_rfq_without_material_request",
+  "allow_quotation_without_rfq",
+  "procurement_flow_column_break",
+  "allow_direct_purchase_order",
   "po_procurement_section",
   "purchase_order_rules",
   "purchase_receipt_section",
@@ -199,6 +204,36 @@
    "fieldname": "enforce_supplier_completeness",
    "fieldtype": "Check",
    "label": "Enforce Supplier Completeness"
+  },
+  {
+   "fieldname": "procurement_flow_section",
+   "fieldtype": "Section Break",
+   "label": "Procurement Flow",
+   "description": "The buying chain is Material Request, Request for Quotation, Supplier Quotation, Purchase Order, and no step is skipped. Each tick below opens one gap in it. All are off: a Request for Quotation needs a Material Request, a Supplier Quotation needs a Request for Quotation, and a Purchase Order needs all three (verbal orders and internal suppliers excepted)."
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_rfq_without_material_request",
+   "fieldtype": "Check",
+   "label": "Allow a Request for Quotation Without a Material Request"
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_quotation_without_rfq",
+   "fieldtype": "Check",
+   "label": "Allow a Supplier Quotation Without a Request for Quotation",
+   "description": "Also allows a Supplier Quotation made straight from a Material Request."
+  },
+  {
+   "fieldname": "procurement_flow_column_break",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "fieldname": "allow_direct_purchase_order",
+   "fieldtype": "Check",
+   "label": "Allow a Purchase Order Without the Whole Chain",
+   "description": "Switches off the Material Request, Request for Quotation and Supplier Quotation check on every Purchase Order, whatever the amount. The per-company Purchase Order Rules below then apply alone."
   },
   {
    "fieldname": "po_procurement_section",

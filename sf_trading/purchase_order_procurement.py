@@ -34,6 +34,12 @@ An order to an internal (inter-company) supplier is not a purchase from the mark
 
 The row is read straight from its table, and a site that has not migrated the table yet reads as "no row", so a pull
 before `bench migrate` cannot break a Purchase Order save.
+
+Unless SF Trading Settings > Purchasing > Procurement Flow ticks `Allow a Purchase Order Without the Whole Chain`, no
+order escapes the chain: a company with no rule, a rule switched off and a local order at or under its amount are all held
+to a Material Request, a Request for Quotation raised from it and at least one Supplier Quotation on it (more where the
+rule asks for more). A verbal order and an internal supplier stay exempt as before. The two steps before the order, the
+Request for Quotation and the Supplier Quotation, are held by procurement_flow.py.
 """
 
 from __future__ import annotations
@@ -48,6 +54,7 @@ RULE_TABLE = "SF Purchase Order Rule"
 RULE_FIELD = "purchase_order_rules"
 VERBAL = "custom_verbal"
 VERBAL_COMMENT = "custom_verbal_comment"
+ALLOW_DIRECT = "allow_direct_purchase_order"
 
 #: what a new row of the table starts with (its field defaults), and what a message shows for a company with no row
 DEFAULT_ABOVE = 500.0
@@ -149,6 +156,25 @@ def required_quotations(doc, rule) -> int:
 def skips_rules(doc, rule) -> bool:
 	"""A verbal order needs no Material Request and no quotations, when the company's row says so."""
 	return bool(rule.verbal_skips and cint(doc.get(VERBAL)))
+
+
+def direct_orders_allowed() -> bool:
+	"""SF Trading Settings > Purchasing > Procurement Flow: a Purchase Order may be raised without the whole chain. Off
+	unless someone ticked it, and off on a site that has not migrated the tick yet."""
+	try:
+		return bool(cint(frappe.db.get_single_value(SETTINGS, ALLOW_DIRECT)))
+	except Exception:
+		return False
+
+
+def quotations_needed(doc, rule) -> int:
+	"""How many quotations this order needs, and so whether it is held to the chain at all. The company's rule decides
+	first (an import always, a local order above its amount); unless direct orders are allowed every order then needs at
+	least one, so the chain is never skipped, whatever the amount and whether or not the company has a rule."""
+	needed = required_quotations(doc, rule) if rule.enforce else 0
+	if not direct_orders_allowed():
+		needed = max(needed, 1)
+	return needed
 
 
 # ── The lines, with the links that make the case for each ─────────────────────────────────────────────────
@@ -328,9 +354,9 @@ def problems_for(doc, rule=None) -> list:
 	"""Everything that keeps this order from being saved, as sentences; empty when it meets the rules, is not held to
 	them (rules off, a local order up to the amount, a verbal order the row excuses) or they are off."""
 	rule = rule or rules(doc.get("company"))
-	if not rule.enforce or is_exempt(doc):
+	if is_exempt(doc):
 		return []
-	needed = required_quotations(doc, rule)
+	needed = quotations_needed(doc, rule)
 	if not needed or skips_rules(doc, rule):
 		return []
 	lines = lines_of(doc)
@@ -341,12 +367,17 @@ def problems_for(doc, rule=None) -> list:
 
 
 def _rule_sentence(doc, rule) -> str:
-	needed = required_quotations(doc, rule)
+	needed = quotations_needed(doc, rule)
 	if is_import(doc):
 		return _(
 			"an import needs a Material Request, one Request for Quotation raised from it and {0} Supplier Quotations on it, "
 			"whatever the amount"
 		).format(needed)
+	if not (rule.enforce and flt(doc.get("base_grand_total")) > rule.above):
+		return (
+			_("an order needs a Material Request, one Request for Quotation raised from it and %s Supplier Quotation(s) on it")
+			% needed
+		)
 	above = fmt_money(rule.above, currency=frappe.get_cached_value("Company", doc.company, "default_currency"))
 	return _(
 		"a local order above {0} needs a Material Request, one Request for Quotation raised from it and {1} Supplier "
@@ -368,6 +399,10 @@ def validate(doc, _method=None):
 	)
 	if rule.verbal_skips:
 		steps += " " + _("An order based on a verbal quote ticks Verbal (No Quotation) instead.")
+	if not direct_orders_allowed():
+		steps += " " + _(
+			"An order without this chain can be allowed in SF Trading Settings > Purchasing > Procurement Flow."
+		)
 	frappe.throw(
 		"<p>{}</p><ul>{}</ul><p>{}</p>".format(
 			_("This Purchase Order does not meet the procurement rules ({0}):").format(_rule_sentence(doc, rule)),

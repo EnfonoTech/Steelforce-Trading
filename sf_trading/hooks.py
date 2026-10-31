@@ -1018,7 +1018,12 @@ doc_events = {
 	# master gate runs here: the supplier is held to them on the Purchase Order made from the quotation
 	"Supplier Quotation": {
 		"before_validate": [_CC_HOOK, _PTT_HOOK, _BPL_HOOK],
-		"validate": [_LH_HOOK, _BPL_GUARD],
+		# a quotation answers a Request for Quotation -- see procurement_flow.py
+		"validate": [_LH_HOOK, _BPL_GUARD, "sf_trading.procurement_flow.validate_supplier_quotation"],
+	},
+	# a Request for Quotation comes from a Material Request -- see procurement_flow.py
+	"Request for Quotation": {
+		"validate": "sf_trading.procurement_flow.validate_request_for_quotation",
 	},
 	# core logs the impersonation but drops the reason — put it back on the row
 	"Activity Log": {
@@ -1132,6 +1137,8 @@ _ADVICE_DASHBOARD = "sf_trading.api.payment_advice_dashboard.get_dashboard_data"
 
 override_doctype_dashboards = {
 	"Quotation": ["sf_trading.api.quotation.get_dashboard_data"],
+	# the Material Request in the Connections of a Request for Quotation -- see procurement_flow.py
+	"Request for Quotation": ["sf_trading.procurement_flow.rfq_dashboard"],
 	"Sales Order": [_ADVICE_DASHBOARD],
 	"Sales Invoice": [_ADVICE_DASHBOARD],
 	"Purchase Order": [_ADVICE_DASHBOARD, "sf_trading.goods_in.purchase_order_dashboard"],

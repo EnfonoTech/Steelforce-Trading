@@ -327,6 +327,7 @@ All reports are in the Awesomebar by name. Every one of them has a Company filte
 | **Reorder Recommendation** | What to order, how much, and when to reorder each item | Works out a reorder level and quantity per item and warehouse from what actually sold. See below |
 | **COGS Cost Breakdown** | How the cost of a sale was reached, line by line, and what it was sold for | Open it from **View > COGS Calculation** on a submitted Delivery Note or Sales Invoice. Cost, GL booked, difference, sales and margin per voucher; under each item line, the receipts, transfers and reconciliations its stock was made of |
 | **Transfer Cost Breakdown** | How a transfer between warehouses was costed | Open it from **View > Transfer Cost Breakdown** on a submitted Material Transfer. The source warehouse's balance just before the transfer, and what it was made of |
+| **Material Request Procurement Tracker** | Where every Material Request has got to: which have an RFQ, which RFQs have all their quotations, which are ordered | Three views (request, RFQ, item), stage and supplier filters, summary cards and a chart. See below |
 | **Supplier Quotation Comparison Extended** | Which supplier to buy each item from, and who should get the whole Request for Quotation | Core's Supplier Quotation Comparison, plus a recommendation. Item-wise, supplier-wise and RFQ-gaps views; local and import side by side. See below |
 
 **Reorder Recommendation in short.** Suggested level = average daily sales × lead days + safety stock. Suggested quantity tops the item back up to that level plus the coverage days you choose, less what is already on order.
@@ -401,6 +402,30 @@ Open it from the **Open Items** workspace (Purchase), or from **View > Supplier 
 **A Purchase Order that does not follow the recommendation.** Saving a Purchase Order whose lines come from quotations on a Request for Quotation checks each line against this comparison (lowest cost, charges included). A line bought from a quotation that is not awarded anything, because it is dearer, expired, stopped or from another supplier, needs the buyer's **Reason for Not Following the Recommendation** before the order can be saved. The lines are listed on the order under **Not the Recommended Quotation**, so the approver reads them. Verbal orders and orders to internal suppliers are not checked.
 
 **Comparison statement.** On a Request for Quotation, **Print > RFQ Quotation Comparison Statement** prints one page for sign-off: the recommended award, every quotation item by item, the suppliers, the open points, and the Prepared / Reviewed / Approved lines.
+
+#### The buying chain
+
+Buying runs **Material Request, Request for Quotation, Supplier Quotation, Purchase Order**, and no step is skipped:
+
+| Step | Needs | Refused when |
+|---|---|---|
+| Request for Quotation | every line comes from a submitted Material Request of type Purchase | a line names no Material Request |
+| Supplier Quotation | every line answers a submitted Request for Quotation | a line names no Request for Quotation, including a quotation made straight from a Material Request |
+| Purchase Order | a Material Request, a Request for Quotation raised from it and quotations on it (the rules per company in **Purchase Order Rules** say how many) | the chain is missing, whatever the amount (verbal orders and internal suppliers excepted) |
+
+A gap is opened only in **SF Trading Settings > Purchasing > Procurement Flow**, one tick each: *Allow a Request for Quotation Without a Material Request*, *Allow a Supplier Quotation Without a Request for Quotation*, *Allow a Purchase Order Without the Whole Chain*. All three are off. Only a save is checked, so documents already in the system are left as they are. The **Connections** of a Request for Quotation now list its Material Request.
+
+#### Material Request Procurement Tracker
+
+Open it from the **Open Items** workspace (Purchase). It starts from the purchase Material Requests of a period and follows each line down the chain.
+
+| View | One line per | Answers |
+|---|---|---|
+| **Material Request-wise** | Material Request | which requests have no RFQ, which are waiting for quotations, which are ordered; items with an RFQ / quoted / ordered; each RFQ with how many of its suppliers have answered; days open and overdue |
+| **RFQ-wise** | Request for Quotation | which RFQs are complete (every supplier invited has a submitted quotation) and who is still outstanding |
+| **Item-wise** | Material Request line | the same, for each item: its RFQs, who answered, who is outstanding, the quotations and the orders |
+
+**Stage** of a line, most advanced first: *Ordered*, *Partly Ordered*, *All Quotations Received*, *Quotations Partly Received*, *Awaiting Quotations*, *RFQ Not Submitted*, *No RFQ*. A Material Request takes the stage of its least advanced line. Filter by **Stage** to list, say, every request with no RFQ, or every RFQ still awaiting quotations; by **Supplier Invited**, **Raised By**, item, item group, warehouse, Material Request status or a single request or RFQ. The cards and the chart above the table count requests by stage whatever the Stage filter. **Compare** on a line opens Supplier Quotation Comparison Extended on that request or RFQ.
 
 ### 5.4 Daily cash — the DCR family
 

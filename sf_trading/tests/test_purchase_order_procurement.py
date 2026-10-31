@@ -94,6 +94,8 @@ class World:
 			patch.object(frappe, "get_all", self.get_all),
 			patch.object(frappe, "get_cached_value", return_value="BHD"),
 			patch.object(pop, "competing_suppliers", lambda rfqs, items: self.competing),
+			# these tests are about the per-company rule alone; the strict default has its own tests
+			patch.object(pop, "direct_orders_allowed", return_value=True),
 		]
 		for patcher in self.patches:
 			patcher.start()
