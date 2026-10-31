@@ -379,42 +379,17 @@ class TestExplain(EngineCase):
 		self.assertFalse([r for r in ex.rows if r.get("gap")])
 
 
-class TestCompact(EngineCase):
-	@staticmethod
-	def rows(*qtys):
-		return [
-			frappe._dict(
-				voucher_type="Purchase Receipt",
-				voucher_no=f"PR-{i}",
-				posting_date=None,
-				qty=q,
-				rate=2.0,
-				value=q * 2.0,
-			)
-			for i, q in enumerate(qtys)
-		]
-
-	def test_small_shares_are_one_row_and_nothing_is_dropped(self):
-		rows = self.rows(*([100] + [0.1] * 20))
-		out = cb.compact(rows)
-		self.assertAlmostEqual(sum(r.qty for r in out), sum(r.qty for r in rows))
-		self.assertAlmostEqual(self.rows_sum(out), self.rows_sum(rows))
-		self.assertEqual(out[-1].others, 13)  # 21 rows, the 8 largest listed
-
-	def test_a_hundred_equal_slivers_do_not_collapse_into_nothing(self):
-		rows = self.rows(*([1] * 100))  # every one is exactly 1%: none under the floor, all listed
-		self.assertEqual(len(cb.compact(rows)), 100)
-		rows = self.rows(*([1] * 101))  # now each is just under 1%
-		out = cb.compact(rows)
-		self.assertEqual(len([r for r in out if r.voucher_no]), cb.MIN_SOURCES_SHOWN)
-		self.assertEqual(out[-1].others, 101 - cb.MIN_SOURCES_SHOWN)
-
-	def test_a_lone_leftover_is_shown_as_itself(self):
-		rows = self.rows(*([50] * 8 + [0.01]))
-		out = cb.compact(rows)
-		self.assertEqual(len(out), 9)
-		self.assertEqual(out[-1].voucher_no, "PR-8")
-		self.assertFalse(out[-1].get("others"))
+class TestEverySourceListed(EngineCase):
+	def test_every_document_is_its_own_row_however_small_its_part(self):
+		b = self.ledger.bin()
+		b.receive("PR-0", 100, 2.0)
+		for i in range(1, 21):
+			b.receive(f"PR-{i}", 0.1, 2.0)
+		sale = b.issue("SI-1", 10)
+		ex = cb.explain(sale, cb.sources_before(sale))
+		self.assertEqual(ex.flag, cb.OK)
+		self.assertEqual(sorted(r.voucher_no for r in ex.rows), sorted(f"PR-{i}" for i in range(21)))
+		self.assertAlmostEqual(self.rows_sum(ex.rows), -sale.stock_value_difference)
 
 
 class TestChain(EngineCase):
