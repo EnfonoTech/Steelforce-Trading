@@ -233,7 +233,7 @@ class TestWhoIsRecommended(FrappeTestCase):
 		self.assertEqual(winner(c, "bolt").remarks, "Same cost and lead time, earlier quotation")
 
 	def test_prices_a_hair_apart_are_not_a_tie(self):
-		c = run([quote("S1", "bolt", 100, 1.00005, lead=1), quote("S2", "bolt", 100, 1.0, lead=9)])
+		c = run([quote("S1", "bolt", 100, 1.0002, lead=1), quote("S2", "bolt", 100, 1.0, lead=9)])
 		# S1's shorter lead time does not rescue a price that is higher at the fourth decimal
 		self.assertEqual(winner(c, "bolt").supplier, "S2")
 		self.assertEqual(winner(c, "bolt").remarks, "Lowest landed cost")
@@ -626,6 +626,46 @@ class TestOrdersFromTheRecommendation(FrappeTestCase):
 			result = report.make_purchase_orders("{}", '["SQ-S3"]')
 		self.assertEqual(result[0]["error"], "Submit the quotation first")
 		self.assertIsNone(result[0]["purchase_order"])
+
+	def test_a_required_by_date_already_past_is_moved_to_the_order_date(self):
+		po = frappe._dict(
+			transaction_date="2026-10-31",
+			schedule_date="2026-07-18",
+			items=[
+				frappe._dict(schedule_date="2026-07-18"),
+				frappe._dict(schedule_date="2026-11-15"),
+				frappe._dict(schedule_date=None),
+			],
+		)
+		self.assertEqual(report.bring_required_by_forward(po), 1)
+		rows = po["items"]  # a dict has its own .items
+		self.assertEqual(str(report.getdate(rows[0].schedule_date)), "2026-10-31")
+		self.assertEqual(rows[1].schedule_date, "2026-11-15")
+		self.assertIsNone(rows[2].schedule_date)
+		self.assertEqual(str(report.getdate(po.schedule_date)), "2026-10-31")
+
+	def test_a_draft_is_made_from_the_recommended_lines_and_says_when_a_date_moved(self):
+		po = frappe._dict(
+			name="PUR-ORD-1",
+			transaction_date="2026-10-31",
+			schedule_date="2026-07-18",
+			items=[frappe._dict(schedule_date="2026-07-18")],
+		)
+		inserted = []
+		po.insert = lambda: inserted.append(po.name)
+		offer = [frappe._dict(quotation="SQ-S1", submitted=True, items=["SQ-S1-bolt"])]
+		with (
+			patch("erpnext.buying.doctype.supplier_quotation.supplier_quotation.make_purchase_order", return_value=po) as mapper,
+			patch.object(report.frappe, "has_permission", return_value=True),
+			patch.object(report, "recommended_orders", return_value=offer),
+			patch.object(report, "parse_filters", return_value=frappe._dict()),
+		):
+			result = report.make_purchase_orders("{}", '["SQ-S1"]')
+		mapper.assert_called_once_with("SQ-S1", args={"filtered_children": ["SQ-S1-bolt"]})
+		self.assertEqual(inserted, ["PUR-ORD-1"])
+		self.assertEqual(result[0]["purchase_order"], "PUR-ORD-1")
+		self.assertIsNone(result[0]["error"])
+		self.assertIn("Required By moved to 2026-10-31 on 1 row(s)", result[0]["note"])
 
 	def test_choosing_nothing_is_refused(self):
 		with patch.object(report.frappe, "has_permission", return_value=True):

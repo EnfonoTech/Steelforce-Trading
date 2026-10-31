@@ -221,7 +221,9 @@ frappe.query_reports["Supplier Quotation Comparison Extended"] = {
 									row.purchase_order
 										? `<li>${escape(row.quotation)}: <a href="/app/purchase-order/${encodeURIComponent(
 												row.purchase_order
-										  )}">${escape(row.purchase_order)}</a></li>`
+										  )}">${escape(row.purchase_order)}</a>${
+												row.note ? ` <span class="text-muted">(${escape(row.note)})</span>` : ""
+										  }</li>`
 										: `<li>${escape(row.quotation)}: <span class="text-danger">${row.error}</span></li>`
 								);
 								frappe.msgprint({

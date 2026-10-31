@@ -1048,9 +1048,32 @@ def make_purchase_orders(filters: str, quotations: str) -> list:
 		frappe.db.savepoint(savepoint)
 		try:
 			po = make_purchase_order(name, args={"filtered_children": order["items"]})
+			moved = bring_required_by_forward(po)
 			po.insert()
-			results.append({"quotation": name, "purchase_order": po.name, "error": None})
+			note = (
+				_("Required By moved to {0} on {1} row(s): the Material Request date had passed").format(
+					po.transaction_date, moved
+				)
+				if moved
+				else None
+			)
+			results.append({"quotation": name, "purchase_order": po.name, "error": None, "note": note})
 		except Exception as error:
 			frappe.db.rollback(save_point=savepoint)
-			results.append({"quotation": name, "purchase_order": None, "error": cstr(error)})
+			results.append({"quotation": name, "purchase_order": None, "error": cstr(error), "note": None})
 	return results
+
+
+def bring_required_by_forward(po) -> int:
+	"""Core copies each line's Required By from its Material Request, and refuses an order dated after it. A quotation
+	round that outlasts the request's date would then refuse every draft this button makes, so a date already past is
+	moved to the order date (the draft is the buyer's to adjust) and the caller says so. Returns the lines moved."""
+	order_date = getdate(po.transaction_date or nowdate())
+	moved = 0
+	for row in po.get("items") or []:
+		if row.get("schedule_date") and getdate(row.schedule_date) < order_date:
+			row.schedule_date = order_date
+			moved += 1
+	if po.get("schedule_date") and getdate(po.schedule_date) < order_date:
+		po.schedule_date = order_date
+	return moved
