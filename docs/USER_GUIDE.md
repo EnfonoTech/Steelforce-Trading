@@ -372,7 +372,7 @@ Returns have their own Check. *Return at original cost* means the stock went bac
 
 #### Supplier Quotation Comparison Extended
 
-Open it from the **Open Items** workspace (Purchase), or from **View > Supplier Quotation Comparison Extended** on a submitted Request for Quotation, which opens it already filtered to that request. It reads the Supplier Quotations raised from a Request for Quotation and tells you who to buy from. Core's Supplier Quotation Comparison is still there; this one adds the decision.
+Open it from the **Open Items** workspace (Purchase), or from **View > Supplier Quotation Comparison Extended** on a submitted Request for Quotation, on a Supplier Quotation, or on a submitted purchase Material Request, which opens it already filtered to that request (from the Material Request, to every Request raised from it). It reads the Supplier Quotations raised from a Request for Quotation and tells you who to buy from. Core's Supplier Quotation Comparison is still there; this one adds the decision.
 
 **Three views** (the **View** filter):
 
@@ -392,7 +392,15 @@ Open it from the **Open Items** workspace (Purchase), or from **View > Supplier 
 
 **Also on the line:** last purchase rate and the % change against it (read from the Item master, before the import estimate), lead time, Valid Till, and the quotation.
 
-**Create Purchase Orders** (Actions menu) raises one draft Purchase Order per recommended quotation, with only the recommended items, made from the quotation so it carries the links the procurement rules look for. It lists what it will make and you tick which. A line already on a Purchase Order is left out, a draft quotation must be submitted first, and an order that still breaks the procurement rules (for example too few suppliers quoted the item) is refused with the rule's own message and nothing is created for it.
+**Create Purchase Orders** (Actions menu) raises one draft Purchase Order per quotation that is awarded something, with only the awarded items at the awarded quantities, made from the quotation so it carries the links the procurement rules look for. It lists what it will make and you tick which. A line already on a Purchase Order is left out, a draft quotation must be submitted first, and an order that still breaks the procurement rules (for example too few suppliers quoted the item) is refused with the rule's own message and nothing is created for it.
+
+**Recommend By.** *Lowest Cost* (the standard) or *Weighted Score*. A score is 0 to 100 among the quotations still in the running for an item: price is the lowest landed cost over this quotation's, lead time is the shortest stated over this one's, validity is the days left on the quotation up to 30. The **Weight** filters (70 / 20 / 10 unless you set them; only their proportions count) say how much each counts. A part nobody states, such as no lead time on any quotation, is left out of everyone's score; a quotation that does not state it while others do scores 0 on it. The highest score wins and the **Score** column shows it.
+
+**Split awards.** When the best quotation offers less than the request asks, the next one takes what is left, down the ranking. **Award Qty** and **Award Total** show who gets how much, **Items Awarded** counts it in the supplier view, **Create Purchase Orders** orders exactly those quantities, and a quantity no quotation covers is listed in **RFQ Gaps** as *Quantity not covered*.
+
+**A Purchase Order that does not follow the recommendation.** Saving a Purchase Order whose lines come from quotations on a Request for Quotation checks each line against this comparison (lowest cost, charges included). A line bought from a quotation that is not awarded anything, because it is dearer, expired, stopped or from another supplier, needs the buyer's **Reason for Not Following the Recommendation** before the order can be saved. The lines are listed on the order under **Not the Recommended Quotation**, so the approver reads them. Verbal orders and orders to internal suppliers are not checked.
+
+**Comparison statement.** On a Request for Quotation, **Print > RFQ Quotation Comparison Statement** prints one page for sign-off: the recommended award, every quotation item by item, the suppliers, the open points, and the Prepared / Reviewed / Approved lines.
 
 ### 5.4 Daily cash — the DCR family
 

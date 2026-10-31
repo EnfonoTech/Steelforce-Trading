@@ -42,6 +42,22 @@ but a draft cannot be turned into a Purchase Order, and the order button says so
 One supplier counts once per item. A supplier with two quotations for the same item competes with its lower one, and the
 other is shown as superseded, so "three quotations" always means three suppliers, as the Purchase Order rule counts them.
 
+HOW THE WINNER IS CHOSEN
+------------------------
+`Recommend By` is Lowest Cost (the default) or Weighted Score. A weighted score is 0 to 100 and is worked out among the
+quotations still in the running for one item: price is the lowest landed cost over this one's, lead time is the
+shortest stated over this one's, validity is the days left on the quotation up to 30. Each is weighted by the
+`Weight` filters (70, 20 and 10 unless set; only their proportions matter). A part nobody states (no lead time, no
+Valid Till) is left out of everyone's score rather than scored 0 for all, and a quotation that does not state it
+scores 0 on it while others do. Highest score wins; ties go to the lower landed cost, then the earlier quotation.
+
+SPLIT AWARDS
+------------
+A quotation can offer less than the request asks. Walking the ranking from the top, each quotation is awarded as much of
+the requested quantity as it offered and is still needed, so the next supplier covers what the cheaper one could not.
+`Award Qty` and `Award Total` show it, `Create Purchase Orders` orders exactly those quantities, and a quantity nobody
+covers is listed in RFQ Gaps.
+
 QUANTITY
 --------
 Every landed total is for the quantity the REQUEST asked for, not what the supplier chose to offer, so two suppliers
@@ -111,6 +127,13 @@ CHARGES_QUOTATION = "Quotation Charges"
 CHARGES_NONE = "No Charges"
 #: the categories of a Taxes and Charges row that raise what the goods cost, rather than only the invoice total
 VALUATION_CATEGORIES = ("Valuation", "Valuation and Total")
+
+RECOMMEND_COST = "Lowest Cost"
+RECOMMEND_SCORE = "Weighted Score"
+#: price, lead time and validity, when a weighted score is asked for and no weight is typed
+WEIGHTS_DEFAULT = (70.0, 20.0, 10.0)
+#: a quotation with this many days left or more scores full marks for validity
+VALIDITY_FULL_DAYS = 30
 
 STATUS_SUBMITTED = "Submitted"
 STATUS_DRAFT = "Draft"
@@ -316,6 +339,8 @@ def get_quotes(filters, company_currency) -> list:
 		line_filters["item_code"] = filters.item_code
 	if filters.get("request_for_quotation"):
 		line_filters["request_for_quotation"] = filters.request_for_quotation
+	if filters.get("material_request"):
+		line_filters["material_request"] = filters.material_request
 
 	lines = fetch_in(
 		"Supplier Quotation Item",
@@ -369,7 +394,23 @@ def get_request_names(quotes, filters) -> list:
 		return [named]
 
 	names = {quote.rfq for quote in quotes if quote.rfq}
-	narrowed = filters.get("item_code") or as_list(filters.get("supplier")) or as_list(filters.get("supplier_quotation"))
+	material_request = filters.get("material_request")
+	if material_request:
+		# the Requests raised from that Material Request, answered or not
+		names.update(
+			frappe.get_all(
+				"Request for Quotation Item",
+				filters={"material_request": material_request, "parenttype": "Request for Quotation", "docstatus": ["<", 2]},
+				pluck="parent",
+				limit_page_length=0,
+			)
+		)
+	narrowed = (
+		filters.get("item_code")
+		or material_request
+		or as_list(filters.get("supplier"))
+		or as_list(filters.get("supplier_quotation"))
+	)
 	if not narrowed and resolve_origin(filters) == ORIGIN_BOTH:
 		names.update(
 			frappe.get_list(
@@ -406,10 +447,12 @@ def get_request_scope(rfqs, filters):
 		rfqs,
 		in_field="parent",
 		filters={"parenttype": "Request for Quotation"},
-		fields=["parent", "item_code", "item_name", "qty", "stock_qty", "conversion_factor", "stock_uom"],
+		fields=["parent", "item_code", "item_name", "qty", "stock_qty", "conversion_factor", "stock_uom", "material_request"],
 		order_by="parent asc, idx asc",
 	):
 		if only_item and row.item_code != only_item:
+			continue
+		if filters.get("material_request") and row.material_request != filters.material_request:
 			continue
 		qty = flt(row.stock_qty) or flt(row.qty) * (flt(row.conversion_factor) or 1)
 		slot = requested.setdefault(row.parent, {}).setdefault(
@@ -503,19 +546,61 @@ def sort_key(quote):
 	)
 
 
-def rank_group(group):
+def resolve_weighting(filters):
+	"""None for Lowest Cost, else the weights of a weighted score as {price, lead, validity}."""
+	if filters.get("recommend_by") != RECOMMEND_SCORE:
+		return None
+	price, lead, validity = (
+		max(flt(filters.get(key)), 0.0) for key in ("weight_price", "weight_lead_time", "weight_validity")
+	)
+	if not (price or lead or validity):
+		price, lead, validity = WEIGHTS_DEFAULT
+	return frappe._dict(price=price, lead=lead, validity=validity)
+
+
+def score_group(running, weighting, today):
+	"""Set `score` (0 to 100) on every quotation still in the running for one item. See the module docstring."""
+	lowest = min(flt(quote.landed_unit_cost) for quote in running)
+	leads = [quote.lead_time_days for quote in running if quote.lead_time_days]
+	shortest = min(leads) if leads else None
+	days = {}
+	for quote in running:
+		if quote.valid_till:
+			days[quote.quotation_item] = (getdate(quote.valid_till) - getdate(today)).days
+
+	weights = {
+		"price": weighting.price,
+		"lead": weighting.lead if shortest else 0.0,
+		"validity": weighting.validity if days else 0.0,
+	}
+	total_weight = sum(weights.values())
+	for quote in running:
+		cost = flt(quote.landed_unit_cost)
+		left = days.get(quote.quotation_item)
+		parts = {
+			"price": 100.0 * lowest / cost if cost else 0.0,
+			"lead": 100.0 * shortest / quote.lead_time_days if shortest and quote.lead_time_days else 0.0,
+			"validity": 100.0 * min(max(left, 0), VALIDITY_FULL_DAYS) / VALIDITY_FULL_DAYS if left is not None else 0.0,
+		}
+		quote.score = sum(parts[key] * weights[key] for key in weights) / total_weight if total_weight else 0.0
+
+
+def rank_group(group, weighting=None, today=None):
 	"""Rank the quotations of ONE item on ONE request, and mark the recommended one.
 
-	Each supplier competes once, with its lowest eligible quotation. Sets on every quote:
+	Each supplier competes once, with its lowest eligible quotation. By default the cheapest landed cost wins; with a
+	`weighting` the highest weighted score does. Sets on every quote:
 	    rank            1.. for the quotations in the running, None otherwise
 	    recommended     1 on the winner
-	    pct_over_best   how far above the winner, in percent
+	    score           the weighted score, only when a weighting is given
+	    pct_over_best   how far above the LOWEST landed cost, in percent
 	    saving_vs_next  on the winner only: what it saves over the runner-up, for the requested quantity
 	    remarks         why a quotation is out, or why the winner won
 	"""
 	for quote in group:
 		quote.rank = None
 		quote.recommended = 0
+		quote.score = None
 		quote.pct_over_best = None
 		quote.saving_vs_next = None
 		quote.remarks = quote.ineligible
@@ -530,11 +615,15 @@ def rank_group(group):
 	if not running:
 		return
 
+	lowest = min(flt(quote.landed_unit_cost) for quote in running)
+	if weighting:
+		score_group(running, weighting, today or nowdate())
+		running = sorted(running, key=lambda quote: (-flt(quote.score, 4), sort_key(quote)))
+
 	best = running[0]
-	best_cost = flt(best.landed_unit_cost)
 	for position, quote in enumerate(running, 1):
 		quote.rank = position
-		quote.pct_over_best = (flt(quote.landed_unit_cost) / best_cost - 1) * 100 if best_cost else 0.0
+		quote.pct_over_best = (flt(quote.landed_unit_cost) / lowest - 1) * 100 if lowest else 0.0
 	best.recommended = 1
 
 	if len(running) == 1:
@@ -542,13 +631,43 @@ def rank_group(group):
 		return
 
 	runner_up = running[1]
-	best.saving_vs_next = (flt(runner_up.landed_unit_cost) - best_cost) * flt(best.requested_qty)
-	if flt(runner_up.landed_unit_cost, COST_PRECISION) != flt(best.landed_unit_cost, COST_PRECISION):
+	best.saving_vs_next = (flt(runner_up.landed_unit_cost) - flt(best.landed_unit_cost)) * flt(best.requested_qty)
+	if weighting:
+		if flt(best.landed_unit_cost, COST_PRECISION) == flt(lowest, COST_PRECISION):
+			best.remarks = _("Highest weighted score")
+		else:
+			best.remarks = _("Highest weighted score, not the lowest price")
+	elif flt(runner_up.landed_unit_cost, COST_PRECISION) != flt(best.landed_unit_cost, COST_PRECISION):
 		best.remarks = _("Lowest landed cost")
 	elif (runner_up.lead_time_days or FAR) != (best.lead_time_days or FAR):
 		best.remarks = _("Same cost, shorter lead time")
 	else:
 		best.remarks = _("Same cost and lead time, earlier quotation")
+
+
+def allocate_award(group):
+	"""Split the requested quantity down the ranking: each quotation takes what it offered, up to what is still needed.
+
+	Sets `award_qty` and `award_total` (landed cost of that quantity) on every quote, and `shortfall_qty`, the part of the
+	request no quotation in the running offered, on all of them."""
+	for quote in group:
+		quote.award_qty = 0.0
+		quote.award_total = 0.0
+		quote.shortfall_qty = 0.0
+
+	running = sorted((quote for quote in group if quote.rank is not None), key=lambda quote: quote.rank)
+	if not running:
+		return
+	remaining = flt(running[0].requested_qty)
+	for quote in running:
+		take = min(remaining, flt(quote.stock_qty)) if remaining > 0 else 0.0
+		quote.award_qty = take
+		quote.award_total = take * flt(quote.landed_unit_cost)
+		remaining = flt(remaining - take, 6)
+		if take and not quote.recommended:
+			quote.remarks = _("Awarded the quantity the cheaper quotation did not cover")
+	for quote in group:
+		quote.shortfall_qty = max(remaining, 0.0)
 
 
 def procurement_check(group, rule, best):
@@ -581,6 +700,7 @@ def compare(filters) -> frappe._dict:
 	use_quotation = filters.get("import_charges") != CHARGES_NONE
 	percent = max(flt(filters.get("import_charges_pct")), 0.0)
 	today = nowdate()
+	weighting = resolve_weighting(filters)
 
 	quotes = get_quotes(filters, company_currency)
 	abroad = suppliers_abroad({quote.supplier for quote in quotes if quote.supplier}, company_country)
@@ -619,7 +739,8 @@ def compare(filters) -> frappe._dict:
 		groups.setdefault((quote.rfq, quote.item_code), []).append(quote)
 
 	for group in groups.values():
-		rank_group(group)
+		rank_group(group, weighting, today)
+		allocate_award(group)
 		best = next((quote for quote in group if quote.recommended), None)
 		label, received, needed = procurement_check(group, rule, best)
 		for quote in group:
@@ -630,6 +751,7 @@ def compare(filters) -> frappe._dict:
 		company_currency=company_currency,
 		use_quotation=use_quotation,
 		percent=percent,
+		weighting=weighting,
 		today=today,
 		quotes=quotes,
 		groups=groups,
@@ -711,8 +833,11 @@ def item_row(quote) -> dict:
 		"landed_total": quote.landed_total,
 		"rank": quote.rank,
 		"recommended": quote.recommended,
+		"score": quote.score,
 		"pct_over_best": quote.pct_over_best,
 		"saving_vs_next": quote.saving_vs_next,
+		"award_qty": quote.award_qty,
+		"award_total": quote.award_total,
 		"last_purchase_rate": quote.last_purchase_rate,
 		"vs_last_purchase_pct": quote.vs_last_purchase_pct,
 		"lead_time_days": quote.lead_time_days,
@@ -742,7 +867,7 @@ def supplier_rows(comparison) -> list:
 def supplier_rows_for(comparison, rfq, groups, asked) -> list:
 	"""The suppliers of one request: those it invited and those that quoted, whether invited or not."""
 	items = set(asked)
-	best_split = sum(quote.landed_total for group in groups.values() for quote in group if quote.recommended)
+	best_split = sum(quote.award_total for group in groups.values() for quote in group)
 
 	invites = {row.supplier: row for row in comparison.invited.get(rfq, [])}
 	quoters = {}
@@ -756,6 +881,7 @@ def supplier_rows_for(comparison, rfq, groups, asked) -> list:
 		shown = [quote for quote in quotes if visible(comparison, quote)]
 		in_running = {quote.item_code: quote for quote in quotes if quote.rank is not None}
 		won = [quote for quote in in_running.values() if quote.recommended]
+		awarded = [quote for quote in in_running.values() if quote.award_qty > 0]
 		invite = invites.get(supplier)
 
 		summaries.append(
@@ -770,8 +896,10 @@ def supplier_rows_for(comparison, rfq, groups, asked) -> list:
 				items_quoted=len(in_running),
 				coverage_pct=(len(in_running) / len(items) * 100) if items else None,
 				items_won=len(won),
+				items_awarded=len(awarded),
+				items_part=len([quote for quote in awarded if not quote.recommended]),
 				basket_total=sum(q.landed_total for q in in_running.values()) if in_running else None,
-				won_total=sum(q.landed_total for q in won) if won else None,
+				won_total=sum(q.award_total for q in awarded) if awarded else None,
 				full=bool(items) and items <= set(in_running),
 				max_lead_time=max((q.lead_time_days or 0 for q in in_running.values()), default=0) or None,
 				earliest_expiry=min((q.valid_till for q in in_running.values() if q.valid_till), default=None),
@@ -814,11 +942,13 @@ def response_label(invite, quotes, shown) -> str:
 def supplier_recommendation(row) -> str:
 	if not row.items_quoted:
 		return ""
-	if row.items_requested and row.items_won == row.items_requested:
+	if row.items_requested and row.items_won == row.items_requested and not row.items_part:
 		return _("Recommended: lowest on every item")
 	parts = []
 	if row.items_won:
-		parts.append(_("Recommended for {0} of {1} items").format(row.items_won, row.items_requested))
+		parts.append(_("Recommended for %s of %s items") % (row.items_won, row.items_requested))
+	if row.items_part:
+		parts.append(_("Awarded the remainder on %s item(s)") % row.items_part)
 	if row.basket_rank == 1:
 		parts.append(_("Cheapest single award"))
 	return "; ".join(parts) or _("Not recommended")
@@ -894,6 +1024,20 @@ def gap_rows(comparison) -> list:
 						),
 					)
 				)
+			if first.shortfall_qty > 0:
+				offered = flt(asked[item].qty) - first.shortfall_qty
+				rows.append(
+					gap_row(
+						rfq,
+						None,
+						None,
+						item=item,
+						want=asked[item],
+						gap=_("Quantity not covered"),
+						detail=_("%s of the %s requested is offered across the quotations in the running")
+						% (flt(offered, 3), flt(asked[item].qty, 3)),
+					)
+				)
 	return rows
 
 
@@ -960,8 +1104,11 @@ def get_item_columns() -> list:
 		money(_("Landed Total (Requested Qty)"), "landed_total", width=150),
 		number(_("Rank"), "rank", 55, "Int"),
 		number(_("Recommended"), "recommended", 100, "Check"),
+		number(_("Score"), "score", 70),
 		number(_("% Over Lowest"), "pct_over_best", 100, "Percent"),
 		money(_("Saving vs Next Best"), "saving_vs_next"),
+		number(_("Award Qty (Stock UOM)"), "award_qty", 120),
+		money(_("Award Total"), "award_total", width=120),
 		money(_("Last Purchase Rate"), "last_purchase_rate", precision=4),
 		number(_("% vs Last Purchase"), "vs_last_purchase_pct", 110, "Percent"),
 		number(_("Lead Time (Days)"), "lead_time_days", 100, "Int"),
@@ -983,8 +1130,9 @@ def get_supplier_columns() -> list:
 		number(_("Items Quoted"), "items_quoted", 90, "Int"),
 		number(_("Coverage %"), "coverage_pct", 90, "Percent"),
 		number(_("Items Won"), "items_won", 80, "Int"),
+		number(_("Items Awarded"), "items_awarded", 90, "Int"),
 		money(_("Basket Total (Items Quoted)"), "basket_total", width=150),
-		money(_("Total of Items Won"), "won_total", width=130),
+		money(_("Award Total"), "won_total", width=130),
 		number(_("Basket Rank (Full Coverage)"), "basket_rank", 130, "Int"),
 		number(_("% Over Best Basket"), "pct_over_best_basket", 120, "Percent"),
 		money(_("Premium vs Best Split Award"), "premium_vs_split", width=150),
@@ -1017,6 +1165,12 @@ def get_message(comparison) -> str:
 			"Compared on the net price per stock unit, in {0}, before tax, plus the estimated charges: {1}."
 		).format(comparison.company_currency, describe_charges(comparison.use_quotation, comparison.percent))
 	]
+	if comparison.weighting:
+		weighting = comparison.weighting
+		notes.append(
+			_("Recommended by weighted score: price %s, lead time %s, validity %s (weights, only their proportions count).")
+			% (flt(weighting.price, 2), flt(weighting.lead, 2), flt(weighting.validity, 2))
+		)
 	if resolve_view(filters) == VIEW_SUPPLIER:
 		notes.append(
 			_(
@@ -1050,7 +1204,7 @@ def recommended_orders(filters) -> list:
 
 	A line already on a Purchase Order that is not cancelled is left out, so asking twice never orders twice."""
 	comparison = compare(filters)
-	winners = [quote for quote in comparison.quotes if quote.recommended]
+	winners = [quote for quote in comparison.quotes if quote.award_qty > 0]
 	ordered = set(
 		fetch_in(
 			"Purchase Order Item",
@@ -1076,11 +1230,13 @@ def recommended_orders(filters) -> list:
 				currency=comparison.company_currency,
 				submitted=quote.docstatus == 1,
 				items=[],
+				awards={},
 				total=0.0,
 			),
 		)
 		order["items"].append(quote.quotation_item)
-		order["total"] += quote.landed_total
+		order["awards"][quote.quotation_item] = quote.award_qty
+		order["total"] += quote.award_total
 	return sorted(orders.values(), key=lambda order: (order.request_for_quotation, order.quotation))
 
 
@@ -1120,6 +1276,7 @@ def make_purchase_orders(filters: str, quotations: str) -> list:
 		try:
 			po = make_purchase_order(name, args={"filtered_children": order["items"]})
 			moved = bring_required_by_forward(po)
+			limited = limit_to_awards(po, order.get("awards") or {})
 			po.insert()
 			note = (
 				_("Required By moved to {0} on {1} row(s): the Material Request date had passed").format(
@@ -1128,11 +1285,30 @@ def make_purchase_orders(filters: str, quotations: str) -> list:
 				if moved
 				else None
 			)
+			if limited:
+				part = _("Quantity limited to the awarded part on %s row(s)") % limited
+				note = (note + "; " + part) if note else part
 			results.append({"quotation": name, "purchase_order": po.name, "error": None, "note": note})
 		except Exception as error:
 			frappe.db.rollback(save_point=savepoint)
 			results.append({"quotation": name, "purchase_order": None, "error": cstr(error), "note": None})
 	return results
+
+
+def limit_to_awards(po, awards) -> int:
+	"""Core orders the whole quotation line. A line that is only part awarded (the cheaper quotation offered less than
+	the request, or the rest went to the next supplier) is cut to the awarded stock quantity, and the totals are worked
+	out again. Returns the lines cut."""
+	cut = 0
+	for row in po.get("items") or []:
+		wanted = flt(awards.get(row.get("supplier_quotation_item")))
+		if wanted and wanted < flt(row.get("stock_qty")) - 0.000001:
+			row.qty = wanted / (flt(row.get("conversion_factor")) or 1)
+			row.stock_qty = wanted
+			cut += 1
+	if cut:
+		po.run_method("calculate_taxes_and_totals")
+	return cut
 
 
 def bring_required_by_forward(po) -> int:

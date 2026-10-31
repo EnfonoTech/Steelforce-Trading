@@ -130,7 +130,11 @@ doctype_js = {
 	# "Items Without Price" button: opens that report on this list
 	"Price List":       "public/js/price_list.js",
 	"Company":          "public/js/company_stock_reco_account.js",
-	"Material Request": "public/js/material_request.js",
+	"Material Request": [
+		"public/js/material_request.js",
+		# View > Supplier Quotation Comparison Extended, on the requests raised from this one
+		"public/js/quotation_comparison_buttons.js",
+	],
 	"Customer":         [
 		"public/js/customer_company.js",
 		# core's own mobile_no can be made mandatory from Customize Form with no auto-fill of its
@@ -188,6 +192,8 @@ doctype_js = {
 	],
 	"Supplier Quotation": [
 		"public/js/purchase_tax_template.js",
+		# View > Supplier Quotation Comparison Extended, on the request this quotation answers
+		"public/js/quotation_comparison_buttons.js",
 	],
 	"Purchase Receipt":   [
 		"public/js/purchase_tax_template.js",
@@ -319,7 +325,13 @@ doctype_list_js = {
 
 # add methods and filters to jinja environment
 # the Item Label print format reads its barcode, price and text from here -- see item_label.py
-jinja = {"methods": ["sf_trading.item_label.label_context"]}
+# the Quotation Comparison Statement print format reads its figures from comparison_statement.py
+jinja = {
+	"methods": [
+		"sf_trading.item_label.label_context",
+		"sf_trading.comparison_statement.comparison_statement",
+	]
+}
 
 # jinja = {
 # 	"methods": "sf_trading.utils.jinja_methods",
@@ -364,6 +376,8 @@ after_migrate = [
 	"sf_trading.purchase_order_cancel.ensure_custom_fields",
 	# the Purchase Order's Verbal (No Quotation) tick and its comment -- see purchase_order_procurement.py
 	"sf_trading.purchase_order_procurement.ensure_custom_fields",
+	# the Purchase Order's Not the Recommended Quotation list and the reason for it -- see award_override.py
+	"sf_trading.award_override.ensure_custom_fields",
 	# GS Issue 11: cached phone field on Customer/Supplier
 	"sf_trading.party_contact_cache.ensure_custom_fields",
 	# GS Issue 25: PDC Rejected-status field
@@ -964,6 +978,8 @@ doc_events = {
 			# a Material Request behind every line and enough Request-for-Quotation quotations, unless it is a
 			# verbal order (SF Trading Settings > Purchase Order Procurement Rules) -- see purchase_order_procurement.py
 			"sf_trading.purchase_order_procurement.validate",
+			# a line bought from a quotation the comparison did not recommend needs a reason -- see award_override.py
+			"sf_trading.award_override.validate",
 			# the physical stock count's system stock and variance, row by row -- see po_stock_count.py
 			"sf_trading.po_stock_count.refresh",
 			# ... and no order enters the approval chain with a stock row uncounted

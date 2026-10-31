@@ -56,6 +56,21 @@ frappe.query_reports["Supplier Quotation Comparison Extended"] = {
 			options: "Item",
 		},
 		{
+			fieldname: "material_request",
+			label: __("Material Request"),
+			fieldtype: "Link",
+			options: "Material Request",
+			get_query: () => {
+				return {
+					filters: {
+						docstatus: 1,
+						material_request_type: "Purchase",
+						company: frappe.query_report.get_filter_value("company"),
+					},
+				};
+			},
+		},
+		{
 			fieldname: "supplier",
 			label: __("Supplier"),
 			fieldtype: "MultiSelectList",
@@ -102,6 +117,35 @@ frappe.query_reports["Supplier Quotation Comparison Extended"] = {
 			label: __("Extra % on Imports"),
 			fieldtype: "Float",
 			default: 0,
+		},
+		{
+			// Lowest Cost picks the lowest landed cost; Weighted Score weighs price, lead time and validity.
+			// A Select with a word for every choice: an empty or zero filter never reaches the server.
+			fieldname: "recommend_by",
+			label: __("Recommend By"),
+			fieldtype: "Select",
+			options: ["Lowest Cost", "Weighted Score"].join("\n"),
+			default: "Lowest Cost",
+			reqd: 1,
+		},
+		{
+			fieldname: "weight_price",
+			label: __("Weight: Price"),
+			fieldtype: "Int",
+			default: 70,
+			description: __("Used when Recommend By is Weighted Score."),
+		},
+		{
+			fieldname: "weight_lead_time",
+			label: __("Weight: Lead Time"),
+			fieldtype: "Int",
+			default: 20,
+		},
+		{
+			fieldname: "weight_validity",
+			label: __("Weight: Validity"),
+			fieldtype: "Int",
+			default: 10,
 		},
 		{
 			fieldname: "status",

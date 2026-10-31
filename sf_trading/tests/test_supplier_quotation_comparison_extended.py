@@ -413,6 +413,199 @@ class TestWhoIsRecommended(FrappeTestCase):
 		self.assertIsNone(q.vs_last_purchase_pct)
 
 
+class TestWeightedScore(FrappeTestCase):
+	def two(self, **extra):
+		return [
+			quote("S1", "bolt", 100, 1.00, lead=30, quotation="SQ-1", **extra),
+			quote("S2", "bolt", 100, 1.10, lead=5, quotation="SQ-2", **extra),
+		]
+
+	def test_lowest_cost_is_the_default_and_ignores_lead_time(self):
+		self.assertEqual(winner(run(self.two()), "bolt").supplier, "S1")
+		self.assertIsNone(report.resolve_weighting(frappe._dict()))
+		self.assertIsNone(report.resolve_weighting(frappe._dict(recommend_by="Lowest Cost", weight_price=50)))
+
+	def test_a_heavy_lead_time_weight_turns_a_cheaper_slow_quotation_down(self):
+		c = run(self.two(), recommend_by="Weighted Score", weight_price=20, weight_lead_time=80, weight_validity=0)
+		best = winner(c, "bolt")
+		self.assertEqual(best.supplier, "S2")
+		by = {q.supplier: q for q in c.groups[("RFQ-1", "bolt")]}
+		# price: S1 100, S2 100 / 1.1; lead: shortest 5, so S1 5 / 30 and S2 100
+		self.assertAlmostEqual(by["S1"].score, (100 * 20 + (5 / 30 * 100) * 80) / 100, places=3)
+		self.assertAlmostEqual(by["S2"].score, ((100 / 1.1) * 20 + 100 * 80) / 100, places=3)
+		self.assertEqual(best.remarks, "Highest weighted score, not the lowest price")
+
+	def test_the_percent_over_is_still_measured_from_the_lowest_price(self):
+		c = run(self.two(), recommend_by="Weighted Score", weight_price=20, weight_lead_time=80, weight_validity=0)
+		by = {q.supplier: q for q in c.groups[("RFQ-1", "bolt")]}
+		self.assertAlmostEqual(by["S1"].pct_over_best, 0.0)
+		self.assertAlmostEqual(by["S2"].pct_over_best, 10.0)
+
+	def test_a_price_heavy_weight_keeps_the_cheaper_quotation(self):
+		c = run(self.two(), recommend_by="Weighted Score", weight_price=95, weight_lead_time=5, weight_validity=0)
+		self.assertEqual(winner(c, "bolt").supplier, "S1")
+		self.assertEqual(winner(c, "bolt").remarks, "Highest weighted score")
+
+	def test_validity_counts_up_to_thirty_days(self):
+		quotes = [
+			quote("S1", "bolt", 100, 1.00, quotation="SQ-1", valid_till="2026-11-05"),
+			quote("S2", "bolt", 100, 1.05, quotation="SQ-2", valid_till="2026-12-31"),
+		]
+		c = run(quotes, recommend_by="Weighted Score", weight_price=0, weight_lead_time=0, weight_validity=100)
+		by = {q.supplier: q for q in c.groups[("RFQ-1", "bolt")]}
+		self.assertAlmostEqual(by["S1"].score, 5 / 30 * 100, places=3)
+		self.assertAlmostEqual(by["S2"].score, 100.0)
+		self.assertEqual(winner(c, "bolt").supplier, "S2")
+
+	def test_a_part_nobody_states_is_left_out_of_everyones_score(self):
+		quotes = [
+			quote("S1", "bolt", 100, 1.00, quotation="SQ-1", valid_till=None),
+			quote("S2", "bolt", 100, 1.25, quotation="SQ-2", valid_till=None),
+		]
+		c = run(quotes, recommend_by="Weighted Score", weight_price=50, weight_lead_time=30, weight_validity=20)
+		by = {q.supplier: q for q in c.groups[("RFQ-1", "bolt")]}
+		# no lead time and no Valid Till anywhere: only price counts, so the cheapest scores a full 100
+		self.assertAlmostEqual(by["S1"].score, 100.0)
+		self.assertAlmostEqual(by["S2"].score, 80.0)
+
+	def test_no_weight_typed_falls_back_to_the_defaults_and_a_zero_is_kept(self):
+		weighting = report.resolve_weighting(frappe._dict(recommend_by="Weighted Score"))
+		self.assertEqual((weighting.price, weighting.lead, weighting.validity), (70.0, 20.0, 10.0))
+		typed = report.resolve_weighting(frappe._dict(recommend_by="Weighted Score", weight_price=0, weight_lead_time=5))
+		self.assertEqual((typed.price, typed.lead, typed.validity), (0.0, 5.0, 0.0))
+
+	def test_ineligible_quotations_are_not_scored_and_the_message_names_the_weights(self):
+		quotes = [quote("S1", "bolt", 100, 0.5, status="Expired", quotation="SQ-1"), quote("S2", "bolt", 100, 2.0, quotation="SQ-2")]
+		c = run(quotes, recommend_by="Weighted Score")
+		by = {q.supplier: q for q in c.groups[("RFQ-1", "bolt")]}
+		self.assertIsNone(by["S1"].score)
+		self.assertEqual(winner(c, "bolt").supplier, "S2")
+		self.assertIn("weighted score: price 70.0, lead time 20.0, validity 10.0", report.get_message(c))
+
+
+class TestSplitAward(FrappeTestCase):
+	def awards(self, comparison, item="bolt"):
+		return {q.supplier: (q.award_qty, q.award_total) for q in comparison.groups[("RFQ-1", item)]}
+
+	def test_the_next_supplier_covers_what_the_cheaper_one_did_not_offer(self):
+		c = run(
+			[quote("S1", "bolt", 40, 1.0), quote("S2", "bolt", 100, 1.2), quote("S3", "bolt", 100, 1.5)],
+			requested=asked(bolt=100),
+		)
+		got = self.awards(c)
+		self.assertEqual(got["S1"], (40.0, 40.0))
+		self.assertEqual(got["S2"][0], 60.0)
+		self.assertAlmostEqual(got["S2"][1], 72.0)
+		self.assertEqual(got["S3"], (0.0, 0.0))
+		by = {q.supplier: q for q in c.groups[("RFQ-1", "bolt")]}
+		self.assertEqual(by["S2"].remarks, "Awarded the quantity the cheaper quotation did not cover")
+		self.assertEqual(by["S1"].shortfall_qty, 0.0)
+
+	def test_a_quotation_that_offers_enough_takes_it_all(self):
+		c = run([quote("S1", "bolt", 100, 1.0), quote("S2", "bolt", 100, 1.2)], requested=asked(bolt=100))
+		self.assertEqual(self.awards(c), {"S1": (100.0, 100.0), "S2": (0.0, 0.0)})
+
+	def test_an_offer_larger_than_the_request_is_cut_to_the_request(self):
+		c = run([quote("S1", "bolt", 500, 1.0)], requested=asked(bolt=100))
+		self.assertEqual(self.awards(c)["S1"], (100.0, 100.0))
+
+	def test_a_quantity_nobody_covers_is_a_shortfall_and_a_gap(self):
+		c = run(
+			[quote("S1", "bolt", 40, 1.0), quote("S2", "bolt", 30, 1.2)],
+			requested=asked(bolt=100),
+			invites=invited("S1", "S2"),
+		)
+		self.assertEqual(self.awards(c), {"S1": (40.0, 40.0), "S2": (30.0, 36.0)})
+		self.assertEqual(c.groups[("RFQ-1", "bolt")][0].shortfall_qty, 30.0)
+		gaps = [r for r in report.gap_rows(c) if r["gap"] == "Quantity not covered"]
+		self.assertEqual(len(gaps), 1)
+		self.assertEqual(gaps[0]["item_code"], "bolt")
+		self.assertEqual(gaps[0]["detail"], "70.0 of the 100.0 requested is offered across the quotations in the running")
+
+	def test_nothing_is_awarded_to_an_ineligible_quotation(self):
+		c = run([quote("S1", "bolt", 100, 0.5, status="Expired"), quote("S2", "bolt", 100, 2.0)], requested=asked(bolt=100))
+		self.assertEqual(self.awards(c), {"S1": (0.0, 0.0), "S2": (100.0, 200.0)})
+
+	def test_each_item_is_split_on_its_own(self):
+		c = run(
+			[
+				quote("S1", "bolt", 40, 1.0, quotation="SQ-S1"),
+				quote("S2", "bolt", 100, 1.2, quotation="SQ-S2"),
+				quote("S1", "nut", 10, 5.0, quotation="SQ-S1"),
+				quote("S2", "nut", 10, 6.0, quotation="SQ-S2"),
+			],
+			requested=asked(bolt=100, nut=10),
+		)
+		self.assertEqual(self.awards(c, "bolt")["S2"][0], 60.0)
+		self.assertEqual(self.awards(c, "nut"), {"S1": (10.0, 50.0), "S2": (0.0, 0.0)})
+
+	def test_the_supplier_summary_counts_a_part_award_and_totals_what_was_awarded(self):
+		c = run(
+			[quote("S1", "bolt", 40, 1.0), quote("S2", "bolt", 100, 1.2)],
+			requested=asked(bolt=100),
+			invites=invited("S1", "S2"),
+		)
+		rows = {r["supplier"]: r for r in report.supplier_rows(c)}
+		self.assertEqual((rows["S1"]["items_won"], rows["S1"]["items_awarded"], rows["S1"]["items_part"]), (1, 1, 0))
+		self.assertEqual((rows["S2"]["items_won"], rows["S2"]["items_awarded"], rows["S2"]["items_part"]), (0, 1, 1))
+		self.assertAlmostEqual(rows["S2"]["won_total"], 72.0)
+		self.assertEqual(rows["S2"]["recommendation"], "Awarded the remainder on 1 item(s)")
+
+	def test_the_orders_ask_for_the_awarded_quantities(self):
+		c = run(
+			[quote("S1", "bolt", 40, 1.0, quotation="SQ-S1"), quote("S2", "bolt", 100, 1.2, quotation="SQ-S2")],
+			requested=asked(bolt=100),
+		)
+		filters = frappe._dict(company="SFB", from_date="2026-10-01", to_date="2026-10-31")
+		with patch.object(report, "compare", return_value=c), patch.object(report, "fetch_in", return_value=[]):
+			orders = {o.quotation: o for o in report.recommended_orders(filters)}
+		self.assertEqual(sorted(orders), ["SQ-S1", "SQ-S2"])
+		self.assertEqual(orders["SQ-S1"]["awards"], {"SQ-S1-bolt": 40.0})
+		self.assertEqual(orders["SQ-S2"]["awards"], {"SQ-S2-bolt": 60.0})
+		self.assertAlmostEqual(orders["SQ-S2"]["total"], 72.0)
+
+	def test_a_part_awarded_line_is_cut_and_the_totals_recalculated(self):
+		recalculated = []
+		po = frappe._dict(
+			items=[
+				frappe._dict(supplier_quotation_item="A", stock_qty=120, conversion_factor=12, qty=10),
+				frappe._dict(supplier_quotation_item="B", stock_qty=50, conversion_factor=1, qty=50),
+			],
+			run_method=recalculated.append,
+		)
+		self.assertEqual(report.limit_to_awards(po, {"A": 60.0, "B": 50.0}), 1)
+		first, second = po["items"]
+		self.assertEqual((first.qty, first.stock_qty), (5.0, 60.0))
+		self.assertEqual((second.qty, second.stock_qty), (50, 50))
+		self.assertEqual(recalculated, ["calculate_taxes_and_totals"])
+		self.assertEqual(report.limit_to_awards(po, {"A": 60.0}), 0)
+		self.assertEqual(recalculated, ["calculate_taxes_and_totals"])
+
+
+class TestMaterialRequestFilter(FrappeTestCase):
+	def test_only_the_requests_items_from_that_material_request_are_asked(self):
+		rows = [
+			frappe._dict(parent="RFQ-1", item_code="bolt", item_name="Bolt", qty=10, stock_qty=10, conversion_factor=1, stock_uom="Nos", material_request="MR-1"),
+			frappe._dict(parent="RFQ-1", item_code="nut", item_name="Nut", qty=5, stock_qty=5, conversion_factor=1, stock_uom="Nos", material_request="MR-2"),
+		]
+		with patch.object(report, "fetch_in", side_effect=[rows, []]):
+			requested, _invited = report.get_request_scope(["RFQ-1"], frappe._dict(material_request="MR-1"))
+		self.assertEqual(list(requested["RFQ-1"]), ["bolt"])
+
+	def test_the_requests_raised_from_the_material_request_are_listed_answered_or_not(self):
+		quotes = [quote("S1", "bolt", 10, 1.0, rfq="RFQ-1")]
+		filters = frappe._dict(company="SFB", from_date="2026-10-01", to_date="2026-10-31", material_request="MR-1")
+		with (
+			patch.object(report.frappe, "get_all", return_value=["RFQ-9"], create=True) as raised,
+			patch.object(report.frappe, "get_list", return_value=["RFQ-OTHER"], create=True) as listed,
+		):
+			names = report.get_request_names(quotes, filters)
+		self.assertEqual(names, ["RFQ-1", "RFQ-9"])
+		self.assertEqual(raised.call_args.kwargs["filters"]["material_request"], "MR-1")
+		# a Material Request narrows the set, so the unanswered Requests of the period are not added
+		listed.assert_not_called()
+
+
 class TestProcurementRuleCheck(FrappeTestCase):
 	def label(self, quotes, **kwargs):
 		c = run(quotes, rule=RULE, **kwargs)
@@ -737,11 +930,22 @@ class TestOrdersFromTheRecommendation(FrappeTestCase):
 			name="PUR-ORD-1",
 			transaction_date="2026-10-31",
 			schedule_date="2026-07-18",
-			items=[frappe._dict(schedule_date="2026-07-18")],
+			items=[
+				frappe._dict(
+					schedule_date="2026-07-18",
+					supplier_quotation_item="SQ-S1-bolt",
+					stock_qty=100,
+					conversion_factor=1,
+					qty=100,
+				)
+			],
 		)
-		inserted = []
+		inserted, recalculated = [], []
 		po.insert = lambda: inserted.append(po.name)
-		offer = [frappe._dict(quotation="SQ-S1", submitted=True, items=["SQ-S1-bolt"])]
+		po.run_method = recalculated.append
+		offer = [
+			frappe._dict(quotation="SQ-S1", submitted=True, items=["SQ-S1-bolt"], awards={"SQ-S1-bolt": 60.0})
+		]
 		with (
 			patch("erpnext.buying.doctype.supplier_quotation.supplier_quotation.make_purchase_order", return_value=po) as mapper,
 			patch.object(report.frappe, "has_permission", return_value=True),
@@ -754,6 +958,10 @@ class TestOrdersFromTheRecommendation(FrappeTestCase):
 		self.assertEqual(result[0]["purchase_order"], "PUR-ORD-1")
 		self.assertIsNone(result[0]["error"])
 		self.assertIn("Required By moved to 2026-10-31 on 1 row(s)", result[0]["note"])
+		self.assertIn("Quantity limited to the awarded part on 1 row(s)", result[0]["note"])
+		self.assertEqual(po["items"][0].qty, 60.0)
+		self.assertEqual(po["items"][0].stock_qty, 60.0)
+		self.assertEqual(recalculated, ["calculate_taxes_and_totals"])
 
 	def test_choosing_nothing_is_refused(self):
 		with patch.object(report.frappe, "has_permission", return_value=True):
