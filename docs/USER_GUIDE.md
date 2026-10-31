@@ -372,7 +372,7 @@ Returns have their own Check. *Return at original cost* means the stock went bac
 
 #### Supplier Quotation Comparison Extended
 
-Open it from the **Open Items** workspace (Purchase). It reads the Supplier Quotations raised from a Request for Quotation and tells you who to buy from. Core's Supplier Quotation Comparison is still there; this one adds the decision.
+Open it from the **Open Items** workspace (Purchase), or from **View > Supplier Quotation Comparison Extended** on a submitted Request for Quotation, which opens it already filtered to that request. It reads the Supplier Quotations raised from a Request for Quotation and tells you who to buy from. Core's Supplier Quotation Comparison is still there; this one adds the decision.
 
 **Three views** (the **View** filter):
 
@@ -382,7 +382,7 @@ Open it from the **Open Items** workspace (Purchase). It reads the Supplier Quot
 | **Supplier-wise Summary** | supplier per RFQ | See how much of the request each supplier covered, how many items they win, what their basket costs, and which supplier is the **cheapest single award** and what a single award costs over buying each item from its cheapest supplier |
 | **RFQ Gaps** | missing answer | Chase suppliers who never answered, items a supplier left out, items nobody quoted, and items short of the quotations the Purchase Order rules ask for |
 
-**How the recommendation is made.** Every quotation is put on one footing first: the **net price** (after discount, before tax) **per stock unit**, in the **company currency**. An **import** quotation (one in another currency) then carries the **Import Charges %** you type in the filter for freight, duty and clearance, so a cheap price abroad is not mistaken for a cheap landed cost. A local quotation carries none, because its VAT is reclaimable. The recommended quotation is the lowest landed cost; a tie goes to the shorter lead time, then to the earlier quotation. Totals are for the quantity the **request** asked for, so suppliers compare on the same basket; **Qty Offered %** shows who offered less.
+**How the recommendation is made.** Every quotation is put on one footing first: the **net price** (after discount, before tax) **per stock unit**, in the **company currency**. The **estimated landed charges** are then added, so a cheap price abroad is not mistaken for a cheap landed cost. They come from **SF Trading Settings > Purchasing > Default Landed Cost Charges**: one row per charge (Freight, Customs Duty, Clearance...), for a company, applying to imports, local purchases or both, as a **% of Price** or an amount **Per Stock Unit**. The **Estimated Charges** filter uses those defaults (the standard), one **Typed Percent** on imports, or **No Charges**. With no rows the price alone is compared. VAT is reclaimable and is left out. These are estimates: the real figure is the Landed Cost Voucher's, drawn up once the goods arrive. The recommended quotation is the lowest landed cost; a tie goes to the shorter lead time, then to the earlier quotation. Totals are for the quantity the **request** asked for, so suppliers compare on the same basket; **Qty Offered %** shows who offered less.
 
 **Never recommended:** an expired quotation (status, or Valid Till already past), a stopped one, one with no price. They stay on the report, marked. A supplier counts once per item, with its lower quotation.
 

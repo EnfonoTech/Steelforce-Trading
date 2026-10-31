@@ -109,6 +109,8 @@ doctype_js = {
 		# a Cash sale is due the day it is made, whatever terms the customer carries -- see cash_due_date.py
 		"public/js/cash_due_date.js",
 	],
+	# View > Supplier Quotation Comparison Extended, opened on this request -- see the report of that name
+	"Request for Quotation": "public/js/rfq_quotation_comparison.js",
 	"Stock Entry":      [
 		"public/js/stock_entry.js",
 		# View > Transfer Cost Breakdown on a Material Transfer -- see cogs_breakdown.py

@@ -34,6 +34,8 @@
   "landed_cost_require_with_import",
   "small_import_section",
   "small_import_limits",
+  "default_landed_cost_section",
+  "default_landed_costs",
   "masters_tab",
   "master_rules_section",
   "master_rules_from",
@@ -306,6 +308,18 @@
    "fieldtype": "Table",
    "label": "Imports Below This Amount Need No Bayan Number, by Company",
    "options": "SF Small Import Limit"
+  },
+  {
+   "fieldname": "default_landed_cost_section",
+   "fieldtype": "Section Break",
+   "label": "Default Landed Cost Charges",
+   "description": "What an imported (or local) purchase usually costs on top of the supplier's price, by company. Supplier Quotation Comparison Extended adds these to each quotation before it compares them, so a cheap price abroad is not mistaken for a cheap landed cost. Leave empty to compare the price alone. These are estimates: the real charges are the Landed Cost Voucher's."
+  },
+  {
+   "fieldname": "default_landed_costs",
+   "fieldtype": "Table",
+   "label": "Default Charges Added to a Quotation, by Company",
+   "options": "SF Default Landed Cost"
   },
   {
    "fieldname": "cash_flow_statement_section",

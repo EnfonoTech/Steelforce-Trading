@@ -84,12 +84,23 @@ frappe.query_reports["Supplier Quotation Comparison Extended"] = {
 			reqd: 1,
 		},
 		{
-			// Freight, duty and clearance as a percent of the price, added to IMPORT quotations only,
-			// so a cheap price abroad is not read as a cheap landed cost. 0 compares the converted price.
+			// What is added to each quotation's price before they are compared. Company Defaults reads
+			// SF Trading Settings > Purchasing > Default Landed Cost Charges (empty = the price alone);
+			// Typed Percent adds the percent below to imports only; No Charges compares the price alone.
+			// A Select with a word for every choice: an unticked or zero filter never reaches the server.
+			fieldname: "import_charges",
+			label: __("Estimated Charges"),
+			fieldtype: "Select",
+			options: ["Company Defaults", "Typed Percent", "No Charges"].join("\n"),
+			default: "Company Defaults",
+			reqd: 1,
+		},
+		{
 			fieldname: "import_charges_pct",
-			label: __("Import Charges % (Estimate)"),
+			label: __("Typed Percent (Imports)"),
 			fieldtype: "Float",
 			default: 0,
+			description: __("Used when Estimated Charges is Typed Percent."),
 		},
 		{
 			fieldname: "status",
