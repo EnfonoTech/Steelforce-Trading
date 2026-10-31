@@ -108,6 +108,7 @@ def statement_items(comparison, money) -> list:
 			"currency": cstr(row.get("currency")),
 			"price": money(row.get("unit_cost_base"), 4),
 			"charges": money(row.get("charge_unit"), 4) if flt(row.get("charge_unit")) else "",
+			"charge_detail": cstr(row.get("charge_detail")),
 			"landed": money(row.get("landed_unit_cost"), 4),
 			"over": ("%s%%" % flt(row.get("pct_over_best"), 1)) if row.get("pct_over_best") else "",
 			"offered": ("%s%%" % flt(row.get("qty_offered_pct"), 0)) if row.get("qty_offered_pct") is not None else "",

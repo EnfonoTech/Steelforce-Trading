@@ -15,7 +15,7 @@ import frappe
 from frappe.tests.utils import FrappeTestCase
 
 from sf_trading import comparison_statement as statement
-from sf_trading.tests.test_supplier_quotation_comparison_extended import asked, invited, quote, run
+from sf_trading.tests.test_supplier_quotation_comparison_extended import asked, charge, invited, quote, run
 
 PRINT_FORMAT = os.path.join(
 	os.path.dirname(statement.__file__),
@@ -97,6 +97,31 @@ class TestWhatTheStatementPrints(FrappeTestCase):
 		empty = build(run([], requested=asked(bolt=100), invites=invited("S1")))
 		self.assertTrue(empty.available)
 		self.assertIn("No quotation has been received", empty.note)
+
+
+class TestChargesAreNamed(FrappeTestCase):
+	def test_the_charge_names_are_on_the_line_and_on_the_page(self):
+		compared = run(
+			[
+				quote("S1", "bolt", 100, 1.0, quotation="SQ-S1", charges=[charge("Local Delivery", 20)]),
+				quote("S2", "bolt", 100, 1.2, quotation="SQ-S2"),
+			],
+			requested=asked(bolt=100),
+		)
+		data = build(compared)
+		quotes = {q["supplier"]: q for q in data["items"][0]["quotes"]}
+		self.assertEqual(quotes["S1 Trading"]["charge_detail"], "Local Delivery 20.0")
+		self.assertEqual(quotes["S2 Trading"]["charge_detail"], "")
+		try:
+			import jinja2
+		except ImportError:
+			return
+		with open(PRINT_FORMAT, encoding="utf-8") as handle:
+			html = json.load(handle)["html"]
+		environment = jinja2.Environment(autoescape=True)
+		environment.globals["_"] = lambda text: text
+		environment.globals["comparison_statement"] = lambda name: data
+		self.assertIn("Local Delivery 20.0", environment.from_string(html).render(doc=frappe._dict(name="RFQ-1")))
 
 
 class TestTheTemplate(FrappeTestCase):
