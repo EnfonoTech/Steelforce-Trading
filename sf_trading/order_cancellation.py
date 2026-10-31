@@ -119,6 +119,16 @@ def compose_remark(doctype: str, reason: str, details: str = None) -> str:
 	return reason + (" - " + details if details else "")
 
 
+def _order_values(doctype: str, name: str, fields: list):
+	"""The order's own fields, `workflow_state` only where the doctype has the column.
+
+	A Quotation gets `workflow_state` when its cancellation workflow is made (ensure_quotation_workflow),
+	which a site that cancels its Sales Orders directly never does: selecting it there is a SQL error."""
+	meta = frappe.get_meta(doctype)
+	fields = [f for f in fields if f != "workflow_state" or meta.has_field(f)]
+	return frappe.db.get_value(doctype, name, fields, as_dict=True) or frappe._dict()
+
+
 def _stamp(doctype, name, reason, details):
 	remark = compose_remark(doctype, reason, details)
 	# update_modified=False: the open form still holds its own `modified`, and a cancel that then
@@ -135,7 +145,7 @@ def set_cancellation_reason(doctype: str, name: str, reason: str, details: str =
 	On a Sales Order or a Quotation only those who may cancel it (a Sales Manager) reach this; a pending
 	request's reason is the requester's and is never rewritten here."""
 	frappe.has_permission(doctype, "cancel", doc=name, throw=True)
-	values = frappe.db.get_value(doctype, name, ["docstatus", "workflow_state"], as_dict=True) or frappe._dict()
+	values = _order_values(doctype, name, ["docstatus", "workflow_state"])
 	if cint(values.docstatus) != 1:
 		frappe.throw(_("Only a submitted order can be cancelled."))
 	if doctype in REQUESTABLE:
@@ -168,7 +178,7 @@ def can_request(doctype: str, name: str) -> bool:
 		return False
 	if not frappe.db.exists("PM Workflow", {"name": CANCELLATION_WORKFLOWS[doctype], "is_active": 1}):
 		return False
-	values = frappe.db.get_value(doctype, name, ["docstatus", "workflow_state", "status"], as_dict=True)
+	values = _order_values(doctype, name, ["docstatus", "workflow_state", "status"])
 	if not values or cint(values.docstatus) != 1 or values.workflow_state == REQUESTED_STATE:
 		return False
 	if values.status in FINISHED:

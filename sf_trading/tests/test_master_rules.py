@@ -3,6 +3,7 @@
     bench --site <site> run-tests --module sf_trading.tests.test_master_rules
 """
 
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import frappe
@@ -266,6 +267,45 @@ class TestCancellationReason(FrappeTestCase):
 		with patch.object(frappe, "get_roles", return_value=["Sales User"]), patch.object(frappe, "has_permission", return_value=True):
 			with self.assertRaises(frappe.PermissionError):
 				oc.set_cancellation_reason("Sales Order", order, "Duplicate Order")
+
+
+class TestCancelDialogWithoutWorkflowState(FrappeTestCase):
+	"""A Quotation on a site with no Quotation Cancellation workflow has no workflow_state column."""
+
+	def _set_reason(self, has_state_field, state=None):
+		asked = []
+
+		def get_value(doctype, name=None, fieldname=None, **kwargs):
+			if doctype == oc.MASTER:
+				return frappe._dict(applies_to=oc.BOTH, needs_details=0, disabled=0)
+			if isinstance(fieldname, str):
+				return "Customer Request - asked"
+			asked.append(list(fieldname))
+			row = frappe._dict(docstatus=1)
+			if "workflow_state" in fieldname:
+				row.workflow_state = state
+			return row
+
+		meta = SimpleNamespace(has_field=lambda f: has_state_field or f != "workflow_state")
+		with patch.object(frappe, "get_meta", return_value=meta), \
+			patch.object(frappe, "has_permission", return_value=True), \
+			patch.object(frappe, "get_roles", return_value=["Sales Manager"]), \
+			patch.object(frappe.db, "get_value", side_effect=get_value), \
+			patch.object(frappe.db, "set_value") as set_value:
+			result = oc.set_cancellation_reason("Quotation", "SAL-QTN-X", "Price Changed", "okay")
+		return result, asked, set_value
+
+	def test_a_quotation_without_the_column_is_not_asked_for_it(self):
+		result, asked, set_value = self._set_reason(has_state_field=False)
+		self.assertEqual(result, "Price Changed - okay")
+		self.assertEqual(asked, [["docstatus"]])
+		set_value.assert_called_once()
+
+	def test_a_requested_cancellation_keeps_the_requesters_reason(self):
+		result, asked, set_value = self._set_reason(has_state_field=True, state=oc.REQUESTED_STATE)
+		self.assertEqual(result, "Customer Request - asked")
+		self.assertEqual(asked, [["docstatus", "workflow_state"]])
+		set_value.assert_not_called()
 
 
 class TestMasterDataCompleteness(FrappeTestCase):
