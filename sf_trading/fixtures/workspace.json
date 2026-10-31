@@ -317,7 +317,7 @@
     "idx": 8,
     "is_query_report": 0,
     "label": "Purchase",
-    "link_count": 5,
+    "link_count": 6,
     "link_to": null,
     "link_type": null,
     "onboard": 0,
@@ -376,6 +376,18 @@
     "hidden": 0,
     "idx": 13,
     "is_query_report": 1,
+    "label": "Supplier Quotation Comparison Extended",
+    "link_count": 0,
+    "link_to": "Supplier Quotation Comparison Extended",
+    "link_type": "Report",
+    "onboard": 0,
+    "type": "Link"
+   },
+   {
+    "dependencies": "",
+    "hidden": 0,
+    "idx": 14,
+    "is_query_report": 1,
     "label": "Pending Advance PO",
     "link_count": 0,
     "link_to": "Pending Advance PO",
@@ -386,7 +398,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 14,
+    "idx": 15,
     "is_query_report": 1,
     "label": "Purchase Receipts Pending Return",
     "link_count": 0,
@@ -398,7 +410,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 15,
+    "idx": 16,
     "is_query_report": 0,
     "label": "Costing",
     "link_count": 2,
@@ -410,7 +422,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 16,
+    "idx": 17,
     "is_query_report": 1,
     "label": "COGS Cost Breakdown",
     "link_count": 0,
@@ -422,7 +434,7 @@
    {
     "dependencies": "",
     "hidden": 0,
-    "idx": 17,
+    "idx": 18,
     "is_query_report": 1,
     "label": "Transfer Cost Breakdown",
     "link_count": 0,

@@ -327,6 +327,7 @@ All reports are in the Awesomebar by name. Every one of them has a Company filte
 | **Reorder Recommendation** | What to order, how much, and when to reorder each item | Works out a reorder level and quantity per item and warehouse from what actually sold. See below |
 | **COGS Cost Breakdown** | How the cost of a sale was reached, line by line, and what it was sold for | Open it from **View > COGS Calculation** on a submitted Delivery Note or Sales Invoice. Cost, GL booked, difference, sales and margin per voucher; under each item line, the receipts, transfers and reconciliations its stock was made of |
 | **Transfer Cost Breakdown** | How a transfer between warehouses was costed | Open it from **View > Transfer Cost Breakdown** on a submitted Material Transfer. The source warehouse's balance just before the transfer, and what it was made of |
+| **Supplier Quotation Comparison Extended** | Which supplier to buy each item from, and who should get the whole Request for Quotation | Core's Supplier Quotation Comparison, plus a recommendation. Item-wise, supplier-wise and RFQ-gaps views; local and import side by side. See below |
 
 **Reorder Recommendation in short.** Suggested level = average daily sales × lead days + safety stock. Suggested quantity tops the item back up to that level plus the coverage days you choose, less what is already on order.
 
@@ -368,6 +369,28 @@ Returns have their own Check. *Return at original cost* means the stock went bac
 - **Only Gaps** keeps those lines. **Only Lines To Review** keeps them together with the negative-stock lines.
 - **Branch** keeps transfers into or out of the warehouses that branch lists in its Branch Configuration. A warehouse can sit under several branches, so this says "touches", not "belongs to".
 - About half of the transfers go through the **In Transit** warehouse: a Send moves stock into it and an Accept moves it out, as two separate transfers. Nothing links an Accept to its Send, so an Accept's sources are the mix of everything that sat in transit at that moment, not one particular Send. Tick **Expand Transfer Chain** to follow each Send back to where it came from.
+
+#### Supplier Quotation Comparison Extended
+
+Open it from the **Open Items** workspace (Purchase). It reads the Supplier Quotations raised from a Request for Quotation and tells you who to buy from. Core's Supplier Quotation Comparison is still there; this one adds the decision.
+
+**Three views** (the **View** filter):
+
+| View | One line per | Use it to |
+|---|---|---|
+| **Item-wise Comparison** | quotation line, grouped by RFQ and item | See the ranking: the **Recommended** line is green, with its rank, how far every other quote is above it, and what it saves over the next best |
+| **Supplier-wise Summary** | supplier per RFQ | See how much of the request each supplier covered, how many items they win, what their basket costs, and which supplier is the **cheapest single award** and what a single award costs over buying each item from its cheapest supplier |
+| **RFQ Gaps** | missing answer | Chase suppliers who never answered, items a supplier left out, items nobody quoted, and items short of the quotations the Purchase Order rules ask for |
+
+**How the recommendation is made.** Every quotation is put on one footing first: the **net price** (after discount, before tax) **per stock unit**, in the **company currency**. An **import** quotation (one in another currency) then carries the **Import Charges %** you type in the filter for freight, duty and clearance, so a cheap price abroad is not mistaken for a cheap landed cost. A local quotation carries none, because its VAT is reclaimable. The recommended quotation is the lowest landed cost; a tie goes to the shorter lead time, then to the earlier quotation. Totals are for the quantity the **request** asked for, so suppliers compare on the same basket; **Qty Offered %** shows who offered less.
+
+**Never recommended:** an expired quotation (status, or Valid Till already past), a stopped one, one with no price. They stay on the report, marked. A supplier counts once per item, with its lower quotation.
+
+**Local and import.** A quotation is an import when it is in a currency other than the company's, or its supplier's country is set and is not the company's. **Purchase Origin** keeps one half or both. **Procurement Rule** reports each item against the Purchase Order rules in SF Trading Settings: *Met*, *Short*, *Not required* (a local order at or under the rule amount) or blank when the company has no rule on.
+
+**Also on the line:** last purchase rate and the % change against it (read from the Item master, before the import estimate), lead time, Valid Till, and the quotation.
+
+**Create Purchase Orders** (Actions menu) raises one draft Purchase Order per recommended quotation, with only the recommended items, made from the quotation so it carries the links the procurement rules look for. It lists what it will make and you tick which. A line already on a Purchase Order is left out, a draft quotation must be submitted first, and an order that still breaks the procurement rules (for example too few suppliers quoted the item) is refused with the rule's own message and nothing is created for it.
 
 ### 5.4 Daily cash — the DCR family
 
