@@ -43,7 +43,8 @@ def comparison_statement(rfq) -> frappe._dict:
 	currency = comparison.company_currency
 
 	def money(value, precision=None):
-		return fmt_money(flt(value), precision=precision, currency=currency) if value is not None else ""
+		# no symbol: it wraps in a narrow cell, and the basis line says which currency every amount is in
+		return fmt_money(flt(value), precision=precision) if value is not None else ""
 
 	items = statement_items(comparison, money)
 	suppliers = statement_suppliers(comparison, money)
