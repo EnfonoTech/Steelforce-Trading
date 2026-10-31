@@ -26,7 +26,6 @@ class SFTradingSettings(Document):
 
 		self.validate_po_procurement_rules()
 		self.validate_small_import_limits()
-		self.validate_default_landed_costs()
 		self.validate_cash_flow_account_map()
 
 	def validate_po_procurement_rules(self):
@@ -50,23 +49,6 @@ class SFTradingSettings(Document):
 			seen.add(row.company)
 			if flt(row.limit_amount) < 0:
 				frappe.throw(_("Row %s: the amount for small imports cannot be negative.") % row.idx)
-
-	def validate_default_landed_costs(self):
-		"""A charge is named once per company and half (import or local) it applies to, and none is negative: a quotation
-		is estimated by adding these up, so a repeated or negative row would quietly move every recommendation."""
-		seen = {}
-		for row in self.get("default_landed_costs") or []:
-			if flt(row.value) < 0:
-				frappe.throw(_("Row %s: the rate or amount of a default landed cost cannot be negative.") % row.idx)
-			name = (row.charge or "").strip().lower()
-			for half in ("Import", "Local") if row.applies_to == "Import and Local" else (row.applies_to,):
-				key = (row.company, name, half)
-				if key in seen:
-					frappe.throw(
-						_("Row %s: %s is already listed for %s in %s, in row %s.")
-						% (row.idx, row.charge, half, row.company, seen[key])
-					)
-				seen[key] = row.idx
 
 	def validate_cash_flow_account_map(self):
 		"""An account has one line on the Cash Flow Statement: a row twice would make the report pick one."""

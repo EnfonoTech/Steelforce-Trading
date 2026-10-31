@@ -41,6 +41,8 @@ def quote(
 	factor=1,
 	total=100.0,
 	rfq_item=None,
+	charges=None,
+	net_total=None,
 ):
 	"""A quotation line as the report builds it, from the header and line a read would return."""
 	quotation = quotation or f"SQ-{supplier}"
@@ -55,6 +57,7 @@ def quote(
 		status=status,
 		docstatus=docstatus,
 		base_grand_total=total,
+		base_net_total=net_total if net_total is not None else qty * rate * conversion_rate,
 	)
 	line = frappe._dict(
 		name=f"{quotation}-{item}",
@@ -76,7 +79,7 @@ def quote(
 		request_for_quotation=rfq,
 		request_for_quotation_item=rfq_item or "",
 	)
-	return report.build_quote(header, line, COMPANY_CURRENCY)
+	return report.build_quote(header, line, COMPANY_CURRENCY, charges)
 
 
 def asked(**items):
@@ -94,7 +97,7 @@ def invited(*suppliers):
 	}
 
 
-def run(quotes, requested=None, invites=None, rule=None, last_rates=None, abroad=(), defaults=None, **filters):
+def run(quotes, requested=None, invites=None, rule=None, last_rates=None, abroad=(), **filters):
 	"""compare() with the database reads replaced."""
 	filters = frappe._dict(company="SFB", from_date="2026-10-01", to_date="2026-10-31", **filters)
 	rfqs = sorted({q.rfq for q in quotes if q.rfq} | set(requested or {}) | set(invites or {}))
@@ -106,7 +109,6 @@ def run(quotes, requested=None, invites=None, rule=None, last_rates=None, abroad
 		patch.object(report, "get_request_scope", return_value=(requested or {}, invites or {})),
 		patch.object(report, "get_last_rates", return_value=last_rates or {}),
 		patch.object(report, "procurement_rules", return_value=rule or RULE_OFF),
-		patch.object(report, "default_charges", return_value=defaults or []),
 		patch.object(report, "nowdate", return_value=TODAY),
 	):
 		return report.compare(filters)
@@ -161,15 +163,14 @@ class TestOriginAndImportCharges(FrappeTestCase):
 		local_priced = quote("S4", "bolt", 1, 1)
 		self.assertEqual(report.quote_origin(local_priced, "BHD", {"S4"}), report.IMPORT)
 
-	def test_charges_go_on_imports_only(self):
+	def test_a_typed_percent_goes_on_imports_only(self):
 		usd = quote("S2", "bolt", 100, 2.6, currency="USD", conversion_rate=0.376)
 		usd.origin = report.IMPORT
 		local = quote("S1", "bolt", 100, 1.0)
 		local.origin = report.LOCAL
-		plan = report.typed_plan(10)
-		self.assertAlmostEqual(report.estimated_charges(usd, plan)[0], 0.09776)
-		self.assertEqual(report.estimated_charges(local, plan), (0.0, ""))
-		self.assertEqual(report.estimated_charges(usd, report.typed_plan(0)), (0.0, ""))
+		self.assertAlmostEqual(report.estimated_charges(usd, False, 10)[0], 0.09776)
+		self.assertEqual(report.estimated_charges(local, False, 10), (0.0, ""))
+		self.assertEqual(report.estimated_charges(usd, False, 0), (0.0, ""))
 
 	def test_the_estimate_can_turn_a_cheap_import_into_the_dearer_quotation(self):
 		quotes = [
@@ -198,72 +199,89 @@ class TestOriginAndImportCharges(FrappeTestCase):
 		self.assertEqual({q.supplier for q in both.quotes}, {"S1", "S2"})
 
 
-def charge(name, value, basis="% of Price", applies_to="Import"):
-	return frappe._dict(charge=name, basis=basis, value=value, applies_to=applies_to)
+def charge(description, amount):
+	return frappe._dict(description=description, amount=amount)
 
 
-class TestDefaultLandedCosts(FrappeTestCase):
-	"""The charges added to a quotation come from the company's table, a typed percent, or nowhere."""
+class TestLandedChargesOnTheQuotation(FrappeTestCase):
+	"""The Valuation rows of a quotation's own Taxes and Charges are what is added to its price."""
 
-	def test_defaults_add_up_per_the_basis_and_the_half_they_apply_to(self):
-		plan = [
-			charge("Freight", 3),
-			charge("Customs Duty", 5),
-			charge("Clearance", 0.02, basis="Per Stock Unit"),
-			charge("Local delivery", 1, applies_to="Local"),
-			charge("Handling", 2, applies_to="Import and Local"),
-		]
-		usd = quote("S2", "bolt", 100, 2.0, currency="USD", conversion_rate=0.5)
-		usd.origin = report.IMPORT
-		local = quote("S1", "bolt", 100, 1.0)
-		local.origin = report.LOCAL
-		# import price 1.0: 3% + 5% + 0.02 per unit + 2% = 0.03 + 0.05 + 0.02 + 0.02
-		total, detail = report.estimated_charges(usd, plan)
-		self.assertAlmostEqual(total, 0.12)
-		self.assertEqual(detail, "Freight 3.0%, Customs Duty 5.0%, Clearance 0.02/unit, Handling 2.0%")
-		# local price 1.0: 1% delivery + 2% handling
-		total, detail = report.estimated_charges(local, plan)
-		self.assertAlmostEqual(total, 0.03)
-		self.assertEqual(detail, "Local delivery 1.0%, Handling 2.0%")
+	def test_a_quotation_charge_is_shared_over_its_lines_by_value_and_per_stock_unit(self):
+		# one quotation of 200 (100 bolts at 1.0, 10 nuts at 10.0), Freight 20 -> 10 on each line
+		bolt = quote("S1", "bolt", 100, 1.0, quotation="SQ-S1", net_total=200, charges=[charge("Freight", 20)])
+		nut = quote("S1", "nut", 10, 10.0, quotation="SQ-S1", net_total=200, charges=[charge("Freight", 20)])
+		self.assertAlmostEqual(bolt.quotation_charge_unit, 0.10)
+		self.assertAlmostEqual(nut.quotation_charge_unit, 1.0)
+		self.assertEqual(bolt.quotation_charge_detail, "Freight 20.0")
 
-	def test_company_defaults_come_from_the_table_and_reach_the_ranking(self):
+	def test_a_carton_price_is_charged_per_stock_unit(self):
+		# 10 cartons of 12 at 24 = 240, Freight 12 -> 0.1 per piece
+		line = quote("S1", "bolt", 10, 24.0, uom="Carton", factor=12, net_total=240, charges=[charge("Freight", 12)])
+		self.assertAlmostEqual(line.quotation_charge_unit, 0.10)
+
+	def test_no_charge_rows_and_no_net_total_add_nothing(self):
+		self.assertEqual(quote("S1", "bolt", 100, 1.0).quotation_charge_unit, 0.0)
+		self.assertEqual(quote("S1", "bolt", 100, 1.0, net_total=0, charges=[charge("Freight", 5)]).quotation_charge_unit, 0.0)
+
+	def test_the_quotation_charge_reaches_the_price_that_is_ranked(self):
 		def fresh():
 			return [
-				quote("S1", "bolt", 100, 1.0, quotation="SQ-S1"),
-				quote("S2", "bolt", 100, 2.6, currency="USD", conversion_rate=0.376, quotation="SQ-S2"),
+				# cheaper price, but 0.30 a unit of freight on top
+				quote("S1", "bolt", 100, 1.0, quotation="SQ-S1", charges=[charge("Freight", 30)]),
+				quote("S2", "bolt", 100, 1.2, quotation="SQ-S2"),
 			]
 
-		table = [charge("Freight", 4), charge("Customs Duty", 6)]
-		with_table = run(fresh(), defaults=table)
-		self.assertEqual(winner(with_table, "bolt").supplier, "S1")
-		usd = next(q for q in with_table.groups[("RFQ-1", "bolt")] if q.supplier == "S2")
-		self.assertAlmostEqual(usd.charge_unit, 0.9776 * 0.10)
-		self.assertAlmostEqual(usd.landed_unit_cost, 0.9776 * 1.10)
-		self.assertEqual(usd.charge_detail, "Freight 4.0%, Customs Duty 6.0%")
-		# no table: the price alone
-		self.assertEqual(winner(run(fresh()), "bolt").supplier, "S2")
+		with_charges = run(fresh())
+		self.assertEqual(winner(with_charges, "bolt").supplier, "S2")
+		s1 = next(q for q in with_charges.groups[("RFQ-1", "bolt")] if q.supplier == "S1")
+		self.assertAlmostEqual(s1.landed_unit_cost, 1.3)
+		self.assertEqual(s1.charge_detail, "Freight 30.0")
+		# switched off, the price alone decides
+		self.assertEqual(winner(run(fresh(), import_charges="No Charges"), "bolt").supplier, "S1")
 
-	def test_the_filter_chooses_defaults_typed_or_none(self):
-		table = [charge("Freight", 10)]
-		with patch.object(report, "default_charges", return_value=table):
-			self.assertEqual(len(report.charge_plan(frappe._dict(company="SFB"))), 1)
-			self.assertEqual(len(report.charge_plan(frappe._dict(company="SFB", import_charges="No Charges"))), 0)
-			typed = report.charge_plan(frappe._dict(company="SFB", import_charges="Typed Percent", import_charges_pct=7))
-			self.assertEqual([(r.basis, r.value, r.applies_to) for r in typed], [("% of Price", 7.0, "Import")])
-			# a caller that sends only a percent means it
-			bare = report.charge_plan(frappe._dict(company="SFB", import_charges_pct=7))
-			self.assertEqual(bare[0].value, 7.0)
-			# Typed Percent with 0 adds nothing; it does not fall back to the table
-			self.assertEqual(report.charge_plan(frappe._dict(company="SFB", import_charges="Typed Percent")), [])
+	def test_a_local_quotation_carries_its_own_delivery_charge_too(self):
+		c = run(
+			[
+				quote("S1", "bolt", 100, 1.0, quotation="SQ-S1", charges=[charge("Transport", 25)]),
+				quote("S2", "bolt", 100, 1.2, quotation="SQ-S2"),
+			]
+		)
+		self.assertEqual(next(q for q in c.quotes if q.supplier == "S1").origin, "Local")
+		self.assertEqual(winner(c, "bolt").supplier, "S2")
+
+	def test_a_typed_percent_is_added_to_an_import_on_top_of_its_quotation_charges(self):
+		usd = quote("S2", "bolt", 100, 2.0, currency="USD", conversion_rate=0.5, charges=[charge("Freight", 10)])
+		usd.origin = report.IMPORT
+		# price 1.0 per unit; Freight 10 over 100 units = 0.10; typed 5% = 0.05
+		total, detail = report.estimated_charges(usd, True, 5)
+		self.assertAlmostEqual(total, 0.15)
+		self.assertEqual(detail, "Freight 10.0; 5.0% typed for imports")
+		total, detail = report.estimated_charges(usd, False, 5)
+		self.assertAlmostEqual(total, 0.05)
+		self.assertEqual(detail, "5.0% typed for imports")
 
 	def test_the_message_says_what_was_added(self):
-		plan = [charge("Freight", 3), charge("Clearance", 0.5, basis="Per Stock Unit", applies_to="Import and Local")]
-		self.assertEqual(report.describe_plan(plan), "Freight 3.0% (Import); Clearance 0.5/unit (Import and Local)")
-		self.assertEqual(report.describe_plan([]), "none")
+		self.assertIn("Valuation rows", report.describe_charges(True, 0))
+		self.assertEqual(report.describe_charges(False, 0), "none")
+		self.assertEqual(report.describe_charges(False, 7.5), "7.5% on imports")
+		both = report.describe_charges(True, 7.5)
+		self.assertIn("Valuation rows", both)
+		self.assertTrue(both.endswith("7.5% on imports"))
 
-	def test_a_site_without_the_table_reads_as_no_charges(self):
-		with patch.object(report.frappe.db, "table_exists", return_value=False, create=True):
-			self.assertEqual(report.default_charges("SFB"), [])
+	def test_only_valuation_rows_are_read_deduct_is_negative_and_zero_is_dropped(self):
+		rows = [
+			frappe._dict(parent="SQ-1", description="Freight", account_head="A", add_deduct_tax="Add", base_tax_amount=0, base_tax_amount_after_discount_amount=12.5),
+			frappe._dict(parent="SQ-1", description="Rebate", account_head="B", add_deduct_tax="Deduct", base_tax_amount=3, base_tax_amount_after_discount_amount=0),
+			frappe._dict(parent="SQ-1", description="", account_head="Customs - SFB", add_deduct_tax="Add", base_tax_amount=7, base_tax_amount_after_discount_amount=7),
+			frappe._dict(parent="SQ-2", description="Nothing", account_head="C", add_deduct_tax="Add", base_tax_amount=0, base_tax_amount_after_discount_amount=0),
+		]
+		with patch.object(report, "fetch_in", return_value=rows) as reader:
+			charges = report.get_valuation_charges(["SQ-1", "SQ-2"])
+		filters = reader.call_args.kwargs["filters"]
+		self.assertEqual(filters["category"], ["in", ["Valuation", "Valuation and Total"]])
+		self.assertEqual(filters["parenttype"], "Supplier Quotation")
+		self.assertEqual([(r.description, r.amount) for r in charges["SQ-1"]], [("Freight", 12.5), ("Rebate", -3.0), ("Customs - SFB", 7.0)])
+		self.assertNotIn("SQ-2", charges)
 
 
 class TestWhoIsRecommended(FrappeTestCase):

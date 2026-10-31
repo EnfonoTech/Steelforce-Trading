@@ -84,23 +84,24 @@ frappe.query_reports["Supplier Quotation Comparison Extended"] = {
 			reqd: 1,
 		},
 		{
-			// What is added to each quotation's price before they are compared. Company Defaults reads
-			// SF Trading Settings > Purchasing > Default Landed Cost Charges (empty = the price alone);
-			// Typed Percent adds the percent below to imports only; No Charges compares the price alone.
+			// The landed charges on each quotation (the rows of its Taxes and Charges whose Category is
+			// Valuation, set up as a Purchase Taxes and Charges Template and applied by a Tax Rule) are added
+			// to its price before the quotations are compared. No Charges compares the price alone.
 			// A Select with a word for every choice: an unticked or zero filter never reaches the server.
 			fieldname: "import_charges",
-			label: __("Estimated Charges"),
+			label: __("Landed Charges"),
 			fieldtype: "Select",
-			options: ["Company Defaults", "Typed Percent", "No Charges"].join("\n"),
-			default: "Company Defaults",
+			options: ["Quotation Charges", "No Charges"].join("\n"),
+			default: "Quotation Charges",
 			reqd: 1,
 		},
 		{
+			// A percent of the price added to IMPORT quotations on top, for charges no quotation carries
+			// (customs duty, clearance). 0 adds nothing.
 			fieldname: "import_charges_pct",
-			label: __("Typed Percent (Imports)"),
+			label: __("Extra % on Imports"),
 			fieldtype: "Float",
 			default: 0,
-			description: __("Used when Estimated Charges is Typed Percent."),
 		},
 		{
 			fieldname: "status",

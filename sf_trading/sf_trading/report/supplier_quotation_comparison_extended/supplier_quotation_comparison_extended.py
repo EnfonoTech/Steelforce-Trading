@@ -23,11 +23,13 @@ Quotations are put on one footing before they are compared, because a raw price 
     * the price is the NET rate (after the line and document discount, before tax), per STOCK unit, so a quotation in
       cartons and one in pieces compare;
     * it is in the COMPANY currency, converted at the rate on the quotation;
-    * the estimated landed charges are added on top (freight, duty, clearance), so a cheap price abroad is not read as a
-      cheap landed cost. They come from SF Trading Settings > Purchasing > Default Landed Cost Charges, one row per
-      charge: a percent of the price or an amount per stock unit, for imports, for local purchases or for both. The
-      `Estimated Charges` filter can use those defaults, one typed percent on imports, or none. VAT is reclaimable and is
-      left out of both.
+    * the landed charges are added on top (freight, duty, clearance), so a cheap price abroad is not read as a cheap
+      landed cost. They are the rows of the quotation's own Taxes and Charges whose Category is Valuation (or
+      Valuation and Total): ERPNext's standard way to carry a landed charge, set up once as a Purchase Taxes and Charges
+      Template and applied to import suppliers by a Tax Rule, so every new quotation has them and they follow it into
+      the Purchase Order and the stock valuation. A row is shared over the quotation's lines by value, an Add row
+      raises the price and a Deduct row lowers it. The `Landed Charges` filter can leave them out, and `Extra % on
+      Imports` adds a typed percent on top of imports. VAT (a Total row) is reclaimable and is left out.
 
 That figure is the landed unit cost. The recommended quotation for an item is the one with the lowest landed unit cost
 among the quotations that can still be bought from. Ties go to the shorter stated lead time, then to the earlier
@@ -105,18 +107,10 @@ ORIGIN_IMPORT = "Import Only"
 LOCAL = "Local"
 IMPORT = "Import"
 
-CHARGES_DEFAULTS = "Company Defaults"
-CHARGES_TYPED = "Typed Percent"
+CHARGES_QUOTATION = "Quotation Charges"
 CHARGES_NONE = "No Charges"
-
-BASIS_PERCENT = "% of Price"
-BASIS_UNIT = "Per Stock Unit"
-APPLIES_IMPORT = "Import"
-APPLIES_LOCAL = "Local"
-APPLIES_BOTH = "Import and Local"
-CHARGE_TABLE = "SF Default Landed Cost"
-CHARGE_FIELD = "default_landed_costs"
-SETTINGS = "SF Trading Settings"
+#: the categories of a Taxes and Charges row that raise what the goods cost, rather than only the invoice total
+VALUATION_CATEGORIES = ("Valuation", "Valuation and Total")
 
 STATUS_SUBMITTED = "Submitted"
 STATUS_DRAFT = "Draft"
@@ -163,6 +157,7 @@ HEADER_FIELDS = [
 	"status",
 	"docstatus",
 	"base_grand_total",
+	"base_net_total",
 ]
 
 
@@ -245,7 +240,7 @@ def per_stock_unit(amount, rate, stock_qty, conversion_factor) -> float:
 	return flt(rate) / (flt(conversion_factor) or 1)
 
 
-def build_quote(header, line, company_currency) -> frappe._dict:
+def build_quote(header, line, company_currency, charges=None) -> frappe._dict:
 	"""One quotation line on one footing: the net price per stock unit, in the quotation's currency and the company's."""
 	conversion_rate = flt(header.get("conversion_rate")) or 1
 	stock_qty = flt(line.get("stock_qty")) or flt(line.get("qty")) * (flt(line.get("conversion_factor")) or 1)
@@ -254,6 +249,13 @@ def build_quote(header, line, company_currency) -> frappe._dict:
 	base_amount = flt(line.get("base_net_amount")) or flt(line.get("base_amount")) or amount * conversion_rate
 	rate = flt(line.get("net_rate")) or flt(line.get("rate"))
 	unit_cost_base = per_stock_unit(base_amount, rate * conversion_rate, stock_qty, line.get("conversion_factor"))
+
+	# the quotation's Valuation rows, shared over its lines by value, per stock unit of this one
+	charges = charges or []
+	net_total = flt(header.get("base_net_total"))
+	share = base_amount / net_total if net_total else 0.0
+	quotation_charge_unit = (sum(row.amount for row in charges) * share / stock_qty) if stock_qty else 0.0
+	quotation_charge_detail = ", ".join(cstr(row.description) + " " + cstr(flt(row.amount, 3)) for row in charges)
 
 	return frappe._dict(
 		rfq=cstr(line.get("request_for_quotation")).strip(),
@@ -279,6 +281,8 @@ def build_quote(header, line, company_currency) -> frappe._dict:
 		unit_cost_txn=per_stock_unit(amount, rate, stock_qty, line.get("conversion_factor")),
 		unit_cost_base=unit_cost_base,
 		priced=unit_cost_base > 0,
+		quotation_charge_unit=quotation_charge_unit,
+		quotation_charge_detail=quotation_charge_detail,
 	)
 
 
@@ -321,7 +325,40 @@ def get_quotes(filters, company_currency) -> list:
 		fields=LINE_FIELDS,
 		order_by="parent asc, idx asc",
 	)
-	return [build_quote(header_of[line.parent], line, company_currency) for line in lines]
+	charges = get_valuation_charges(list(header_of))
+	return [
+		build_quote(header_of[line.parent], line, company_currency, charges.get(line.parent)) for line in lines
+	]
+
+
+def get_valuation_charges(names) -> dict:
+	"""{quotation: [{description, amount}]}: the Valuation rows of each quotation's Taxes and Charges, in company
+	currency and after the document discount, an Add row positive and a Deduct row negative. A row of 0 is left out."""
+	rows = fetch_in(
+		"Purchase Taxes and Charges",
+		names,
+		in_field="parent",
+		filters={"parenttype": "Supplier Quotation", "category": ["in", list(VALUATION_CATEGORIES)]},
+		fields=[
+			"parent",
+			"description",
+			"account_head",
+			"add_deduct_tax",
+			"base_tax_amount",
+			"base_tax_amount_after_discount_amount",
+		],
+		order_by="parent asc, idx asc",
+	)
+	charges = {}
+	for row in rows:
+		amount = flt(row.base_tax_amount_after_discount_amount) or flt(row.base_tax_amount)
+		if row.add_deduct_tax == "Deduct":
+			amount = -amount
+		if amount:
+			charges.setdefault(row.parent, []).append(
+				frappe._dict(description=row.description or row.account_head, amount=amount)
+			)
+	return charges
 
 
 def get_request_names(quotes, filters) -> list:
@@ -432,74 +469,27 @@ def quote_origin(quote, company_currency, abroad) -> str:
 	return LOCAL
 
 
-def default_charges(company) -> list:
-	"""The company's rows of SF Trading Settings > Default Landed Cost Charges. A site that has not migrated the table
-	yet reads as "none", so a pull before `bench migrate` cannot break the report."""
-	if not company or not frappe.db.table_exists(CHARGE_TABLE):
-		return []
-	return frappe.get_all(
-		CHARGE_TABLE,
-		filters={"parent": SETTINGS, "parenttype": SETTINGS, "parentfield": CHARGE_FIELD, "company": company},
-		fields=["charge", "applies_to", "basis", "value"],
-		order_by="idx asc",
-		limit_page_length=0,
-	)
-
-
-def typed_plan(percent) -> list:
-	"""One percent on imports, as the `Typed Percent` choice (or a bare `import_charges_pct`) asks for."""
-	if flt(percent) <= 0:
-		return []
-	return [frappe._dict(charge=_("Import charges"), applies_to=APPLIES_IMPORT, basis=BASIS_PERCENT, value=flt(percent))]
-
-
-def charge_plan(filters) -> list:
-	"""The charges to add to a quotation, as rows of {charge, applies_to, basis, value}.
-
-	Company Defaults reads the settings table, Typed Percent one percent on imports, No Charges nothing. A caller that
-	sends only a percent (the API) gets it typed; one that sends nothing gets the company's defaults."""
-	mode = filters.get("import_charges") or (CHARGES_TYPED if flt(filters.get("import_charges_pct")) else CHARGES_DEFAULTS)
-	if mode == CHARGES_NONE:
-		return []
-	if mode == CHARGES_TYPED:
-		return typed_plan(filters.get("import_charges_pct"))
-	return [frappe._dict(row) for row in default_charges(filters.get("company"))]
-
-
-def charge_applies(row, origin) -> bool:
-	return row.applies_to == APPLIES_BOTH or row.applies_to == origin
-
-
-def estimated_charges(quote, plan):
-	"""(charges per stock unit, what they were) for one quotation: each row that applies to its origin, a percent of
-	the price or a fixed amount per unit, in the company's currency."""
-	price = flt(quote.unit_cost_base)
+def estimated_charges(quote, use_quotation, percent):
+	"""(charges per stock unit, what they were) for one quotation: the Valuation rows on the quotation itself, unless
+	they are switched off, and a typed percent of the price on an import. In the company's currency."""
 	total, parts = 0.0, []
-	for row in plan:
-		if not charge_applies(row, quote.origin):
-			continue
-		if row.basis == BASIS_UNIT:
-			total += flt(row.value)
-			parts.append(cstr(row.charge) + " " + cstr(flt(row.value, 4)) + "/unit")
-		else:
-			total += price * flt(row.value) / 100
-			parts.append(cstr(row.charge) + " " + cstr(flt(row.value, 2)) + "%")
-	return total, ", ".join(parts)
+	if use_quotation and quote.quotation_charge_unit:
+		total += quote.quotation_charge_unit
+		parts.append(quote.quotation_charge_detail)
+	if quote.origin == IMPORT and flt(percent) > 0:
+		total += flt(quote.unit_cost_base) * flt(percent) / 100
+		parts.append(cstr(flt(percent, 2)) + "% " + _("typed for imports"))
+	return total, "; ".join(parts)
 
 
-def describe_plan(plan) -> str:
-	"""The plan in a line for the message above the report."""
-	if not plan:
-		return _("none")
-	return "; ".join(
-		cstr(row.charge)
-		+ " "
-		+ (cstr(flt(row.value, 4)) + _("/unit") if row.basis == BASIS_UNIT else cstr(flt(row.value, 2)) + "%")
-		+ " ("
-		+ _(row.applies_to)
-		+ ")"
-		for row in plan
-	)
+def describe_charges(use_quotation, percent) -> str:
+	"""What was added, in a line for the message above the report."""
+	parts = []
+	if use_quotation:
+		parts.append(_("the landed charges on each quotation (the Valuation rows of its Taxes and Charges)"))
+	if flt(percent) > 0:
+		parts.append(cstr(flt(percent, 2)) + "% " + _("on imports"))
+	return _(" and ").join(parts) if parts else _("none")
 
 
 def sort_key(quote):
@@ -588,7 +578,8 @@ def procurement_check(group, rule, best):
 def compare(filters) -> frappe._dict:
 	"""Everything the three views draw from: the quotations on one footing and ranked, the requests, the rules."""
 	company_currency, company_country = company_profile(filters.company)
-	plan = charge_plan(filters)
+	use_quotation = filters.get("import_charges") != CHARGES_NONE
+	percent = max(flt(filters.get("import_charges_pct")), 0.0)
 	today = nowdate()
 
 	quotes = get_quotes(filters, company_currency)
@@ -618,7 +609,7 @@ def compare(filters) -> frappe._dict:
 		quote.qty_offered_pct = (flt(quote.stock_qty) / quote.requested_qty * 100) if quote.requested_qty else None
 		quote.expired = is_expired(quote, today)
 		quote.ineligible = ineligible_reason(quote, today)
-		quote.charge_unit, quote.charge_detail = estimated_charges(quote, plan)
+		quote.charge_unit, quote.charge_detail = estimated_charges(quote, use_quotation, percent)
 		quote.landed_unit_cost = flt(quote.unit_cost_base) + quote.charge_unit
 		quote.landed_total = quote.landed_unit_cost * quote.requested_qty
 		quote.last_purchase_rate = last_rates.get(quote.item_code) or None
@@ -637,7 +628,8 @@ def compare(filters) -> frappe._dict:
 	return frappe._dict(
 		filters=filters,
 		company_currency=company_currency,
-		plan=plan,
+		use_quotation=use_quotation,
+		percent=percent,
 		today=today,
 		quotes=quotes,
 		groups=groups,
@@ -1023,7 +1015,7 @@ def get_message(comparison) -> str:
 	notes = [
 		_(
 			"Compared on the net price per stock unit, in {0}, before tax, plus the estimated charges: {1}."
-		).format(comparison.company_currency, describe_plan(comparison.plan))
+		).format(comparison.company_currency, describe_charges(comparison.use_quotation, comparison.percent))
 	]
 	if resolve_view(filters) == VIEW_SUPPLIER:
 		notes.append(
