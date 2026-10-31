@@ -1,6 +1,8 @@
 import frappe
 from erpnext.assets.doctype.asset.asset import Asset
 
+from sf_trading.asset_depreciation_hold import FIELD as ON_HOLD_FIELD
+from sf_trading.asset_depreciation_hold import require_depreciation_choice
 from sf_trading.asset_tracking_item import SOURCE_ROW_FIELD
 
 
@@ -18,6 +20,20 @@ class CustomAsset(Asset):
 
 	def is_tracking_asset(self) -> bool:
 		return bool(self.get(SOURCE_ROW_FIELD))
+
+	def validate(self):
+		"""Depreciation On Hold (asset_depreciation_hold.py) means "no depreciation yet": an Asset
+		that calculates depreciation, or a tracking Asset that never will, cannot be on hold."""
+		if self.calculate_depreciation or self.is_tracking_asset():
+			self.set(ON_HOLD_FIELD, 0)
+		super().validate()
+
+	def before_submit(self):
+		"""A fixed asset is submitted only once it says when it depreciates: now, or On Hold for later
+		(asset_depreciation_hold.require_depreciation_choice). A tracking Asset never depreciates."""
+		super().before_submit()
+		if not self.is_tracking_asset():
+			require_depreciation_choice(self)
 
 	def validate_item(self):
 		"""Lets a custom_track_as_asset shadow Asset be saved and submitted normally after its

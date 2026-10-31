@@ -248,8 +248,9 @@ doctype_js = {
 		# the tracking Assets this invoice raised, as their own Asset Tracking section
 		"public/js/asset_tracking_links.js",
 	],
-	# a tracking-only Asset (asset_tracking_item.py) offers no capitalization actions
-	"Asset": "public/js/asset_tracking_links.js",
+	# a tracking-only Asset (asset_tracking_item.py) offers no capitalization actions;
+	# an Asset whose depreciation is on hold offers Start Depreciation (asset_depreciation_hold.py)
+	"Asset": ["public/js/asset_tracking_links.js", "public/js/asset_depreciation_hold.js"],
 	# cancelling a payment must not demand the advice behind it be cancelled as well;
 	# and a cleared post-dated cheque is banked from the cheque's own entry
 	"Payment Entry":      [
@@ -288,6 +289,8 @@ doctype_list_js = {
 	"Sales Invoice": ["public/js/payment_advice_list_action.js", "public/js/sales_invoice_list.js"],
 	"Purchase Order": ["public/js/payment_advice_list_action.js", "public/js/purchase_order_list.js"],
 	"Sales Order": ["public/js/payment_advice_list_action.js", "public/js/sales_order_list.js"],
+	# the On Hold status of an Asset whose depreciation has not started -- see asset_depreciation_hold.py
+	"Asset": "public/js/asset_list.js",
 	# Approve / Bypass Approval for the selected masters -- see master_approval.py
 	"Customer": "public/js/master_approval_list.js",
 	"Supplier": "public/js/master_approval_list.js",
@@ -420,6 +423,8 @@ after_migrate = [
 	"sf_trading.po_stock_count.ensure_custom_fields",
 	# the Updates Hub workspace -- see announcements.py
 	"sf_trading.announcements.setup",
+	# Depreciation On Hold on the Asset, and its On Hold status -- see asset_depreciation_hold.py
+	"sf_trading.asset_depreciation_hold.ensure_custom_fields",
 ]
 
 after_install = [
